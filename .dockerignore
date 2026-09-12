@@ -1,0 +1,37 @@
+# Git
+.git
+.gitignore
+
+# Entornos virtuales y dependencias locales
+.venv
+venv
+env
+*.egg-info
+build
+dist
+
+# Caches y artefactos temporales de Python
+__pycache__
+*.py[cod]
+*$py.class
+.pytest_cache
+.coverage
+htmlcov
+
+# Secretos y datos locales sensibles (CRÍTICO para seguridad)
+.env
+.env.*
+!.env.example
+data/
+*.secret
+
+# Archivos de sistema / IDEs
+.DS_Store
+Thumbs.db
+.idea
+.vscode
+*.swp
+*~
+
+# Scripts locales de parada
+stop.sh

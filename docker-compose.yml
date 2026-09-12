@@ -1,0 +1,74 @@
+services:
+  dedalo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        UID: 1000
+        GID: 1000
+    image: dedalo:latest
+    container_name: dedalo
+    restart: unless-stopped
+
+    # --------------------------------------------------------------------------
+    # Seguridad reforzada (Security Hardening)
+    # --------------------------------------------------------------------------
+    # Bloquea la elevación de privilegios de subprocesos (suid/guid)
+    security_opt:
+      - no-new-privileges:true
+    # Elimina todas las capacidades Linux innecesarias
+    cap_drop:
+      - ALL
+    # Ejecuta explícitamente con UID/GID no privilegiado
+    user: "1000:1000"
+
+    ports:
+      - "8080:8080"
+
+    environment:
+      - DEDALO_PORT=8080
+      - DEDALO_HOST=0.0.0.0
+      # Cambiar a 1 para modo headless (desactiva la UI web, mantiene Webhooks y API)
+      - DEDALO_HEADLESS=0
+      # Optimizaciones de memoria para Python y glibc
+      - PYTHONOPTIMIZE=1
+      - MALLOC_TRIM_THRESHOLD_=65536
+
+    volumes:
+      # Persistencia de flujos, historial SQLite, secretos y estado
+      - ./data:/app/data
+      # Espacio temporal aislado en memoria RAM para scripts efímeros
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 32M
+          mode: 1777
+
+      # ------------------------------------------------------------------------
+      # NOTA sobre métricas de CPU, temperatura y espacio:
+      # Al ejecutarse dentro de un contenedor Docker aislado, los nodos de
+      # monitorización del sistema (input.pi_health) leen el entorno del contenedor.
+      # Si deseas monitorizar el host real (Raspberry Pi/Linux), puedes descomentar:
+      # - /sys/class/thermal:/sys/class/thermal:ro
+      # - /proc/stat:/proc/stat:ro
+      # ------------------------------------------------------------------------
+
+    # --------------------------------------------------------------------------
+    # Control de recursos (Alineado con el diseño de bajo consumo de Dédalo)
+    # --------------------------------------------------------------------------
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "1.0"
+        reservations:
+          memory: 32M
+
+    # --------------------------------------------------------------------------
+    # Rotación de logs para proteger la tarjeta SD / disco
+    # --------------------------------------------------------------------------
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

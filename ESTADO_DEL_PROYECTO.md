@@ -135,9 +135,10 @@ Diseñado para operar indefinidamente en servidores pequeños y Raspberry Pis co
    - **Compactador de Heap (`dedalo/runtime.py:compact_memory`)**: Ejecuta `gc.collect()` forzado y llama a `libc.malloc_trim(0)` en sistemas Linux para devolver páginas no fragmentadas al sistema operativo de inmediato tras cada ejecución de flujo y en cada ciclo del planificador.
    - **Modo Web Headless (`./run.sh --headless`)**: Omite el montaje de ficheros estáticos y la UI web. Mantiene la API REST y webhooks activos. Consumo en reposo: **~28-34 MB** en Linux.
    - **Modo Demonio Puro (`./run.sh --daemon` / `python -m dedalo.headless`)**: Ejecuta únicamente el planificador de flujos (`Scheduler`) sin Uvicorn, FastAPI ni Starlette. Consumo en reposo: **~14-16 MB** en Linux.
-3. **Nivel 3: Aislamiento a Nivel de Sistema Operativo**:
+3. **Nivel 3: Aislamiento a Nivel de Sistema Operativo y Contenedores**:
    - Banderas de entorno glibc en `run.sh`: `MALLOC_TRIM_THRESHOLD_=65536` y `PYTHONOPTIMIZE=1`.
    - Perfil de servicio `systemd` documentado en `README.md` con límites `MemoryHigh=65M` y `MemoryMax=85M`.
+   - **Empaquetado Docker Endurecido (`Dockerfile` + `docker-compose.yml`)**: Construcción multi-stage, usuario no privilegiado (`UID/GID 1000`), `cap_drop: ALL`, `no-new-privileges: true`, healthcheck nativo en Python (sin curl), montaje de `/tmp` en `tmpfs` y control estricto de memoria (límite 128 MB).
 
 ---
 
@@ -173,10 +174,13 @@ dedalo/
 │   ├── test_history.py
 │   ├── test_runtime.py
 │   └── test_secrets.py
+├── .dockerignore           # Exclusión estricta de secretos, caches y venv
+├── Dockerfile              # Construcción multi-stage segura con usuario no-root
+├── docker-compose.yml      # Despliegue con límites de memoria y endurecimiento
 ├── pyproject.toml          # Dependencias mínimas (sin croniter ni dateutil)
 ├── run.sh                  # Arranque con opciones --headless y --daemon
 ├── stop.sh                 # Script para detener el servicio
-└── README.md               # Documentación general y despliegue systemd
+└── README.md               # Documentación general, Docker y systemd
 ```
 
 ---

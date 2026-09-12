@@ -37,6 +37,25 @@ Abre en tu navegador `http://localhost:8080` (en modo con interfaz).
 
 ---
 
+## Despliegue con Docker y Docker Compose
+
+Dédalo incluye un `Dockerfile` multi-stage endurecido para seguridad (usuario no-root, `cap_drop: ALL`, `no-new-privileges`, `tmpfs` en RAM y health check nativo sin curl):
+
+```bash
+# Iniciar en segundo plano
+docker compose up -d
+
+# Ver logs
+docker compose logs -f
+
+# Detener el servicio
+docker compose down
+```
+
+> **Nota sobre monitorización**: Al ejecutarse en un contenedor aislado, los nodos de monitorización (`input.pi_health`) leerán el entorno del contenedor. Si deseas monitorizar la temperatura o disco del host físico, revisa las líneas comentadas de volúmenes en `docker-compose.yml`.
+
+---
+
 ## Despliegue como servicio en Raspberry Pi (systemd)
 
 Para que arranque automáticamente al encender tu Pi con control estricto de memoria:
