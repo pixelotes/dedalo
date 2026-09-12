@@ -12,6 +12,8 @@ Dédalo es una alternativa minimalista y ultraligera a n8n o Node-RED pensada pa
 - **Gestión de secretos**: Almacena tokens de APIs y credenciales de forma aislada en archivos con permisos estrictos (`0600`).
 - **Planificador en segundo plano**: Ejecución periódica mediante cron (`0 8 * * *`) o intervalos (`@every 30m`).
 
+Para consultar el estado técnico completo, las decisiones de arquitectura, la relación con Tomos y el registro de mejoras implementadas, consulta [ESTADO_DEL_PROYECTO.md](ESTADO_DEL_PROYECTO.md).
+
 ---
 
 ## Instalación rápida
