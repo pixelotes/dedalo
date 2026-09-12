@@ -11,6 +11,7 @@ Dédalo es una alternativa minimalista y ultraligera a n8n o Node-RED pensada pa
 - **LLM desacoplado**: Compatible con cualquier endpoint estilo OpenAI (`/v1/chat/completions`), ya sea Ollama en red local, llama-server, vLLM, Groq o OpenAI.
 - **Gestión de secretos**: Almacena tokens de APIs y credenciales de forma aislada en archivos con permisos estrictos (`0600`).
 - **Planificador en segundo plano**: Ejecución periódica mediante cron (`0 8 * * *`) o intervalos (`@every 30m`).
+- **Evasión Antibot y TLS con `curl_cffi`**: Suplantación de navegadores reales (Chrome, Safari, Firefox) y User-Agents configurables en peticiones web (`input.http_call`, `input.web_read`, `input.rss`) para consultar webs protegidas por Cloudflare o antibots sin incurrir en los cientos de megabytes de un navegador headless.
 
 Para consultar el estado técnico completo, las decisiones de arquitectura, la relación con Tomos y el registro de mejoras implementadas, consulta [ESTADO_DEL_PROYECTO.md](ESTADO_DEL_PROYECTO.md).
 

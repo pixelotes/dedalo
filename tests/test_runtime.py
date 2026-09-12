@@ -181,3 +181,129 @@ def test_threshold_text():
 
     r3 = runtime.threshold(None, [inp], comparison="no_vacio")
     assert r3.ok
+
+
+def test_resolve_user_agent():
+    assert "Chrome" in runtime._resolve_user_agent("chrome")
+    assert "Safari" in runtime._resolve_user_agent("safari")
+    assert "Firefox" in runtime._resolve_user_agent("firefox")
+    assert "iPhone" in runtime._resolve_user_agent("mobile")
+    assert "Dedalo" in runtime._resolve_user_agent("bot")
+    assert runtime._resolve_user_agent("MiBot/2.0") == "MiBot/2.0"
+    assert runtime._resolve_user_agent("") == ""
+
+
+def test_http_call_httpx_mock(monkeypatch):
+    class DummyResp:
+        status_code = 200
+        headers = {"content-type": "application/json"}
+
+        def json(self):
+            return {"ping": "pong"}
+
+    class DummyClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def request(self, method, url, **kwargs):
+            assert method == "GET"
+            assert "headers" in kwargs
+            assert kwargs["headers"].get("User-Agent") == "MiBot/1.0"
+            return DummyResp()
+
+    monkeypatch.setattr(runtime.httpx, "Client", DummyClient)
+
+    res = runtime.http_call(
+        None,
+        [],
+        url="https://api.example.com/test",
+        engine="httpx",
+        user_agent="MiBot/1.0",
+    )
+    assert res.ok
+    assert res.data == {"ping": "pong"}
+
+
+def test_http_call_curl_cffi_mock(monkeypatch):
+    class DummyCurlResp:
+        status_code = 200
+        headers = {"content-type": "text/html"}
+        text = "<html><body>Hola Mundo</body></html>"
+
+    captured = {}
+
+    def dummy_request(method, url, **kwargs):
+        captured["method"] = method
+        captured["url"] = url
+        captured["kwargs"] = kwargs
+        return DummyCurlResp()
+
+    import types
+    dummy_curl = types.ModuleType("curl_cffi")
+    dummy_curl_requests = types.ModuleType("curl_cffi.requests")
+    dummy_curl_requests.request = dummy_request
+    dummy_curl.requests = dummy_curl_requests
+
+    monkeypatch.setattr(runtime, "_has_curl_cffi", lambda: True)
+    monkeypatch.setitem(runtime.sys.modules, "curl_cffi", dummy_curl)
+    monkeypatch.setitem(runtime.sys.modules, "curl_cffi.requests", dummy_curl_requests)
+
+    res = runtime.http_call(
+        None,
+        [],
+        url="https://ejemplo.com/pagina",
+        engine="curl_cffi",
+        impersonate="safari",
+        user_agent="safari",
+    )
+    assert res.ok
+    assert "Hola Mundo" in res.data
+    assert captured["method"] == "GET"
+    assert captured["kwargs"]["impersonate"] == "safari"
+    assert "Safari" in captured["kwargs"]["headers"]["User-Agent"]
+
+
+def test_http_call_curl_cffi_missing(monkeypatch):
+    monkeypatch.setattr(runtime, "_has_curl_cffi", lambda: False)
+
+    res = runtime.http_call(
+        None,
+        [],
+        url="https://ejemplo.com",
+        engine="curl_cffi",
+    )
+    assert res.failed
+    assert "curl_cffi" in res.error
+
+
+def test_web_read_passthrough(monkeypatch):
+    called_with = {}
+
+    def fake_http_call(ctx, inputs, *, url, engine, impersonate, user_agent, **kwargs):
+        called_with["engine"] = engine
+        called_with["impersonate"] = impersonate
+        called_with["user_agent"] = user_agent
+        return runtime.NodeResult("ok", data="<p>Texto de prueba con longitud suficiente</p>")
+
+    monkeypatch.setattr(runtime, "http_call", fake_http_call)
+
+    res = runtime.web_read(
+        None,
+        [],
+        url="https://ejemplo.com",
+        length="short",
+        engine="curl_cffi",
+        impersonate="firefox",
+        user_agent="firefox",
+    )
+    assert res.ok
+    assert called_with["engine"] == "curl_cffi"
+    assert called_with["impersonate"] == "firefox"
+    assert called_with["user_agent"] == "firefox"
+

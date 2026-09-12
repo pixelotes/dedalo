@@ -192,6 +192,31 @@ def call_llm(
 # Nodos de Entrada
 # ---------------------------------------------------------------------------
 
+USER_AGENT_PRESETS = {
+    "chrome": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+    "safari": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+    "firefox": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0",
+    "mobile": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+    "bot": "Dedalo/0.1 (+https://github.com/raul/dedalo)",
+}
+
+
+def _resolve_user_agent(user_agent: str) -> str:
+    """Devuelve el User-Agent correspondiente al preset o la cadena personalizada."""
+    ua = (user_agent or "").strip()
+    if not ua:
+        return ""
+    return USER_AGENT_PRESETS.get(ua.lower(), ua)
+
+
+def _has_curl_cffi() -> bool:
+    """Comprueba si la librería curl_cffi está disponible en el entorno."""
+    try:
+        from curl_cffi import requests  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
 
 def http_call(
     ctx: Any,
@@ -204,14 +229,17 @@ def http_call(
     secret: str = "",
     auth_header: str = "Authorization",
     timeout: float = DEFAULT_TIMEOUT,
+    engine: str = "auto",
+    impersonate: str = "chrome",
+    user_agent: str = "",
 ) -> NodeResult:
-    """Petición HTTP a una API REST."""
-    req_headers = {"User-Agent": "Dedalo/0.1"}
+    """Petición HTTP a una API REST o página web con soporte de curl_cffi y suplantación TLS."""
+    req_headers: dict[str, str] = {}
     if headers:
         try:
             extra = json.loads(headers) if isinstance(headers, str) else headers
             if isinstance(extra, dict):
-                req_headers.update(extra)
+                req_headers.update({str(k): str(v) for k, v in extra.items()})
         except json.JSONDecodeError:
             pass
 
@@ -222,7 +250,28 @@ def http_call(
                 f"Bearer {token}" if auth_header == "Authorization" and not token.startswith("Bearer ") else token
             )
 
-    kwargs: dict[str, Any] = {"headers": req_headers}
+    # Determinar motor
+    engine_choice = (engine or "auto").strip().lower()
+    has_curl = _has_curl_cffi()
+
+    if engine_choice == "curl_cffi":
+        if not has_curl:
+            return NodeResult("error", error="El motor 'curl_cffi' no está instalado en este entorno.")
+        use_curl = True
+    elif engine_choice == "httpx":
+        use_curl = False
+    else:  # "auto"
+        use_curl = has_curl
+
+    # Resolver User-Agent
+    custom_ua = _resolve_user_agent(user_agent)
+    if custom_ua:
+        req_headers["User-Agent"] = custom_ua
+    elif not use_curl or (impersonate or "").lower() in ("", "none"):
+        target_preset = (impersonate or "chrome").lower()
+        req_headers["User-Agent"] = USER_AGENT_PRESETS.get(target_preset, USER_AGENT_PRESETS["chrome"])
+
+    kwargs: dict[str, Any] = {}
     if body:
         inp = Inputs(inputs)
         rendered_body = body.replace("{entrada}", inp.text())
@@ -231,17 +280,51 @@ def http_call(
         except Exception:
             kwargs["content"] = rendered_body.encode("utf-8")
 
-    try:
-        with httpx.Client(timeout=float(timeout), follow_redirects=True) as client:
-            resp = client.request(method.upper(), url, **kwargs)
+    if use_curl:
+        try:
+            from curl_cffi import requests as curl
+            curl_kwargs: dict[str, Any] = {
+                "headers": req_headers,
+                "timeout": float(timeout),
+                "allow_redirects": True,
+            }
+            imp = (impersonate or "").lower()
+            if imp and imp != "none":
+                curl_kwargs["impersonate"] = imp
+
+            if "json" in kwargs:
+                curl_kwargs["json"] = kwargs["json"]
+            elif "content" in kwargs:
+                curl_kwargs["data"] = kwargs["content"]
+
+            resp = curl.request(method.upper(), url, **curl_kwargs)
             if resp.status_code >= 400:
                 return NodeResult("error", error=f"HTTP {resp.status_code}: {resp.text[:150]}")
             ctype = resp.headers.get("content-type", "")
             if "application/json" in ctype:
-                return NodeResult("ok", data=resp.json())
+                try:
+                    return NodeResult("ok", data=resp.json())
+                except Exception:
+                    return NodeResult("ok", data=resp.text)
+            return NodeResult("ok", data=resp.text)
+        except Exception as exc:
+            if engine_choice != "auto":
+                return NodeResult("error", error=f"Fallo HTTP (curl_cffi): {exc}")
+
+    try:
+        with httpx.Client(timeout=float(timeout), follow_redirects=True) as client:
+            resp = client.request(method.upper(), url, headers=req_headers, **kwargs)
+            if resp.status_code >= 400:
+                return NodeResult("error", error=f"HTTP {resp.status_code}: {resp.text[:150]}")
+            ctype = resp.headers.get("content-type", "")
+            if "application/json" in ctype:
+                try:
+                    return NodeResult("ok", data=resp.json())
+                except Exception:
+                    return NodeResult("ok", data=resp.text)
             return NodeResult("ok", data=resp.text)
     except Exception as exc:
-        return NodeResult("error", error=f"Fallo HTTP: {exc}")
+        return NodeResult("error", error=f"Fallo HTTP (httpx): {exc}")
 
 
 def rss(
@@ -253,16 +336,25 @@ def rss(
     corte: str = "completo",
     max_items: int = 20,
     filter_keyword: str = "",
+    engine: str = "auto",
+    impersonate: str = "chrome",
+    user_agent: str = "",
 ) -> NodeResult:
-    """Lee y parsea un feed RSS."""
-    try:
-        with httpx.Client(timeout=DEFAULT_TIMEOUT, follow_redirects=True) as client:
-            resp = client.get(url, headers={"User-Agent": "Dedalo/0.1"})
-            if resp.status_code >= 400:
-                return NodeResult("error", error=f"HTTP {resp.status_code} al leer RSS")
-            xml_text = resp.text
-    except Exception as exc:
-        return NodeResult("error", error=f"No se pudo descargar el feed: {exc}")
+    """Lee y parsea un feed RSS con soporte de curl_cffi."""
+    fetch_res = http_call(
+        ctx,
+        inputs,
+        url=url,
+        method="GET",
+        timeout=DEFAULT_TIMEOUT,
+        engine=engine,
+        impersonate=impersonate,
+        user_agent=user_agent,
+    )
+    if not fetch_res.ok:
+        return NodeResult("error", error=f"No se pudo descargar el feed: {fetch_res.error}")
+
+    xml_text = fetch_res.data if isinstance(fetch_res.data, str) else json.dumps(fetch_res.data)
 
     try:
         root = ET.fromstring(xml_text)
@@ -931,9 +1023,19 @@ def web_read(
     *,
     url: str,
     length: str = "medium",
+    engine: str = "auto",
+    impersonate: str = "chrome",
+    user_agent: str = "",
 ) -> NodeResult:
-    """Descarga y limpia una página web."""
-    res = http_call(ctx, inputs, url=url)
+    """Descarga y limpia una página web con soporte de curl_cffi y suplantación TLS."""
+    res = http_call(
+        ctx,
+        inputs,
+        url=url,
+        engine=engine,
+        impersonate=impersonate,
+        user_agent=user_agent,
+    )
     if not res.ok:
         return res
     cleaned = clean_html(ctx, [res], url=url)

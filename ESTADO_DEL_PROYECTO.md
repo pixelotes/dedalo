@@ -19,7 +19,8 @@ Este documento resume el estado técnico actual de **Dédalo Standalone**, su or
 - **Historial de ejecuciones**: Base de datos SQLite integrada con rotación automática periódica cada 24 horas (elimina ejecuciones con más de 30 días).
 - **Control de cambios**: Detección de modificaciones no guardadas con modal de confirmación antes de cambiar de flujo.
 - **Optimización de Memoria Activa**: Compactación periódica de heap con recolección de basura forzada y devolución de páginas al OS vía `malloc_trim(0)`.
-- **Suite de pruebas**: 36 pruebas automatizadas pasando al 100% en `pytest`.
+- **Evasión Antibot sin Navegador Pesado**: Motor HTTP dual con `curl_cffi` (suplantación de TLS/HTTP/2 de Chrome/Safari/Firefox y User-Agents) y fallback transparente a `httpx`.
+- **Suite de pruebas**: 41 pruebas automatizadas pasando al 100% en `pytest`.
 
 ---
 
@@ -139,6 +140,17 @@ Diseñado para operar indefinidamente en servidores pequeños y Raspberry Pis co
    - Banderas de entorno glibc en `run.sh`: `MALLOC_TRIM_THRESHOLD_=65536` y `PYTHONOPTIMIZE=1`.
    - Perfil de servicio `systemd` documentado en `README.md` con límites `MemoryHigh=65M` y `MemoryMax=85M`.
    - **Empaquetado Docker Endurecido (`Dockerfile` + `docker-compose.yml`)**: Construcción multi-stage, usuario no privilegiado (`UID/GID 1000`), `cap_drop: ALL`, `no-new-privileges: true`, healthcheck nativo en Python (sin curl), montaje de `/tmp` en `tmpfs` y control estricto de memoria (límite 128 MB).
+
+### E. Recuperación Web con Evasión Antibot y TLS (`curl_cffi`)
+Para evitar los cientos de megabytes de consumo y picos de CPU de un navegador headless como Obscura, se ha integrado soporte nativo para **`curl_cffi`** (basado en `libcurl-impersonate`):
+- **Suplantación criptográfica TLS y HTTP/2**: Replica la huella exacta de navegadores reales (Chrome, Safari, Firefox) eludiendo los bloqueos típicos de Cloudflare, Akamai y Datadome con solo ~2-4 MB de memoria.
+- **Nodos beneficiados**:
+  - `input.http_call` (peticiones REST y scraping genérico).
+  - `input.web_read` (descarga y limpieza de páginas web).
+  - `input.rss` (descarga de feeds protegidos por Cloudflare o Substack).
+- **Selector de Motor**: `auto` (usa `curl_cffi` con fallback automático a `httpx`), `curl_cffi` o `httpx`.
+- **User-Agent configurable**: Selección de presets (`chrome`, `safari`, `firefox`, `mobile`, `bot`) o User-Agent personalizado libre.
+- **Fallback resiliente**: Si una petición en modo `auto` encuentra un fallo en `curl_cffi`, se intenta automáticamente mediante `httpx` antes de reportar un error.
 
 ---
 
