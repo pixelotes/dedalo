@@ -215,6 +215,12 @@ def remove_secret(name: str = Query(...)) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+class ScheduleUpdateRequest(BaseModel):
+    id: str
+    schedule: str = ""
+    enabled: bool = True
+
+
 @app.get("/api/flows")
 def get_flows() -> list[dict[str, Any]]:
     flows = store.list_flows()
@@ -222,6 +228,11 @@ def get_flows() -> list[dict[str, Any]]:
         fid = fl["id"]
         if fid in scheduler.RUN_HISTORY:
             fl["last_run"] = scheduler.RUN_HISTORY[fid]
+        fl["next_run"] = (
+            scheduler.get_next_run(fl.get("schedule", ""))
+            if fl.get("enabled")
+            else None
+        )
     return flows
 
 
@@ -230,6 +241,14 @@ def get_flow(id: str = Query(...)) -> dict[str, Any]:
     flow_data = store.load_flow(id)
     if not flow_data:
         raise HTTPException(status_code=404, detail=f"Flujo «{id}» no encontrado")
+    meta = flow_data.get("meta", {})
+    flow_data["next_run"] = (
+        scheduler.get_next_run(meta.get("schedule", ""))
+        if meta.get("enabled")
+        else None
+    )
+    if id in scheduler.RUN_HISTORY:
+        flow_data["last_run"] = scheduler.RUN_HISTORY[id]
     return flow_data
 
 
@@ -244,6 +263,35 @@ def save_flow_endpoint(req: FlowSaveRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=exc.errors)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Error al guardar flujo: {exc}")
+
+
+@app.post("/api/flow/schedule")
+def update_schedule_endpoint(req: ScheduleUpdateRequest) -> dict[str, Any]:
+    meta = store.update_meta(req.id, {"schedule": req.schedule.strip(), "enabled": req.enabled})
+    return {
+        "status": "ok",
+        "meta": meta,
+        "next_run": scheduler.get_next_run(req.schedule) if req.enabled else None,
+    }
+
+
+@app.post("/api/flow/toggle")
+def toggle_flow_endpoint(id: str = Query(...)) -> dict[str, Any]:
+    meta = store.toggle_flow(id)
+    return {
+        "status": "ok",
+        "meta": meta,
+        "next_run": scheduler.get_next_run(meta.get("schedule", "")) if meta.get("enabled") else None,
+    }
+
+
+@app.post("/api/flow/run_now")
+async def run_flow_now_endpoint(id: str = Query(...)) -> dict[str, Any]:
+    try:
+        res = await scheduler.trigger_flow(id)
+        return {"status": "ok", **res}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error al ejecutar flujo: {exc}")
 
 
 @app.delete("/api/flow")

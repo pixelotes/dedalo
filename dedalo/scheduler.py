@@ -55,10 +55,30 @@ def _should_run(schedule_expr: str, last_run: float | None) -> bool:
             base_time = datetime.fromtimestamp(last_run)
 
         iter_cron = croniter(expr, base_time)
-        next_run = iter_cron.get_next(datetime)
         return next_run <= now
     except Exception:
         return False
+
+
+def get_next_run(schedule_expr: str) -> str | None:
+    """Devuelve la fecha estimada de la próxima ejecución o None si no es válida."""
+    expr = (schedule_expr or "").strip()
+    if not expr:
+        return None
+
+    m_int = re.match(r"^(?:@every\s+)?(\d+)\s*([mh])$", expr, re.IGNORECASE)
+    if m_int:
+        amount = int(m_int.group(1))
+        unit = m_int.group(2).lower()
+        delta_sec = amount * 60 if unit == "m" else amount * 3600
+        next_dt = datetime.fromtimestamp(time.time() + delta_sec)
+        return next_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+    try:
+        iter_cron = croniter(expr, datetime.now())
+        return iter_cron.get_next(datetime).strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return None
 
 
 def run_flow_sync(flow_id: str) -> dict[str, Any]:
@@ -87,6 +107,25 @@ def run_flow_sync(flow_id: str) -> dict[str, Any]:
         "duration": round(duration, 3),
         "result": res,
     }
+
+
+async def trigger_flow(flow_id: str) -> dict[str, Any]:
+    """Ejecuta un flujo inmediatamente en segundo plano y actualiza el historial."""
+    RUN_HISTORY[flow_id] = {
+        "last_run": time.time(),
+        "status": "running",
+    }
+    try:
+        res = await asyncio.to_thread(run_flow_sync, flow_id)
+        RUN_HISTORY[flow_id]["status"] = "ok"
+        RUN_HISTORY[flow_id]["duration"] = res["duration"]
+        RUN_HISTORY[flow_id]["last_success"] = time.time()
+        RUN_HISTORY[flow_id]["result"] = res["result"]
+        return res
+    except Exception as exc:
+        RUN_HISTORY[flow_id]["status"] = "error"
+        RUN_HISTORY[flow_id]["error"] = str(exc)
+        raise
 
 
 class Scheduler:

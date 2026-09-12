@@ -32,9 +32,11 @@ def _env_key(name: str) -> str:
     return f"DEDALO_SECRET_{name.upper().replace('-', '_')}"
 
 
+import builtins
+
 def names() -> list[str]:
     """Lista todos los nombres de secretos disponibles (en disco o en el entorno)."""
-    found: set[str] = set()
+    found: set[str] = builtins.set()
     if DIR.is_dir():
         for p in DIR.iterdir():
             if p.is_file() and p.name.endswith(SUFFIX):
@@ -68,7 +70,7 @@ def get(name: str) -> str | None:
         return None
 
 
-def set(name: str, value: str) -> None:
+def set_secret(name: str, value: str) -> None:
     """Guarda un secreto en disco con permisos 0600."""
     val = (value or "").strip()
     if not val:
@@ -81,6 +83,10 @@ def set(name: str, value: str) -> None:
         p.chmod(0o600)
     except OSError:
         pass
+
+
+# Alias para retrocompatibilidad
+set = set_secret
 
 
 def delete(name: str) -> bool:

@@ -36,6 +36,9 @@
   <symbol id="i-trash" viewBox="0 0 24 24">
     <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
   </symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+  </symbol>
   <symbol id="i-x" viewBox="0 0 24 24">
     <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
   </symbol>
@@ -60,6 +63,7 @@
   </select>
 
   <button id="btnNew" class="btn secondary" title="Lienzo en blanco">Vacío</button>
+  <button id="btnSchedule" class="btn secondary" title="Programar ejecución automática"><svg class="ic" width="14" height="14"><use href="#i-clock"/></svg> Programar</button>
   <button id="btnCompile" class="btn secondary" title="Ver código generado"><svg class="ic" width="14" height="14"><use href="#i-code"/></svg> Ver código</button>
   <button id="btnRun" class="btn secondary" title="Probar flujo ahora"><svg class="ic" width="14" height="14"><use href="#i-play"/></svg> Probar</button>
   <button id="btnSave" class="btn primary" title="Guardar flujo"><svg class="ic" width="14" height="14"><use href="#i-save"/></svg> Guardar</button>
@@ -194,6 +198,51 @@
     <div class="sheet-foot">
       <span class="hint" id="codeHint">Se comprueba la sintaxis al guardar.</span>
       <button id="codeSave" class="btn primary">Aceptar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal para programar la ejecución periódica del flujo -->
+<div class="sheet" id="scheduleSheet" hidden>
+  <div class="sheet-box schedule-box">
+    <div class="sheet-head">
+      <strong>Programación del flujo: <span id="schedFlowTitle"></span></strong>
+      <button id="schedClose" class="icon-btn" title="Cerrar"><svg class="ic" width="14" height="14"><use href="#i-x"/></svg></button>
+    </div>
+    <div class="schedule-body">
+      <div class="field-group">
+        <label class="checkbox-label">
+          <input type="checkbox" id="schedEnabled" />
+          <b>Activar ejecución automática en segundo plano</b>
+        </label>
+      </div>
+      <div class="field-group">
+        <label>Preajuste de frecuencia:</label>
+        <select id="schedPreset">
+          <option value="manual">Manual (sin repetición)</option>
+          <option value="@every 5m">Cada 5 minutos (@every 5m)</option>
+          <option value="@every 15m">Cada 15 minutos (@every 15m)</option>
+          <option value="@every 30m">Cada 30 minutos (@every 30m)</option>
+          <option value="@every 1h">Cada hora (@every 1h)</option>
+          <option value="0 8 * * *">Todos los días a las 08:00 (0 8 * * *)</option>
+          <option value="0 9 * * 1-5">Días laborables (L-V) a las 09:00 (0 9 * * 1-5)</option>
+          <option value="custom">Personalizado (expresión Cron)</option>
+        </select>
+      </div>
+      <div class="field-group">
+        <label>Expresión Cron o intervalo (@every Xm):</label>
+        <input id="schedExpr" class="name-input" style="width:100%" placeholder="*/15 * * * * o @every 30m" />
+        <span class="field-help" id="schedHelp">El planificador evaluará esta regla cada 30 segundos.</span>
+      </div>
+      <div class="schedule-status-box" id="schedStatusBox">
+        <div>Estado actual: <b id="schedStatusVal">-</b></div>
+        <div>Próxima ejecución estimada: <span id="schedNextVal" class="mono">-</span></div>
+        <div>Última ejecución: <span id="schedLastVal" class="mono">-</span></div>
+      </div>
+    </div>
+    <div class="sheet-foot">
+      <button id="btnSchedRunNow" class="btn secondary"><svg class="ic" width="14" height="14"><use href="#i-play"/></svg> Ejecutar ahora</button>
+      <button id="btnSchedSave" class="btn primary">Guardar programación</button>
     </div>
   </div>
 </div>

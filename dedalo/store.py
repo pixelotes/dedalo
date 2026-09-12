@@ -197,11 +197,42 @@ def delete_flow(flow_id: str) -> bool:
             except OSError:
                 pass
 
-    state_p = STATE_DIR / f"{s}.state.json"
-    if state_p.is_file():
+    return deleted
+
+
+def update_meta(flow_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+    """Actualiza metadatos de un flujo (schedule, enabled, etc.) sin recompilar el grafo."""
+    s = slug(flow_id)
+    meta_file = FLOWS_DIR / f"{s}.meta.json"
+    meta = {
+        "name": s,
+        "description": "",
+        "schedule": "",
+        "enabled": True,
+        "updated_at": int(time.time()),
+    }
+    if meta_file.is_file():
         try:
-            state_p.unlink()
-        except OSError:
+            meta.update(json.loads(meta_file.read_text(encoding="utf-8")))
+        except Exception:
             pass
 
-    return deleted
+    meta.update(updates)
+    meta["updated_at"] = int(time.time())
+    FLOWS_DIR.mkdir(parents=True, exist_ok=True)
+    meta_file.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+    return meta
+
+
+def toggle_flow(flow_id: str) -> dict[str, Any]:
+    """Alterna el estado enabled de un flujo."""
+    s = slug(flow_id)
+    meta_file = FLOWS_DIR / f"{s}.meta.json"
+    enabled = True
+    if meta_file.is_file():
+        try:
+            m = json.loads(meta_file.read_text(encoding="utf-8"))
+            enabled = not m.get("enabled", True)
+        except Exception:
+            pass
+    return update_meta(s, {"enabled": enabled})

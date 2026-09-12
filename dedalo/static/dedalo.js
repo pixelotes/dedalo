@@ -85,6 +85,7 @@ function setupEvents() {
 
   $('btnNew').onclick = () => resetGraph('nuevo-flujo');
   $('btnSidebarNewFlow').onclick = () => resetGraph('nuevo-flujo');
+  $('btnSchedule').onclick = () => openScheduleModal(state.graph.name);
   $('btnCompile').onclick = compileGraph;
   $('btnRun').onclick = runPreview;
   $('btnSave').onclick = saveFlow;
@@ -95,6 +96,11 @@ function setupEvents() {
   $('sheetClose').onclick = () => $('sheet').hidden = true;
   $('codeCancel').onclick = () => $('codeSheet').hidden = true;
   $('codeSave').onclick = saveScriptCode;
+
+  $('schedClose').onclick = () => $('scheduleSheet').hidden = true;
+  $('btnSchedSave').onclick = saveScheduleModal;
+  $('btnSchedRunNow').onclick = runScheduleModalNow;
+  $('schedPreset').onchange = onSchedPresetChange;
 
   $('btnSaveSecret').onclick = addSecret;
   $('btnSaveConfig').onclick = saveConfig;
@@ -199,15 +205,49 @@ function renderFlowsList() {
     card.className = 'flow-card' + (fl.id === state.graph.name ? ' active' : '');
     card.onclick = () => openFlow(fl.id);
 
+    const isEnabled = fl.enabled !== false;
+    const badgeClass = isEnabled ? 'badge-active' : 'badge-paused';
+    const badgeText = isEnabled ? 'Activo' : 'Pausado';
+
+    const schedText = fl.schedule ? `⏰ ${fl.schedule}` : 'Manual';
+    const nextText = fl.next_run ? `<span class="hint-inline">(${fl.next_run.slice(11, 16)})</span>` : '';
+
     const info = document.createElement('div');
     info.className = 'flow-info';
     info.innerHTML = `
       <span class="flow-title">${escapeHtml(fl.name || fl.id)}</span>
-      <span class="flow-meta">${fl.schedule ? '⏰ ' + escapeHtml(fl.schedule) : 'Manual'}</span>
+      <div class="flow-meta-line">
+        <span class="${badgeClass}" title="Alternar activo/pausado">${badgeText}</span>
+        <span class="flow-meta">${escapeHtml(schedText)} ${nextText}</span>
+      </div>
     `;
+
+    const badgeEl = info.querySelector('.' + badgeClass);
+    badgeEl.onclick = async (e) => {
+      e.stopPropagation();
+      await toggleFlow(fl.id);
+    };
 
     const actions = document.createElement('div');
     actions.className = 'flow-actions';
+
+    const btnRunNow = document.createElement('button');
+    btnRunNow.className = 'btn sm icon-btn';
+    btnRunNow.title = 'Ejecutar ahora en background';
+    btnRunNow.innerHTML = '<svg class="ic" width="12" height="12"><use href="#i-play"/></svg>';
+    btnRunNow.onclick = async (e) => {
+      e.stopPropagation();
+      await runFlowNow(fl.id);
+    };
+
+    const btnSched = document.createElement('button');
+    btnSched.className = 'btn sm icon-btn';
+    btnSched.title = 'Programar periodicidad';
+    btnSched.innerHTML = '<svg class="ic" width="12" height="12"><use href="#i-clock"/></svg>';
+    btnSched.onclick = (e) => {
+      e.stopPropagation();
+      openScheduleModal(fl.id);
+    };
 
     const btnDel = document.createElement('button');
     btnDel.className = 'btn sm icon-btn';
@@ -218,11 +258,115 @@ function renderFlowsList() {
       deleteFlow(fl.id);
     };
 
+    actions.appendChild(btnRunNow);
+    actions.appendChild(btnSched);
     actions.appendChild(btnDel);
     card.appendChild(info);
     card.appendChild(actions);
     list.appendChild(card);
   });
+}
+
+let currentSchedFlowId = null;
+
+async function openScheduleModal(flowId) {
+  currentSchedFlowId = flowId || state.graph.name || 'nuevo-flujo';
+  $('schedFlowTitle').textContent = currentSchedFlowId;
+
+  const fl = state.flows.find((f) => f.id === currentSchedFlowId) || state.meta || {};
+  $('schedEnabled').checked = fl.enabled !== false;
+  $('schedExpr').value = fl.schedule || '';
+
+  const expr = fl.schedule || '';
+  const presetSelect = $('schedPreset');
+  let matched = false;
+  for (let opt of presetSelect.options) {
+    if (opt.value === expr || (expr === '' && opt.value === 'manual')) {
+      presetSelect.value = opt.value;
+      matched = true;
+      break;
+    }
+  }
+  if (!matched) presetSelect.value = expr ? 'custom' : 'manual';
+
+  $('schedStatusVal').textContent = fl.enabled !== false ? (fl.schedule ? 'Programado' : 'Manual') : 'Pausado';
+  $('schedNextVal').textContent = fl.next_run || (fl.schedule ? 'Activo (esperando cálculo)' : 'Ninguna');
+  const lastRun = fl.last_run ? `${new Date(fl.last_run.last_run * 1000).toLocaleTimeString()} (${fl.last_run.status})` : 'Nunca';
+  $('schedLastVal').textContent = lastRun;
+
+  $('scheduleSheet').hidden = false;
+}
+
+function onSchedPresetChange() {
+  const val = $('schedPreset').value;
+  if (val === 'manual') {
+    $('schedExpr').value = '';
+  } else if (val !== 'custom') {
+    $('schedExpr').value = val;
+  }
+}
+
+async function saveScheduleModal() {
+  if (!currentSchedFlowId) return;
+  const schedule = $('schedExpr').value.trim();
+  const enabled = $('schedEnabled').checked;
+
+  try {
+    const res = await fetch('/api/flow/schedule', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: currentSchedFlowId, schedule, enabled }),
+    });
+    if (!res.ok) throw new Error();
+    toast(`Programación de «${currentSchedFlowId}» guardada.`);
+    $('scheduleSheet').hidden = true;
+    await loadFlows();
+    if (state.graph.name === currentSchedFlowId) {
+      state.meta.schedule = schedule;
+      state.meta.enabled = enabled;
+    }
+  } catch (e) {
+    toast('Error al guardar programación.');
+  }
+}
+
+async function toggleFlow(flowId) {
+  try {
+    const res = await fetch(`/api/flow/toggle?id=${encodeURIComponent(flowId)}`, { method: 'POST' });
+    if (res.ok) {
+      await loadFlows();
+      toast(`Estado de «${flowId}» actualizado.`);
+    }
+  } catch (e) {
+    toast('Error al cambiar estado.');
+  }
+}
+
+async function runFlowNow(flowId) {
+  toast(`Ejecutando «${flowId}» en background...`);
+  try {
+    const res = await fetch(`/api/flow/run_now?id=${encodeURIComponent(flowId)}`, { method: 'POST' });
+    const data = await res.json();
+    if (res.ok) {
+      toast(`«${flowId}» completado con éxito en ${data.duration}s.`);
+      await loadFlows();
+    } else {
+      toast(`Error en «${flowId}»: ${data.detail || 'Fallo'}`);
+    }
+  } catch (e) {
+    toast('Fallo de conexión al disparar flujo.');
+  }
+}
+
+async function runScheduleModalNow() {
+  if (!currentSchedFlowId) return;
+  $('schedStatusVal').textContent = 'Ejecutando...';
+  await runFlowNow(currentSchedFlowId);
+  const fl = state.flows.find((f) => f.id === currentSchedFlowId);
+  if (fl) {
+    $('schedStatusVal').textContent = fl.last_run ? fl.last_run.status : 'Listo';
+    $('schedLastVal').textContent = fl.last_run ? `${fl.last_run.duration}s` : '-';
+  }
 }
 
 function renderPalette() {

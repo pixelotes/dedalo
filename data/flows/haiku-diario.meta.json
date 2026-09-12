@@ -1,0 +1,7 @@
+{
+  "name": "haiku-diario",
+  "description": "",
+  "schedule": "@every 15m",
+  "enabled": true,
+  "updated_at": 1789221470
+}
