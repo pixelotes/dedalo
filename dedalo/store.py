@@ -121,6 +121,18 @@ def load_flow(flow_id: str) -> dict[str, Any] | None:
     }
 
 
+def load_meta(flow_id: str) -> dict[str, Any]:
+    """Carga los metadatos de un flujo si existen."""
+    s = slug(flow_id)
+    meta_path = FLOWS_DIR / f"{s}.meta.json"
+    if meta_path.is_file():
+        try:
+            return json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {"name": s, "description": "", "schedule": "", "enabled": True}
+
+
 def save_flow(
     flow_id: str,
     graph_dict: dict[str, Any],

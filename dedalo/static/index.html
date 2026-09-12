@@ -48,6 +48,9 @@
   <symbol id="i-x" viewBox="0 0 24 24">
     <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
   </symbol>
+  <symbol id="i-history" viewBox="0 0 24 24">
+    <path d="M12 8v4l3 3m6-3a9 9 0 1 1-2.636-6.364M21 3v5h-5"/>
+  </symbol>
   <symbol id="i-theme" viewBox="0 0 24 24">
     <circle cx="12" cy="12" r="9"/>
     <path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none"/>
@@ -87,6 +90,9 @@
       <button class="nav-tab" data-tab="nodes" title="Paleta de Nodos">
         <svg class="ic" width="16" height="16"><use href="#i-nodes"/></svg> Nodos
       </button>
+      <button class="nav-tab" data-tab="history" title="Historial de Ejecuciones">
+        <svg class="ic" width="16" height="16"><use href="#i-history"/></svg> Historial
+      </button>
       <button class="nav-tab" data-tab="secrets" title="Gestión de Secretos">
         <svg class="ic" width="16" height="16"><use href="#i-key"/></svg> Secretos
       </button>
@@ -115,6 +121,30 @@
         <span class="hint-inline">Arrastra o haz clic</span>
       </div>
       <div class="palette-categories" id="palette"></div>
+    </div>
+
+    <!-- Tab 3: Historial -->
+    <div class="tab-pane" id="paneHistory">
+      <div class="pane-head">
+        <h3>Historial</h3>
+        <div style="display: flex; gap: 4px; align-items: center;">
+          <button id="btnRefreshHistory" class="icon-btn" title="Actualizar historial">
+            <svg class="ic" width="14" height="14"><use href="#i-history"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="history-controls">
+        <label class="checkbox-label" style="font-size: 0.76rem;">
+          <input type="checkbox" id="historyOnlyCurrent" checked />
+          <span>Solo flujo actual</span>
+        </label>
+        <button id="btnHistoryPurge" class="btn sm secondary" title="Purgar registros con más de 30 días">
+          Purgar >30d
+        </button>
+      </div>
+      <div class="history-list" id="historyList">
+        <p class="hint">No hay ejecuciones registradas.</p>
+      </div>
     </div>
 
     <!-- Tab 3: Secretos -->
@@ -295,6 +325,34 @@
         <button id="btnUnsavedDiscard" class="btn secondary" style="color: var(--port-err);">Descartar</button>
         <button id="btnUnsavedSave" class="btn primary">Guardar y continuar</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal para inspeccionar una ejecución y resultados paso a paso -->
+<div class="sheet" id="historySheet" hidden>
+  <div class="sheet-box history-box">
+    <div class="sheet-head">
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <svg class="ic" width="18" height="18" style="color: var(--primary);"><use href="#i-history"/></svg>
+        <strong>Ejecución: <span id="histRunId" class="mono" style="color: var(--primary);"></span></strong>
+      </div>
+      <button id="histClose" class="icon-btn" title="Cerrar"><svg class="ic" width="14" height="14"><use href="#i-x"/></svg></button>
+    </div>
+    <div class="history-meta-bar" id="histMetaBar"></div>
+    <div class="history-steps-container" id="histStepsContainer">
+      <div id="histStepsBody" class="history-steps-body"></div>
+    </div>
+    <div class="sheet-foot">
+      <div style="display: flex; gap: 8px;">
+        <button id="btnHistHighlightCanvas" class="btn secondary" title="Resaltar el estado de cada nodo en el lienzo visual">
+          <svg class="ic" width="14" height="14"><use href="#i-flow"/></svg> Resaltar en lienzo
+        </button>
+        <button id="btnHistClearHighlight" class="btn secondary" title="Limpiar colores de resaltado">
+          Limpiar resaltado
+        </button>
+      </div>
+      <button id="btnHistCloseSheet" class="btn primary">Cerrar</button>
     </div>
   </div>
 </div>

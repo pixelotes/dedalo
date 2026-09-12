@@ -52,7 +52,31 @@ def test_run_preview_api():
     }
     res = client.post("/api/run", json={"graph": graph})
     assert res.status_code == 200
-    results = res.json()["results"]
-    assert "disco" in results
-    assert results["disco"]["status"] == "ok"
-    assert isinstance(results["disco"]["data"], (int, float))
+    data = res.json()
+    assert "run_id" in data
+    assert "disco" in data["results"]
+    assert data["results"]["disco"]["status"] == "ok"
+    assert isinstance(data["results"]["disco"]["data"], (int, float))
+
+    # Test history listing
+    h_res = client.get("/api/history?flow_id=test_run")
+    assert h_res.status_code == 200
+    runs = h_res.json()
+    assert len(runs) >= 1
+    assert runs[0]["id"] == data["run_id"]
+    assert runs[0]["status"] == "ok"
+
+    # Test history run detail
+    r_res = client.get(f"/api/history/run?id={data['run_id']}")
+    assert r_res.status_code == 200
+    detail = r_res.json()
+    assert detail["id"] == data["run_id"]
+    assert len(detail["steps"]) >= 1
+    assert detail["steps"][0]["node_id"] == "disco"
+    assert detail["steps"][0]["status"] == "ok"
+
+    # Test history purge endpoint
+    p_res = client.post("/api/history/purge?days=30")
+    assert p_res.status_code == 200
+    assert "deleted" in p_res.json()
+

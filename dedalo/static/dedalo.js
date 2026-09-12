@@ -26,6 +26,9 @@ const state = {
   dragOffset: { x: 0, y: 0 },
   wiring: null, // { sourceNodeId, port, startX, startY }
   editingScriptNodeId: null,
+  historyRuns: [],
+  selectedRunId: null,
+  runHighlights: {},
 };
 
 // ---------------------------------------------------------------------------
@@ -219,6 +222,9 @@ function setupEvents() {
       const targetId = 'pane' + tab.dataset.tab.charAt(0).toUpperCase() + tab.dataset.tab.slice(1);
       $(targetId).classList.add('active');
       state.activeTab = tab.dataset.tab;
+      if (tab.dataset.tab === 'history') {
+        loadHistory();
+      }
     };
   });
 
@@ -250,6 +256,22 @@ function setupEvents() {
   $('btnSchedSave').onclick = saveScheduleModal;
   $('btnSchedRunNow').onclick = runScheduleModalNow;
   $('schedPreset').onchange = onSchedPresetChange;
+
+  if ($('btnRefreshHistory')) $('btnRefreshHistory').onclick = () => loadHistory();
+  if ($('historyOnlyCurrent')) $('historyOnlyCurrent').onchange = () => loadHistory();
+  if ($('btnHistoryPurge')) $('btnHistoryPurge').onclick = purgeHistory;
+  if ($('histClose')) $('histClose').onclick = () => $('historySheet').hidden = true;
+  if ($('btnHistCloseSheet')) $('btnHistCloseSheet').onclick = () => $('historySheet').hidden = true;
+  if ($('btnHistHighlightCanvas')) $('btnHistHighlightCanvas').onclick = () => {
+    if (currentRunDetail && currentRunDetail.steps) {
+      highlightRunOnCanvas(currentRunDetail.steps);
+      toast('Nodos resaltados en el lienzo según el resultado de esta ejecución.');
+    }
+  };
+  if ($('btnHistClearHighlight')) $('btnHistClearHighlight').onclick = () => {
+    clearRunHighlights();
+    toast('Resaltado eliminado.');
+  };
 
   $('unsavedClose').onclick = () => closeUnsavedModal();
   $('btnUnsavedCancel').onclick = () => closeUnsavedModal();
@@ -528,6 +550,12 @@ async function runFlowNow(flowId) {
     if (res.ok) {
       toast(`«${flowId}» completado con éxito en ${data.duration}s.`);
       await loadFlows();
+      if (flowId === state.graph.name && data.result) {
+        highlightRunOnCanvas(data.result);
+      }
+      if (state.activeTab === 'history') {
+        loadHistory();
+      }
     } else {
       toast(`Error en «${flowId}»: ${data.detail || 'Fallo'}`);
     }
@@ -629,6 +657,241 @@ async function removeSecret(name) {
 }
 
 // ---------------------------------------------------------------------------
+// Historial de Ejecuciones y Resultados Paso a Paso
+// ---------------------------------------------------------------------------
+
+let currentRunDetail = null;
+
+async function loadHistory() {
+  const list = $('historyList');
+  if (!list) return;
+  list.innerHTML = '<p class="hint">Cargando historial...</p>';
+
+  const onlyCurrent = $('historyOnlyCurrent') ? $('historyOnlyCurrent').checked : true;
+  const flowId = onlyCurrent && state.graph && state.graph.name ? state.graph.name : '';
+
+  try {
+    const url = flowId ? `/api/history?flow_id=${encodeURIComponent(flowId)}&limit=50` : '/api/history?limit=50';
+    const res = await fetch(url);
+    if (!res.ok) throw new Error();
+    const runs = await res.json();
+    state.historyRuns = runs;
+    renderHistory(runs);
+  } catch (e) {
+    list.innerHTML = '<p class="hint" style="color:var(--port-err);">Error al cargar el historial.</p>';
+  }
+}
+
+function renderHistory(runs) {
+  const list = $('historyList');
+  if (!list) return;
+  list.innerHTML = '';
+
+  if (!runs || runs.length === 0) {
+    list.innerHTML = '<p class="hint">No hay ejecuciones registradas.</p>';
+    return;
+  }
+
+  runs.forEach((r) => {
+    const card = document.createElement('div');
+    card.className = `history-card ${state.selectedRunId === r.id ? 'active' : ''}`;
+    card.dataset.runId = r.id;
+
+    const dt = new Date(r.started_at * 1000);
+    const dateStr = dt.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit' }) + ' ' +
+                    dt.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const durStr = r.duration != null ? `${r.duration}s` : '...';
+    const trigStr = r.trigger_type === 'schedule' ? 'Cron' : r.trigger_type === 'preview' ? 'Prueba' : 'Manual';
+    const statusBadge = r.status === 'ok' ? '<span class="hist-badge ok">OK</span>'
+                      : r.status === 'running' ? '<span class="hist-badge running">RUN</span>'
+                      : '<span class="hist-badge error">ERR</span>';
+
+    card.innerHTML = `
+      <div class="hist-header">
+        <div class="hist-title" title="${escapeHtml(r.flow_name || r.flow_id)}">
+          <span class="hist-trigger">${trigStr}</span>
+          <span>${escapeHtml(r.flow_name || r.flow_id)}</span>
+        </div>
+        ${statusBadge}
+      </div>
+      <div class="hist-meta">
+        <span>${dateStr}</span>
+        <div style="display: flex; gap: 8px;">
+          <span>${durStr}</span>
+          <span style="color: var(--primary);">${r.step_count || 0} pasos</span>
+        </div>
+      </div>
+    `;
+
+    card.onclick = () => {
+      state.selectedRunId = r.id;
+      document.querySelectorAll('.history-card').forEach((c) => c.classList.remove('active'));
+      card.classList.add('active');
+      openRunDetail(r.id);
+    };
+
+    list.appendChild(card);
+  });
+}
+
+async function openRunDetail(runId) {
+  try {
+    const res = await fetch(`/api/history/run?id=${encodeURIComponent(runId)}`);
+    if (!res.ok) {
+      toast('No se encontró el detalle de la ejecución');
+      return;
+    }
+    const run = await res.json();
+    currentRunDetail = run;
+
+    $('histRunId').textContent = run.id;
+    const dt = new Date(run.started_at * 1000);
+    const dateStr = dt.toLocaleString('es-ES');
+    const trigStr = run.trigger_type === 'schedule' ? 'Programado (Cron)'
+                  : run.trigger_type === 'preview' ? 'Prueba en lienzo'
+                  : 'Disparo manual';
+
+    const metaBar = $('histMetaBar');
+    const statusColor = run.status === 'ok' ? 'var(--port-ok)' : 'var(--port-err)';
+    metaBar.innerHTML = `
+      <div><b>Flujo:</b> <span>${escapeHtml(run.flow_name || run.flow_id)}</span></div>
+      <div><b>Tipo:</b> <span>${trigStr}</span></div>
+      <div><b>Fecha:</b> <span>${dateStr}</span></div>
+      <div><b>Duración:</b> <span>${run.duration != null ? run.duration + 's' : '-'}</span></div>
+      <div><b>Estado:</b> <span style="font-weight:700; color:${statusColor};">${run.status.toUpperCase()}</span></div>
+    `;
+
+    if (run.error) {
+      metaBar.innerHTML += `<div style="width: 100%; color: var(--port-err); margin-top: 4px;"><b>Error:</b> ${escapeHtml(run.error)}</div>`;
+    }
+
+    const body = $('histStepsBody');
+    body.innerHTML = '';
+
+    if (!run.steps || run.steps.length === 0) {
+      body.innerHTML = '<p class="hint">No hay pasos registrados para esta ejecución.</p>';
+    } else {
+      run.steps.forEach((s, idx) => {
+        const stepCard = document.createElement('div');
+        stepCard.className = 'step-card';
+        const badgeClass = s.status === 'ok' ? 'ok' : s.status === 'skipped' ? 'skipped' : 'error';
+        const statusLabel = s.status === 'ok' ? 'Éxito' : s.status === 'skipped' ? 'Omitido' : 'Error';
+
+        let dataHtml = '';
+        if (s.data != null) {
+          dataHtml = `
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <span class="hint" style="font-size:0.7rem; text-transform:uppercase; font-weight:600;">Resultado / Salida:</span>
+              <button class="icon-btn copy-step-btn" style="font-size:0.72rem; padding: 2px 6px;" title="Copiar datos">Copiar</button>
+            </div>
+            <pre class="step-data">${escapeHtml(s.data)}</pre>
+          `;
+        }
+
+        let errHtml = '';
+        if (s.error) {
+          errHtml = `<div class="step-error"><b>Error de nodo:</b> ${escapeHtml(s.error)}</div>`;
+        }
+
+        stepCard.innerHTML = `
+          <div class="step-head">
+            <div class="step-title">
+              <span style="color: var(--text-muted); font-size: 0.72rem; font-family: var(--mono);">#${idx + 1}</span>
+              <span>${escapeHtml(s.node_id)}</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span class="step-badge ${badgeClass}">${statusLabel}</span>
+              <button class="btn sm secondary locate-node-btn" title="Localizar y centrar este nodo en el lienzo visual">
+                <svg class="ic" width="12" height="12"><use href="#i-center"/></svg> Ver nodo
+              </button>
+            </div>
+          </div>
+          <div class="step-body">
+            ${dataHtml}
+            ${errHtml}
+          </div>
+        `;
+
+        const copyBtn = stepCard.querySelector('.copy-step-btn');
+        if (copyBtn) {
+          copyBtn.onclick = () => {
+            navigator.clipboard.writeText(s.data);
+            toast('Salida copiada al portapapeles.');
+          };
+        }
+
+        const locateBtn = stepCard.querySelector('.locate-node-btn');
+        if (locateBtn) {
+          locateBtn.onclick = () => {
+            $('historySheet').hidden = true;
+            highlightNodeOnCanvas(s.node_id);
+          };
+        }
+
+        body.appendChild(stepCard);
+      });
+    }
+
+    // Resaltar automáticamente los nodos en el canvas
+    highlightRunOnCanvas(run.steps);
+
+    $('historySheet').hidden = false;
+  } catch (e) {
+    toast('Error al obtener detalle de ejecución');
+  }
+}
+
+function clearRunHighlights() {
+  state.runHighlights = {};
+  renderNodes();
+}
+
+function highlightRunOnCanvas(steps) {
+  state.runHighlights = {};
+  if (Array.isArray(steps)) {
+    steps.forEach((s) => {
+      const k = s.status === 'ok' ? 'ok' : s.status === 'skipped' ? 'skip' : 'err';
+      state.runHighlights[s.node_id] = k;
+    });
+  } else if (steps && typeof steps === 'object') {
+    Object.entries(steps).forEach(([nid, r]) => {
+      const st = (r && r.status) || 'ok';
+      const k = st === 'ok' ? 'ok' : st === 'skipped' ? 'skip' : 'err';
+      state.runHighlights[nid] = k;
+    });
+  }
+  renderNodes();
+}
+
+function highlightNodeOnCanvas(nodeId) {
+  const node = state.graph.nodes.find((n) => n.id === nodeId);
+  if (node) {
+    selectNode(node);
+    const canvas = $('canvasWrap');
+    const cw = canvas.clientWidth;
+    const ch = canvas.clientHeight;
+    state.view.x = cw / 2 - (node.x + 90) * state.view.k;
+    state.view.y = ch / 2 - (node.y + 40) * state.view.k;
+    updateTransform();
+    toast(`Nodo «${nodeId}» seleccionado.`);
+  }
+}
+
+async function purgeHistory() {
+  if (!confirm('¿Deseas purgar del historial todas las ejecuciones de más de 30 días de antigüedad?')) {
+    return;
+  }
+  try {
+    const res = await fetch('/api/history/purge?days=30', { method: 'POST' });
+    const data = await res.json();
+    toast(`Historial purgado: ${data.deleted} ejecuciones eliminadas.`);
+    await loadHistory();
+  } catch (e) {
+    toast('Error al purgar historial.');
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Gestión de Flujos (Crear, Cargar, Guardar, Eliminar)
 // ---------------------------------------------------------------------------
 
@@ -636,9 +899,13 @@ function resetGraph(name = 'nuevo-flujo') {
   state.graph = { name, nodes: [], edges: [], version: 1 };
   state.meta = { name, description: '', schedule: '', enabled: true };
   state.selectedNodeId = null;
+  state.runHighlights = {};
   state.view = { k: 1, x: 0, y: 0 };
   $('flowName').value = name;
   render();
+  if (state.activeTab === 'history') {
+    loadHistory();
+  }
   toast('Lienzo en blanco.');
 }
 
@@ -651,10 +918,14 @@ async function openFlow(flowId) {
     state.meta = data.meta || { name: flowId };
     $('flowName').value = state.graph.name;
     state.selectedNodeId = null;
+    state.runHighlights = {};
     state.isDirty = false;
     render();
     renderFlowsList();
     centerFlow();
+    if (state.activeTab === 'history') {
+      loadHistory();
+    }
     toast(`Flujo «${flowId}» cargado.`);
   } catch (e) {
     toast('Error al cargar flujo.');
@@ -670,9 +941,13 @@ async function loadTemplate(templateName) {
     state.meta = { name: graph.name };
     $('flowName').value = graph.name;
     state.selectedNodeId = null;
+    state.runHighlights = {};
     markDirty();
     render();
     centerFlow();
+    if (state.activeTab === 'history') {
+      loadHistory();
+    }
     toast(`Plantilla «${templateName}» cargada.`);
   } catch (e) {
     toast('Error al cargar plantilla.');
@@ -768,6 +1043,11 @@ async function runPreview() {
     });
     traceDiv.hidden = false;
     $('sheet').hidden = false;
+
+    highlightRunOnCanvas(data.results || {});
+    if (state.activeTab === 'history') {
+      loadHistory();
+    }
   } catch (e) {
     toast('Error al ejecutar flujo.');
   }
@@ -841,7 +1121,12 @@ function renderNodes() {
 
   state.graph.nodes.forEach((node) => {
     const el = document.createElement('div');
-    el.className = 'node' + (node.id === state.selectedNodeId ? ' selected' : '');
+    let cls = 'node' + (node.id === state.selectedNodeId ? ' selected' : '');
+    if (state.runHighlights && state.runHighlights[node.id]) {
+      cls += ` node-run-${state.runHighlights[node.id]}`;
+    }
+    el.className = cls;
+    el.dataset.id = node.id;
     el.style.left = `${node.x}px`;
     el.style.top = `${node.y}px`;
 

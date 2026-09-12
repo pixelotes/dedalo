@@ -34,6 +34,8 @@ data/secrets/*.secret
 # Runtime state and logs
 data/state/
 data/logs/
+data/*.db
+data/*.db-*
 *.log
 
 # IDE

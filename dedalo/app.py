@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +15,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from dedalo import compiler, runtime, scheduler, secrets, store, templates
+from dedalo import compiler, history, runtime, scheduler, secrets, store, templates
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -25,9 +26,10 @@ sched = scheduler.Scheduler()
 
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Inicializar directorios de datos
+    # Inicializar directorios de datos y base de datos
     for d in ["data/flows", "data/secrets", "data/state", "data/outputs", "data/logs"]:
         Path(d).mkdir(parents=True, exist_ok=True)
+    history.init_db()
 
     # Cargar configuración persistida si existe
     if CONFIG_FILE.is_file():
@@ -321,25 +323,74 @@ def compile_endpoint(req: CompileRequest) -> dict[str, Any]:
 
 @app.post("/api/run")
 def run_preview_endpoint(req: RunRequest) -> dict[str, Any]:
-    """Compila y ejecuta el grafo inmediatamente en memoria para depuración visual."""
+    """Compila y ejecuta el grafo inmediatamente en memoria para depuración visual y registra la ejecución."""
     try:
         graph = compiler.Graph.from_dict(req.graph)
         source = compiler.compile(graph)
     except compiler.GraphError as exc:
         raise HTTPException(status_code=400, detail=exc.errors)
 
-    ctx = scheduler.FlowContext(flow_name=graph.name or "prueba")
+    flow_id = store.slug(graph.name) if graph.name else "prueba"
+    flow_name = graph.name or "Prueba rápida"
+    run_id = history.record_run_start(flow_id=flow_id, flow_name=flow_name, trigger_type="preview")
+
+    ctx = scheduler.FlowContext(flow_name=flow_id)
     ns: dict[str, Any] = {}
+    t0 = time.time()
     try:
         exec(compile(source, "<dedalo:preview>", "exec"), ns)
         run_fn = ns.get("run")
         if not callable(run_fn):
             raise RuntimeError("El flujo compilado no contiene función run()")
         results = run_fn(ctx)
+        duration = time.time() - t0
+        history.record_run_finish(
+            run_id=run_id,
+            status="ok",
+            duration=duration,
+            results=results,
+        )
         return {
             "status": "ok",
+            "run_id": run_id,
+            "duration": round(duration, 3),
             "results": results,
             "code": source,
         }
     except Exception as exc:
+        duration = time.time() - t0
+        history.record_run_finish(
+            run_id=run_id,
+            status="error",
+            duration=duration,
+            error=str(exc),
+        )
         raise HTTPException(status_code=500, detail=f"Error durante la ejecución: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# API: Historial de Ejecuciones
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/history")
+def list_history_endpoint(flow_id: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+    """Devuelve las últimas ejecuciones registradas."""
+    return history.list_runs(flow_id=flow_id, limit=limit)
+
+
+@app.get("/api/history/run")
+def get_history_run_endpoint(id: str = Query(...)) -> dict[str, Any]:
+    """Devuelve los detalles y resultados paso a paso de una ejecución concreta."""
+    run_data = history.get_run(id)
+    if not run_data:
+        raise HTTPException(status_code=404, detail=f"Ejecución «{id}» no encontrada")
+    return run_data
+
+
+@app.post("/api/history/purge")
+def purge_history_endpoint(days: int = 30) -> dict[str, Any]:
+    """Purga ejecuciones con antigüedad superior a los días especificados (por defecto 30)."""
+    deleted = history.purge_older_than(days=days)
+    return {"status": "ok", "deleted": deleted, "days": days}
+
