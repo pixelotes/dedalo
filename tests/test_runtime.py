@@ -1,6 +1,7 @@
 """Tests para el runtime de Dédalo Standalone."""
 
 from dedalo import runtime
+import re
 
 
 def test_threshold():
@@ -374,5 +375,80 @@ def test_summarize_dict_field():
     res = runtime.summarize_text(None, [inp], engine="luhn", length="short", field="extract")
     assert res.ok
     assert "máquina" in res.data.lower() or "computación" in res.data.lower()
+
+
+def test_summarize_custom_sentences_and_ratio():
+    sentences = [
+        f"Esta es la oración informativa número {i} sobre ciencia de datos."
+        for i in range(10)
+    ]
+    text = " ".join(sentences)
+    inp = runtime.NodeResult("ok", data=text)
+
+    # Test sentences=4
+    res_sentences = runtime.summarize_text(None, [inp], engine="luhn", sentences=4)
+    assert res_sentences.ok
+    # Deve devolver exactamente 4 oraciones
+    assert len(re.split(r"(?<=[.?!])\s+", res_sentences.data)) == 4
+
+    # Test ratio=0.3 (3 de 10)
+    res_ratio = runtime.summarize_text(None, [inp], engine="luhn", ratio=0.3)
+    assert res_ratio.ok
+    assert len(re.split(r"(?<=[.?!])\s+", res_ratio.data)) == 3
+
+
+def test_summarize_nested_field_and_abbreviations():
+    nested_data = {
+        "query": {
+            "pages": [
+                {
+                    "title": "Arqueología",
+                    "extract": "El arqueólogo Dr. Gómez visitó Roma en el siglo I a. C. para examinar ruinas de arqueología romana. Roma tiene gran historia de arqueología.",
+                }
+            ]
+        }
+    }
+    inp = runtime.NodeResult("ok", data=nested_data)
+
+    # Buscar por ruta dot-notation con índice de lista
+    res_path = runtime.summarize_text(None, [inp], engine="luhn", field="query.pages.0.extract", length="full")
+    assert res_path.ok
+    # Dr. Gómez no debe haberse separado
+    assert "Dr. Gómez" in res_path.data
+    assert "siglo I a. C." in res_path.data
+
+    # Buscar por clave extract recursiva
+    res_recur = runtime.summarize_text(None, [inp], engine="luhn", field="extract", length="full")
+    assert res_recur.ok
+    assert "Dr. Gómez" in res_recur.data
+    assert "siglo I a. C." in res_recur.data
+
+
+def test_template_indexing_and_recursive_fallback():
+    data = {
+        "query": {
+            "pages": [
+                {
+                    "title": "Milenio",
+                    "canonicalurl": "https://es.wikipedia.org/wiki/Milenio",
+                }
+            ]
+        }
+    }
+    inp1 = runtime.NodeResult("ok", data=data)
+    inp2 = runtime.NodeResult("ok", data="Texto del resumen.")
+
+    # Con ruta exacta con índice de lista
+    tmpl1 = "Titulo: {query.pages.0.title} - URL: {query.pages.0.canonicalurl} - Resumen: {entrada}"
+    res1 = runtime.template(None, [inp1, inp2], template=tmpl1)
+    assert res1.ok
+    assert "Titulo: Milenio - URL: https://es.wikipedia.org/wiki/Milenio - Resumen: Texto del resumen." == res1.data
+
+    # Con búsqueda recursiva de respaldo
+    tmpl2 = "Titulo: {title} - URL: {canonicalurl} - Resumen: {entrada}"
+    res2 = runtime.template(None, [inp1, inp2], template=tmpl2)
+    assert res2.ok
+    assert "Titulo: Milenio - URL: https://es.wikipedia.org/wiki/Milenio - Resumen: Texto del resumen." == res2.data
+
 
 

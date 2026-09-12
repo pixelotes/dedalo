@@ -5,9 +5,9 @@
     {
       "id": "fetch_wikipedia",
       "type": "input.http_call",
-      "label": "Artículo aleatorio (API)",
+      "label": "Artículo aleatorio (API completa)",
       "config": {
-        "url": "https://es.wikipedia.org/api/rest_v1/page/random/summary",
+        "url": "https://es.wikipedia.org/w/api.php?action=query&format=json&formatversion=2&prop=extracts|info&inprop=url&explaintext=1&generator=random&grnnamespace=0&grnlimit=1",
         "method": "GET",
         "engine": "auto",
         "impersonate": "chrome",
@@ -19,11 +19,12 @@
     {
       "id": "resumir_luhn",
       "type": "transform.summarize",
-      "label": "Resumen largo (Luhn)",
+      "label": "Resumen extenso (Luhn)",
       "config": {
         "engine": "luhn",
         "length": "long",
-        "field": "extract"
+        "field": "query.pages.0.extract",
+        "sentences": 10
       },
       "x": 380.0,
       "y": 140.0
@@ -34,7 +35,7 @@
       "label": "Formatear informe",
       "config": {
         "fan_in": "all",
-        "template": "# Artículo Diario de Wikipedia ({fecha})\n\n## {title}\n- **Enlace:** {content_urls.desktop.page}\n- **Descripción:** {description}\n\n### Resumen del Artículo (Luhn):\n{entrada}\n"
+        "template": "# Artículo Diario de Wikipedia ({fecha})\n\n## {query.pages.0.title}\n- **Enlace:** {query.pages.0.canonicalurl}\n\n### Resumen Extenso del Artículo (Luhn):\n{entrada}\n"
       },
       "x": 680.0,
       "y": 140.0

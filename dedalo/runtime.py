@@ -997,6 +997,38 @@ def html_extract(
     return NodeResult("ok", data=records)
 
 
+def _extract_field_value(data: Any, field_path: str) -> Any:
+    """Extrae un valor anidado usando notación punto o índice numérico (ej: query.pages.0.extract)."""
+    if not field_path:
+        return data
+    curr = data
+    for part in field_path.split("."):
+        if isinstance(curr, dict) and part in curr:
+            curr = curr[part]
+        elif isinstance(curr, (list, tuple)) and part.isdigit() and int(part) < len(curr):
+            curr = curr[int(part)]
+        else:
+            return None
+    return curr
+
+
+def _find_field_recursive(data: Any, field_name: str) -> Any:
+    """Busca recursivamente la primera coincidencia de una clave en un diccionario o lista."""
+    if isinstance(data, dict):
+        if field_name in data:
+            return data[field_name]
+        for v in data.values():
+            found = _find_field_recursive(v, field_name)
+            if found is not None:
+                return found
+    elif isinstance(data, (list, tuple)):
+        for it in data:
+            found = _find_field_recursive(it, field_name)
+            if found is not None:
+                return found
+    return None
+
+
 def template(
     ctx: Any,
     inputs: list[NodeResult],
@@ -1020,17 +1052,29 @@ def template(
     context_vars["fecha"] = time.strftime("%Y-%m-%d")
     context_vars["hora"] = time.strftime("%H:%M:%S")
 
-    # Interpolación segura {clave} y {sub.clave}
+    # Interpolación segura {clave}, {sub.clave} y búsqueda recursiva de respaldo
     def repl(match):
         expr = match.group(1).strip()
         parts = expr.split(".")
         curr = context_vars
+        found_parts = True
         for p in parts:
             if isinstance(curr, dict) and p in curr:
                 curr = curr[p]
+            elif isinstance(curr, (list, tuple)) and p.isdigit() and int(p) < len(curr):
+                curr = curr[int(p)]
             else:
-                return match.group(0)
-        return str(curr)
+                found_parts = False
+                break
+        if found_parts:
+            return str(curr)
+
+        if len(parts) == 1:
+            fallback = _find_field_recursive(context_vars, expr)
+            if fallback is not None:
+                return str(fallback)
+
+        return match.group(0)
 
     result = re.sub(r"\{([a-zA-Z0-9_.]+)\}", repl, template)
     return NodeResult("ok", data=result)
@@ -1244,22 +1288,27 @@ def summarize_text(
     length: str = "medium",
     prompt: str = "",
     field: str = "",
+    sentences: int = 0,
+    ratio: float = 0.0,
 ) -> NodeResult:
-    """Resume un texto usando Luhn (extractivo) o LLM."""
+    """Resume un texto usando Luhn (extractivo configurable) o LLM."""
     inp = Inputs(inputs)
     first = inp.first_data()
     text = ""
-    if isinstance(first, dict):
-        if field and field in first:
-            text = str(first[field])
-        elif "extract" in first:
-            text = str(first["extract"])
-        elif "content" in first:
-            text = str(first["content"])
-        elif "text" in first:
-            text = str(first["text"])
+    if isinstance(first, (dict, list)):
+        if field:
+            val = _extract_field_value(first, field)
+            if val is None:
+                val = _find_field_recursive(first, field)
+            text = str(val or "")
         else:
-            text = inp.text()
+            for candidate in ("extract", "content", "text", "body", "description"):
+                val = _find_field_recursive(first, candidate)
+                if val:
+                    text = str(val)
+                    break
+            if not text:
+                text = inp.text()
     else:
         text = inp.text()
 
@@ -1267,28 +1316,72 @@ def summarize_text(
         return NodeResult("ok", data="")
 
     if engine == "luhn":
-        # Algoritmo extractivo básico basado en frecuencia de palabras
-        sentences = re.split(r"(?<=[.?!])\s+", text)
+        # Limpiar encabezados de secciones comunes (ej. == Encabezado == en Wikipedia o markdown ###)
+        cleaned_text = re.sub(r"(?m)^\s*=+[^\n=]+=+\s*$", "", text)
+
+        protected = re.sub(r"\b(Dr|Dra|Sr|Sra|Srta|Prof|D|Dña)\.", r"\1§DOT§", cleaned_text, flags=re.IGNORECASE)
+        protected = re.sub(r"\b(p)\.\s*(ej)\.", r"\1§DOT§ \2§DOT§", protected, flags=re.IGNORECASE)
+        protected = re.sub(r"\b(art|núm|apdo|cap|vol|vs|fig)\.", r"\1§DOT§", protected, flags=re.IGNORECASE)
+        protected = re.sub(r"\b([aAdD])\.\s*([cC])\.", r"\1§DOT§ \2.", protected)
+        protected = re.sub(r"\b([eE][eE])\.\s*([uU][uU])\.", r"\1§DOT§ \2§DOT§", protected)
+        protected = re.sub(r"\b([cC][aA]?)\.", r"\1§DOT§", protected)
+
+        # Dividir por fin de frase o bloques de párrafo
+        raw_parts = [p.strip() for p in re.split(r"\n+", protected) if p.strip()]
+        sentence_list: list[str] = []
+        for part in raw_parts:
+            for s in re.split(r"(?<=[.?!])\s+", part):
+                s = s.replace("§DOT§", ".").strip()
+                if len(s) >= 15 and len(s.split()) >= 4:
+                    sentence_list.append(s)
+
+        # Fallback a división simple si el texto es breve o no pasa los filtros estrictos
+        if not sentence_list:
+            sentence_list = [s.strip() for s in re.split(r"(?<=[.?!])\s+", text) if s.strip()]
+
+        if not sentence_list:
+            return NodeResult("ok", data=text)
+
         words = re.findall(r"\w{4,}", text.lower())
         freq: dict[str, int] = {}
         for w in words:
             freq[w] = freq.get(w, 0) + 1
 
         scores = []
-        for s in sentences:
+        for s in sentence_list:
             score = sum(freq.get(w, 0) for w in re.findall(r"\w{4,}", s.lower()))
             scores.append((score, s))
 
-        target_count = {"short": 3, "medium": 6, "long": 12, "full": len(sentences)}.get(
-            length, 6
+        # Determinar número objetivo de frases a extraer
+        if int(sentences or 0) > 0:
+            target_count = int(sentences)
+        elif float(ratio or 0.0) > 0.0:
+            target_count = max(1, int(len(sentence_list) * float(ratio)))
+        elif str(length).isdigit():
+            target_count = int(length)
+        else:
+            preset_counts = {
+                "short": 3,
+                "medium": 6,
+                "long": 12,
+                "full": len(sentence_list),
+            }
+            target_count = preset_counts.get(str(length).lower(), 6)
+
+        target_count = min(target_count, len(sentence_list))
+        top = sorted(
+            sorted(scores, key=lambda x: x[0], reverse=True)[:target_count],
+            key=lambda x: sentence_list.index(x[1]),
         )
-        top = sorted(sorted(scores, key=lambda x: x[0], reverse=True)[:target_count], key=lambda x: sentences.index(x[1]))
         return NodeResult("ok", data=" ".join(s for _, s in top))
 
     # Motor LLM
     sys_prompt = prompt or "Resume el siguiente texto manteniendo los puntos clave."
     limits = {"short": 512, "medium": 1024, "long": 2048, "full": 4096}
-    tokens = limits.get(length, 1024)
+    if int(sentences or 0) > 0:
+        tokens = min(4096, max(256, int(sentences) * 50))
+    else:
+        tokens = limits.get(str(length).lower(), 1024)
     try:
         summary = call_llm(text, system=sys_prompt, tokens=tokens)
         return NodeResult("ok", data=summary)

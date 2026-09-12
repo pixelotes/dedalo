@@ -152,6 +152,17 @@ Para evitar los cientos de megabytes de consumo y picos de CPU de un navegador h
 - **User-Agent configurable**: Selección de presets (`chrome`, `safari`, `firefox`, `mobile`, `bot`) o User-Agent personalizado libre.
 - **Fallback resiliente**: Si una petición en modo `auto` encuentra un fallo en `curl_cffi`, se intenta automáticamente mediante `httpx` antes de reportar un error.
 
+### F. Resumen Estadístico Avanzado (Luhn Configurable y Tolerante)
+Se ha potenciado el nodo de resumen determinista sin LLM (`transform.summarize` con motor `luhn`):
+- **Límites Configurables**: Soporte para número exacto de oraciones (`sentences: int`) o ratio porcentual del documento (`ratio: float`), complementando los presets clásicos (`short`, `medium`, `long`, `full`).
+- **Segmentación de Oraciones Robusta**:
+  - Protección de abreviaturas y títulos comunes en español/inglés (`Dr.`, `Dra.`, `Sr.`, `p. ej.`, `art.`, `a. C.`, `c.`, `ca.`, `EE. UU.`, etc.) para evitar fragmentaciones indebidas por puntos internos.
+  - Limpieza automática de encabezados de sección wiki (`== Título ==`) y markdown (`###`).
+  - Filtrado de líneas residuales o llamadas a pie de página sin perder coherencia sintáctica.
+- **Acceso a Estructuras Anidadas Complejas**:
+  - Tanto `transform.summarize` como `transform.template` admiten ahora navegación dot-notation con índices de listas (ej: `query.pages.0.extract`).
+  - Búsqueda recursiva automática como mecanismo de respaldo si una clave no se encuentra en el nivel raíz.
+
 ---
 
 ## 5. Estructura del Repositorio

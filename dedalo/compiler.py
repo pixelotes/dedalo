@@ -466,6 +466,8 @@ NODE_TYPES: dict[str, NodeSpec] = {
             "length": "medium",
             "prompt": "",
             "field": "",
+            "sentences": 0,
+            "ratio": 0.0,
         },
         label="Resumir texto",
         output="texto resumido",
@@ -479,8 +481,10 @@ NODE_TYPES: dict[str, NodeSpec] = {
         show_when={"prompt": {"engine": ["llm"]}},
         help={
             "engine": "Algoritmo de resumen: Luhn (extractivo rápido sin LLM) o LLM.",
-            "length": "Longitud del resumen (short, medium, long, full).",
-            "field": "Campo específico si la entrada es un diccionario (ej. 'extract', 'content').",
+            "length": "Longitud predefinida (short, medium, long, full). Se ignora si sentences > 0 o ratio > 0.",
+            "field": "Campo específico si la entrada es un diccionario (ej. 'extract', o notación punto 'query.pages.0.extract').",
+            "sentences": "Número exacto de frases a extraer con Luhn (0 usa 'length').",
+            "ratio": "Porcentaje de frases a extraer (0.0 a 1.0, ej. 0.3 para 30%).",
         },
     ),
     "transform.threshold": NodeSpec(
