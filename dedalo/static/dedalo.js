@@ -334,6 +334,25 @@ function setupEvents() {
   window.addEventListener('mousemove', onCanvasMouseMove);
   window.addEventListener('mouseup', onCanvasMouseUp);
 
+  // Arrastre de nodos desde la paleta hacia el lienzo (Drag & Drop)
+  canvas.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    canvas.classList.add('drag-over');
+  });
+  canvas.addEventListener('dragleave', (e) => {
+    if (e.relatedTarget && canvas.contains(e.relatedTarget)) return;
+    canvas.classList.remove('drag-over');
+  });
+  canvas.addEventListener('drop', (e) => {
+    e.preventDefault();
+    canvas.classList.remove('drag-over');
+    const typeKey = e.dataTransfer.getData('application/x-dedalo-node') || e.dataTransfer.getData('text/plain');
+    if (!typeKey || !state.catalog.node_types || !state.catalog.node_types[typeKey]) return;
+    const world = screenToWorld(e.clientX, e.clientY);
+    addNode(typeKey, Math.round(world.x - 100), Math.round(world.y - 38));
+  });
+
   // Controles de Zoom y Centrado
   if ($('btnZoomIn')) $('btnZoomIn').onclick = zoomIn;
   if ($('btnZoomOut')) $('btnZoomOut').onclick = zoomOut;
@@ -643,8 +662,18 @@ function renderPalette() {
       if (spec.category !== catKey) return;
       const pill = document.createElement('div');
       pill.className = `node-pill cat-${catKey}`;
+      pill.draggable = true;
       pill.innerHTML = `<span>${escapeHtml(spec.label)}</span><span class="badge">${typeKey.split('.')[1]}</span>`;
       pill.onclick = () => addNode(typeKey);
+      pill.ondragstart = (e) => {
+        e.dataTransfer.setData('text/plain', typeKey);
+        e.dataTransfer.setData('application/x-dedalo-node', typeKey);
+        e.dataTransfer.effectAllowed = 'copy';
+        pill.classList.add('dragging-pill');
+      };
+      pill.ondragend = () => {
+        pill.classList.remove('dragging-pill');
+      };
       block.appendChild(pill);
     });
     p.appendChild(block);
@@ -1120,7 +1149,7 @@ async function runPreview() {
 // Manipulación de Nodos y Cables
 // ---------------------------------------------------------------------------
 
-function addNode(typeKey) {
+function addNode(typeKey, x, y) {
   const spec = state.catalog.node_types[typeKey];
   if (!spec) return;
 
@@ -1128,13 +1157,29 @@ function addNode(typeKey) {
   const baseName = typeKey.split('.')[1];
   const id = `${baseName}_${count}`;
 
+  let posX = x;
+  let posY = y;
+  if (posX === undefined || posY === undefined) {
+    const wrap = $('canvasWrap');
+    if (wrap) {
+      const rect = wrap.getBoundingClientRect();
+      const centerWorld = screenToWorld(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      const offset = (state.graph.nodes.length % 5) * 35;
+      posX = Math.round(centerWorld.x - 100 + offset);
+      posY = Math.round(centerWorld.y - 40 + offset);
+    } else {
+      posX = 100 + (state.graph.nodes.length % 5) * 40;
+      posY = 100 + (state.graph.nodes.length % 5) * 40;
+    }
+  }
+
   const node = {
     id,
     type: typeKey,
     label: spec.label,
     config: { ...spec.optional },
-    x: 100 + (state.graph.nodes.length % 5) * 40,
-    y: 100 + (state.graph.nodes.length % 5) * 40,
+    x: posX,
+    y: posY,
   };
 
   if (typeKey === 'transform.script' || spec.code_field) {
@@ -1144,8 +1189,10 @@ function addNode(typeKey) {
 
   state.graph.nodes.push(node);
   state.selectedNodeId = id;
+  state.activeInspector = 'node';
   markDirty();
   render();
+  toast(`Nodo «${spec.label}» añadido.`);
 }
 
 function removeNode(nodeId) {

@@ -236,6 +236,12 @@ select {
   transition: all 0.15s;
 }
 .node-pill:hover { border-color: var(--primary); background: var(--bg-input); }
+.node-pill[draggable="true"] { cursor: grab; }
+.node-pill[draggable="true"]:active,
+.node-pill.dragging-pill {
+  cursor: grabbing;
+  opacity: 0.45;
+}
 
 .node-pill.cat-input {
   background: var(--cat-input-bg);
@@ -330,6 +336,11 @@ select {
 }
 .canvas-wrap.panning {
   cursor: grabbing !important;
+}
+.canvas-wrap.drag-over {
+  outline: 2px dashed var(--primary);
+  outline-offset: -3px;
+  background-color: var(--bg-subtle);
 }
 .canvas-content {
   position: absolute;
