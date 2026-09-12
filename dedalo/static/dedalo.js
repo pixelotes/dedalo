@@ -636,13 +636,13 @@ function renderPalette() {
 
   Object.entries(categories).forEach(([catKey, catTitle]) => {
     const block = document.createElement('div');
-    block.className = 'category-block';
+    block.className = `category-block cat-${catKey}`;
     block.innerHTML = `<h4>${catTitle}</h4>`;
 
     Object.entries(state.catalog.node_types || {}).forEach(([typeKey, spec]) => {
       if (spec.category !== catKey) return;
       const pill = document.createElement('div');
-      pill.className = 'node-pill';
+      pill.className = `node-pill cat-${catKey}`;
       pill.innerHTML = `<span>${escapeHtml(spec.label)}</span><span class="badge">${typeKey.split('.')[1]}</span>`;
       pill.onclick = () => addNode(typeKey);
       block.appendChild(pill);
@@ -1194,8 +1194,9 @@ function renderNodes() {
     el.style.top = `${node.y}px`;
 
     // Cabecera
+    const cat = node.type.split('.')[0] || 'input';
     const head = document.createElement('div');
-    head.className = 'node-header';
+    head.className = `node-header cat-${cat}`;
     head.innerHTML = `
       <span class="node-title-wrap" title="${escapeHtml(node.label || node.id)}">${escapeHtml(node.label || node.id)}</span>
       <div class="node-header-right">
