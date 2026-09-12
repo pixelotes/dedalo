@@ -7,13 +7,21 @@ Los scripts compilados invocan directamente estas funciones sin sobrecarga de ru
 from __future__ import annotations
 
 import csv
+import datetime
+import glob
 import json
 import os
 import re
 import shutil
+import smtplib
+import sqlite3
+import subprocess
 import time
+import urllib.parse
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Any, Callable
 
@@ -115,6 +123,7 @@ def call_llm(
     secret_name: str = "",
     tokens: int = DEFAULT_AGENT_TOKENS,
     temperature: float = 0.7,
+    json_mode: bool = False,
 ) -> str:
     """Llama a un endpoint compatible con OpenAI (/v1/chat/completions)."""
     base_url = (
@@ -143,12 +152,14 @@ def call_llm(
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
 
-    payload = {
+    payload: dict[str, Any] = {
         "model": target_model,
         "messages": messages,
         "max_tokens": tokens,
         "temperature": temperature,
     }
+    if json_mode:
+        payload["response_format"] = {"type": "json_object"}
 
     endpoint = f"{base_url}/chat/completions"
     try:
@@ -176,8 +187,10 @@ def http_call(
     url: str,
     method: str = "GET",
     headers: str = "",
+    body: str = "",
     secret: str = "",
     auth_header: str = "Authorization",
+    timeout: float = DEFAULT_TIMEOUT,
 ) -> NodeResult:
     """Petición HTTP a una API REST."""
     req_headers = {"User-Agent": "Dedalo/0.1"}
@@ -196,9 +209,18 @@ def http_call(
                 f"Bearer {token}" if auth_header == "Authorization" and not token.startswith("Bearer ") else token
             )
 
+    kwargs: dict[str, Any] = {"headers": req_headers}
+    if body:
+        inp = Inputs(inputs)
+        rendered_body = body.replace("{entrada}", inp.text())
+        try:
+            kwargs["json"] = json.loads(rendered_body)
+        except Exception:
+            kwargs["content"] = rendered_body.encode("utf-8")
+
     try:
-        with httpx.Client(timeout=DEFAULT_TIMEOUT, follow_redirects=True) as client:
-            resp = client.request(method.upper(), url, headers=req_headers)
+        with httpx.Client(timeout=float(timeout), follow_redirects=True) as client:
+            resp = client.request(method.upper(), url, **kwargs)
             if resp.status_code >= 400:
                 return NodeResult("error", error=f"HTTP {resp.status_code}: {resp.text[:150]}")
             ctype = resp.headers.get("content-type", "")
@@ -216,6 +238,8 @@ def rss(
     url: str,
     only_new: bool = False,
     corte: str = "completo",
+    max_items: int = 20,
+    filter_keyword: str = "",
 ) -> NodeResult:
     """Lee y parsea un feed RSS."""
     try:
@@ -286,6 +310,16 @@ def rss(
         except Exception:
             pass
 
+    if filter_keyword.strip():
+        kw = filter_keyword.strip().lower()
+        items = [
+            it for it in items
+            if kw in it["title"].lower() or kw in it["description"].lower()
+        ]
+
+    limit = int(max_items) if str(max_items).isdigit() else 20
+    items = items[:limit]
+
     if corte.isdigit():
         max_chars = int(corte)
         for it in items:
@@ -295,17 +329,222 @@ def rss(
     return NodeResult("ok", data=items)
 
 
-def csv_file(ctx: Any, inputs: list[NodeResult], *, path: str) -> NodeResult:
+def csv_file(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    path: str,
+    delimiter: str = ",",
+    encoding: str = "utf-8",
+) -> NodeResult:
     """Lee un fichero CSV local y devuelve lista de diccionarios."""
     p = Path(path)
     if not p.is_file():
         return NodeResult("error", error=f"Fichero no encontrado: {path}")
     try:
-        with p.open(encoding="utf-8", newline="") as f:
-            reader = csv.DictReader(f)
+        delim = delimiter.replace("\\t", "\t") if delimiter else ","
+        with p.open(encoding=encoding or "utf-8", newline="") as f:
+            reader = csv.DictReader(f, delimiter=delim)
             return NodeResult("ok", data=list(reader))
     except Exception as exc:
         return NodeResult("error", error=f"Error al leer CSV: {exc}")
+
+
+def webhook_trigger(ctx: Any, inputs: list[NodeResult], **config) -> NodeResult:
+    """Recibe datos desde un webhook entrante HTTP."""
+    payload = getattr(ctx, "payload", None)
+    if payload is None:
+        return NodeResult("ok", data={"event": "manual_preview", "message": "Disparado manualmente sin payload"})
+    return NodeResult("ok", data=payload)
+
+
+def sqlite_query(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    path: str = "data/store.db",
+    query: str = "",
+) -> NodeResult:
+    """Ejecuta una consulta SELECT sobre una base de datos SQLite local."""
+    if not query.strip():
+        return NodeResult("error", error="Falta la consulta SQL")
+    p = Path(path)
+    if not p.is_file():
+        return NodeResult("error", error=f"Base de datos SQLite no encontrada: {path}")
+    try:
+        with sqlite3.connect(p) as conn:
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            cur.execute(query)
+            rows = [dict(r) for r in cur.fetchall()]
+            return NodeResult("ok", data=rows)
+    except Exception as exc:
+        return NodeResult("error", error=f"Error en consulta SQLite: {exc}")
+
+
+def command_input(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    cmd: str,
+    timeout: float = 15.0,
+    cwd: str = "",
+) -> NodeResult:
+    """Ejecuta un comando en la shell del sistema y captura su salida."""
+    if not cmd.strip():
+        return NodeResult("error", error="Falta el comando a ejecutar")
+    inp = Inputs(inputs)
+    rendered_cmd = cmd.replace("{entrada}", inp.text())
+    work_dir = Path(cwd) if cwd.strip() else None
+    try:
+        res = subprocess.run(
+            rendered_cmd,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=float(timeout),
+            cwd=work_dir,
+        )
+        data = {
+            "stdout": res.stdout.strip(),
+            "stderr": res.stderr.strip(),
+            "exit_code": res.returncode,
+        }
+        if res.returncode != 0:
+            return NodeResult("error", data=data, error=f"Comando devolvió código {res.returncode}: {res.stderr[:200]}")
+        return NodeResult("ok", data=data)
+    except subprocess.TimeoutExpired:
+        return NodeResult("error", error=f"Tiempo de ejecución agotado ({timeout}s) para el comando")
+    except Exception as exc:
+        return NodeResult("error", error=f"Error al ejecutar comando: {exc}")
+
+
+def pi_health(ctx: Any, inputs: list[NodeResult], **config) -> NodeResult:
+    """Lee métricas del sistema directamente del kernel Linux (Raspberry Pi)."""
+    metrics: dict[str, Any] = {
+        "timestamp": time.time(),
+        "cpu_temp_c": None,
+        "memory_total_mb": None,
+        "memory_free_mb": None,
+        "memory_percent_used": None,
+        "load_1m": None,
+        "load_5m": None,
+        "load_15m": None,
+    }
+    # 1. Carga de CPU
+    try:
+        load = os.getloadavg()
+        metrics["load_1m"], metrics["load_5m"], metrics["load_15m"] = [round(x, 2) for x in load]
+    except Exception:
+        pass
+
+    # 2. Temperatura CPU (Raspberry Pi / Linux thermal zone)
+    thermal_path = Path("/sys/class/thermal/thermal_zone0/temp")
+    if thermal_path.is_file():
+        try:
+            raw_temp = thermal_path.read_text().strip()
+            metrics["cpu_temp_c"] = round(float(raw_temp) / 1000.0, 1)
+        except Exception:
+            pass
+
+    # 3. Memoria desde /proc/meminfo
+    meminfo_path = Path("/proc/meminfo")
+    if meminfo_path.is_file():
+        try:
+            mem_data = {}
+            for line in meminfo_path.read_text().splitlines():
+                parts = line.split(":")
+                if len(parts) == 2:
+                    k = parts[0].strip()
+                    v = parts[1].strip().split()[0]
+                    if v.isdigit():
+                        mem_data[k] = int(v)
+            total_kb = mem_data.get("MemTotal", 0)
+            avail_kb = mem_data.get("MemAvailable", mem_data.get("MemFree", 0))
+            if total_kb > 0:
+                metrics["memory_total_mb"] = round(total_kb / 1024, 1)
+                metrics["memory_free_mb"] = round(avail_kb / 1024, 1)
+                metrics["memory_percent_used"] = round((1.0 - (avail_kb / total_kb)) * 100, 1)
+        except Exception:
+            pass
+
+    # 4. Uso de disco
+    try:
+        du = shutil.disk_usage("/")
+        metrics["disk_percent_used"] = round((du.used / du.total) * 100, 1)
+        metrics["disk_free_gb"] = round(du.free / (1024**3), 2)
+    except Exception:
+        pass
+
+    return NodeResult("ok", data=metrics)
+
+
+def directory_scan(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    path: str = ".",
+    pattern: str = "*",
+    recursive: bool = False,
+    max_items: int = 50,
+) -> NodeResult:
+    """Escanea un directorio buscando ficheros que cumplan un patrón glob."""
+    base = Path(path)
+    if not base.exists() or not base.is_dir():
+        return NodeResult("error", error=f"El directorio no existe: {path}")
+    try:
+        iterator = base.rglob(pattern) if recursive else base.glob(pattern)
+        files = []
+        limit = int(max_items) if str(max_items).isdigit() else 50
+        for p in iterator:
+            if p.is_file():
+                stat = p.stat()
+                files.append({
+                    "name": p.name,
+                    "path": str(p),
+                    "size_bytes": stat.st_size,
+                    "modified_at": datetime.datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                })
+                if len(files) >= limit:
+                    break
+        return NodeResult("ok", data=files)
+    except Exception as exc:
+        return NodeResult("error", error=f"Error escaneando directorio: {exc}")
+
+
+def http_health(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    url: str,
+    timeout: float = 5.0,
+    expected_status: int = 200,
+) -> NodeResult:
+    """Comprueba la disponibilidad y latencia de una URL."""
+    if not url.strip():
+        return NodeResult("error", error="Falta la URL para verificar salud")
+    t0 = time.time()
+    try:
+        with httpx.Client(timeout=float(timeout), follow_redirects=True) as client:
+            resp = client.get(url, headers={"User-Agent": "Dedalo-HealthCheck/1.0"})
+            latency_ms = round((time.time() - t0) * 1000, 1)
+            is_healthy = resp.status_code == int(expected_status)
+            data = {
+                "url": url,
+                "status_code": resp.status_code,
+                "latency_ms": latency_ms,
+                "is_healthy": is_healthy,
+            }
+            status = "ok" if is_healthy else "error"
+            err = "" if is_healthy else f"Estado HTTP {resp.status_code} != esperado {expected_status}"
+            return NodeResult(status, data=data, error=err)
+    except Exception as exc:
+        latency_ms = round((time.time() - t0) * 1000, 1)
+        return NodeResult(
+            "error",
+            data={"url": url, "status_code": 0, "latency_ms": latency_ms, "is_healthy": False},
+            error=f"Fallo de conexión en health check: {exc}",
+        )
 
 
 def json_file(ctx: Any, inputs: list[NodeResult], *, path: str) -> NodeResult:
@@ -352,19 +591,43 @@ def threshold(
     inputs: list[NodeResult],
     *,
     comparison: str,
-    limit: float,
+    limit: Any = "",
 ) -> NodeResult:
-    """Filtra según un umbral numérico. Si la condición no se cumple, devuelve SKIPPED."""
+    """Filtra según una condición numérica o textual. Si no se cumple, devuelve SKIPPED."""
     inp = Inputs(inputs)
     val = inp.first_data()
     if val is None:
         return SKIPPED
+
+    # Comparaciones textuales y de presencia
+    if comparison == "no_vacio":
+        return NodeResult("ok", data=val) if bool(val) else SKIPPED
+    if comparison == "es_vacio":
+        return NodeResult("ok", data=val) if not bool(val) else SKIPPED
+
+    str_val = str(val)
+    str_limit = str(limit)
+
+    if comparison == "contiene":
+        return NodeResult("ok", data=val) if str_limit.lower() in str_val.lower() else SKIPPED
+    if comparison == "no_contiene":
+        return NodeResult("ok", data=val) if str_limit.lower() not in str_val.lower() else SKIPPED
+    if comparison == "empieza_por":
+        return NodeResult("ok", data=val) if str_val.startswith(str_limit) else SKIPPED
+    if comparison == "termina_por":
+        return NodeResult("ok", data=val) if str_val.endswith(str_limit) else SKIPPED
+    if comparison == "regex":
+        return NodeResult("ok", data=val) if re.search(str_limit, str_val) else SKIPPED
+    if comparison == "igual_texto":
+        return NodeResult("ok", data=val) if str_val == str_limit else SKIPPED
+
+    # Comparaciones numéricas
     try:
         num = float(val)
+        lim = float(limit)
     except (ValueError, TypeError):
-        return NodeResult("error", error=f"El valor de entrada no es numérico: {val!r}")
+        return NodeResult("error", error=f"El valor de entrada o límite no es numérico: {val!r}, {limit!r}")
 
-    lim = float(limit)
     ok = False
     if comparison == "menor_que":
         ok = num < lim
@@ -374,6 +637,10 @@ def threshold(
         ok = num > lim
     elif comparison == "mayor_o_igual":
         ok = num >= lim
+    elif comparison in ("igual", "igual_num"):
+        ok = num == lim
+    elif comparison in ("distinto", "distinto_num"):
+        ok = num != lim
 
     return NodeResult("ok", data=num) if ok else SKIPPED
 
@@ -384,6 +651,7 @@ def filter_items(
     *,
     contains: str,
     field: str = "",
+    mode: str = "contains",
 ) -> NodeResult:
     """Filtra una lista de diccionarios o strings."""
     inp = Inputs(inputs)
@@ -395,11 +663,33 @@ def filter_items(
     out = []
     for elem in data:
         target = ""
+        raw_val = None
         if isinstance(elem, dict):
-            target = str(elem.get(field, "") if field else json.dumps(elem))
+            raw_val = elem.get(field) if field else elem
+            target = str(raw_val if raw_val is not None else "")
         else:
+            raw_val = elem
             target = str(elem)
-        if term in target.lower():
+
+        matched = False
+        if mode == "regex":
+            matched = bool(re.search(contains, target, re.IGNORECASE))
+        elif mode == "gt":
+            try:
+                matched = float(raw_val) > float(contains)
+            except Exception:
+                matched = False
+        elif mode == "lt":
+            try:
+                matched = float(raw_val) < float(contains)
+            except Exception:
+                matched = False
+        elif mode == "not_contains":
+            matched = term not in target.lower()
+        else:  # contains
+            matched = term in target.lower()
+
+        if matched:
             out.append(elem)
 
     return NodeResult("ok", data=out)
@@ -418,6 +708,208 @@ def clean_html(ctx: Any, inputs: list[NodeResult], *, url: str = "") -> NodeResu
     clean = re.sub(r"<[^>]+>", " ", clean)
     clean = re.sub(r"\s+", " ", clean).strip()
     return NodeResult("ok", data=clean)
+
+
+def template(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    template: str = "",
+) -> NodeResult:
+    """Interpola variables en una plantilla de texto."""
+    inp = Inputs(inputs)
+    first = inp.first_data()
+    context_vars: dict[str, Any] = {}
+    if isinstance(first, dict):
+        context_vars.update(first)
+    context_vars["entrada"] = inp.text()
+    context_vars["now"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    context_vars["fecha"] = time.strftime("%Y-%m-%d")
+    context_vars["hora"] = time.strftime("%H:%M:%S")
+
+    # Interpolación segura {clave} y {sub.clave}
+    def repl(match):
+        expr = match.group(1).strip()
+        parts = expr.split(".")
+        curr = context_vars
+        for p in parts:
+            if isinstance(curr, dict) and p in curr:
+                curr = curr[p]
+            else:
+                return match.group(0)
+        return str(curr)
+
+    result = re.sub(r"\{([a-zA-Z0-9_.]+)\}", repl, template)
+    return NodeResult("ok", data=result)
+
+
+def array_ops(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    operation: str = "head",
+    count: int = 10,
+    field: str = "",
+    order: str = "asc",
+    join_sep: str = "\\n",
+) -> NodeResult:
+    """Operaciones comunes sobre listas (head, tail, sort, dedup, join)."""
+    inp = Inputs(inputs)
+    data = inp.first_data()
+    if not isinstance(data, list):
+        return NodeResult("error", error="La entrada de array_ops debe ser una lista")
+    items = list(data)
+    if operation == "head":
+        items = items[:int(count)]
+    elif operation == "tail":
+        items = items[-int(count):]
+    elif operation == "sort":
+        reverse = order.lower() == "desc"
+        if field:
+            items.sort(key=lambda x: x.get(field, "") if isinstance(x, dict) else str(x), reverse=reverse)
+        else:
+            items.sort(reverse=reverse)
+    elif operation == "dedup":
+        seen = set()
+        deduped = []
+        for it in items:
+            key = it.get(field, json.dumps(it)) if (isinstance(it, dict) and field) else (json.dumps(it) if isinstance(it, (dict, list)) else it)
+            if key not in seen:
+                seen.add(key)
+                deduped.append(it)
+        items = deduped
+    elif operation == "join":
+        sep = join_sep.replace("\\n", "\n").replace("\\t", "\t")
+        joined = sep.join(str(it) if not isinstance(it, (dict, list)) else json.dumps(it, ensure_ascii=False) for it in items)
+        return NodeResult("ok", data=joined)
+    return NodeResult("ok", data=items)
+
+
+def regex(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    pattern: str = "",
+    action: str = "find_all",
+    replace_with: str = "",
+    field: str = "",
+) -> NodeResult:
+    """Aplica expresiones regulares para buscar o sustituir texto."""
+    if not pattern:
+        return NodeResult("error", error="Falta el patrón de expresión regular")
+    inp = Inputs(inputs)
+    first = inp.first_data()
+    target_text = ""
+    if isinstance(first, dict) and field:
+        target_text = str(first.get(field, ""))
+    else:
+        target_text = inp.text()
+    try:
+        rx = re.compile(pattern)
+        if action == "find_all":
+            matches = rx.findall(target_text)
+            return NodeResult("ok", data=matches)
+        elif action == "search":
+            m = rx.search(target_text)
+            return NodeResult("ok", data=m.group(0) if m else None)
+        elif action == "sub":
+            replaced = rx.sub(replace_with, target_text)
+            return NodeResult("ok", data=replaced)
+        return NodeResult("error", error=f"Acción regex desconocida: {action}")
+    except Exception as exc:
+        return NodeResult("error", error=f"Error al evaluar regex: {exc}")
+
+
+def router(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    condition: str = "truthy",
+    field: str = "",
+    value: str = "",
+) -> NodeResult:
+    """Enruta el flujo: si la condición se cumple emite por OK, si no emite por ERROR."""
+    inp = Inputs(inputs)
+    data = inp.first_data()
+    target = data
+    if isinstance(data, dict) and field:
+        target = data.get(field)
+
+    ok = False
+    if condition == "truthy":
+        ok = bool(target)
+    elif condition == "falsy":
+        ok = not bool(target)
+    elif condition == "equals":
+        ok = str(target) == str(value)
+    elif condition == "not_equals":
+        ok = str(target) != str(value)
+    elif condition == "contains":
+        ok = str(value).lower() in str(target).lower()
+
+    if ok:
+        return NodeResult("ok", data=data)
+    else:
+        return NodeResult("error", data=data, error=f"Condición de router no cumplida ({condition})")
+
+
+def agent(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    prompt: str,
+    per_item: bool = False,
+    tokens: int = DEFAULT_AGENT_TOKENS,
+    model: str = "",
+    url: str = "",
+    secret: str = "",
+    temperature: float = 0.7,
+    system_prompt: str = "",
+    json_mode: bool = False,
+) -> NodeResult:
+    """Invoca al LLM con un prompt y los datos de entrada."""
+    inp = Inputs(inputs)
+
+    if per_item:
+        first = inp.first_data()
+        if not isinstance(first, list):
+            return NodeResult("error", error="El modo per_item requiere una lista de entrada")
+        results = []
+        for item in first[:MAX_ITEMS]:
+            item_str = json.dumps(item, ensure_ascii=False) if isinstance(item, (dict, list)) else str(item)
+            user_msg = f"{prompt}\n\nElemento:\n{item_str}"
+            try:
+                ans = call_llm(
+                    user_msg,
+                    system=system_prompt,
+                    model=model,
+                    url=url,
+                    secret_name=secret,
+                    tokens=tokens,
+                    temperature=float(temperature),
+                    json_mode=bool(json_mode),
+                )
+                results.append(ans)
+            except Exception as exc:
+                return NodeResult("error", error=f"Error en llamada LLM per_item: {exc}")
+        return NodeResult("ok", data=results)
+
+    input_text = inp.text()
+    user_msg = f"{prompt}\n\nEntrada:\n{input_text}" if input_text else prompt
+    try:
+        ans = call_llm(
+            user_msg,
+            system=system_prompt,
+            model=model,
+            url=url,
+            secret_name=secret,
+            tokens=tokens,
+            temperature=float(temperature),
+            json_mode=bool(json_mode),
+        )
+        return NodeResult("ok", data=ans)
+    except Exception as exc:
+        return NodeResult("error", error=f"Error en llamada LLM: {exc}")
 
 
 def web_read(
@@ -558,13 +1050,26 @@ def file(
     content: str = "inputs",
     message: str = "",
     mode: str = "sobrescribir",
+    format: str = "raw",
 ) -> NodeResult:
     """Escribe la salida en un fichero del disco."""
     inp = Inputs(inputs)
-    payload = message if content == "static" else inp.text()
+    first = inp.first_data()
+    if content == "static":
+        payload = message
+    elif format == "json_pretty" and isinstance(first, (dict, list)):
+        payload = json.dumps(first, ensure_ascii=False, indent=2)
+    else:
+        payload = inp.text()
 
     today = time.strftime("%Y-%m-%d")
-    final_name = filename.replace("{fecha}", today)
+    hour = time.strftime("%H-%M-%S")
+    ts = str(int(time.time()))
+    final_name = (
+        filename.replace("{fecha}", today)
+        .replace("{hora}", hour)
+        .replace("{timestamp}", ts)
+    )
 
     base_dir = Path("data/outputs") / (directory.strip().lstrip("/"))
     base_dir.mkdir(parents=True, exist_ok=True)
@@ -586,6 +1091,205 @@ def file(
         return NodeResult("ok", data=str(target))
     except Exception as exc:
         return NodeResult("error", error=f"Error al escribir fichero: {exc}")
+
+
+def sqlite_exec(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    path: str = "data/store.db",
+    query: str = "",
+) -> NodeResult:
+    """Ejecuta sentencias INSERT, UPDATE o DELETE en SQLite local."""
+    if not query.strip():
+        return NodeResult("error", error="Falta la sentencia SQL")
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    inp = Inputs(inputs)
+    first = inp.first_data()
+    try:
+        with sqlite3.connect(p) as conn:
+            cur = conn.cursor()
+            if isinstance(first, dict):
+                cur.execute(query, first)
+            elif isinstance(first, (list, tuple)) and first and isinstance(first[0], (dict, list, tuple)):
+                cur.executemany(query, first)
+            elif isinstance(first, (list, tuple)):
+                cur.execute(query, first)
+            else:
+                cur.execute(query)
+            conn.commit()
+            return NodeResult("ok", data={"rows_affected": cur.rowcount})
+    except Exception as exc:
+        return NodeResult("error", error=f"Error en ejecución SQLite: {exc}")
+
+
+def email_smtp(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    host: str = "smtp.gmail.com",
+    port: int = 587,
+    user: str = "",
+    secret: str = "",
+    from_addr: str = "",
+    to_addr: str = "",
+    subject: str = "Aviso de Dédalo",
+    use_tls: bool = True,
+    is_html: bool = False,
+) -> NodeResult:
+    """Envía un correo electrónico mediante SMTP."""
+    inp = Inputs(inputs)
+    body = inp.text()
+    if not to_addr.strip():
+        return NodeResult("error", error="Falta la dirección del destinatario (to_addr)")
+    password = secrets.get(secret) if secret else ""
+    sender = from_addr.strip() or user.strip()
+
+    msg = MIMEMultipart()
+    msg["From"] = sender
+    msg["To"] = to_addr.strip()
+    msg["Subject"] = subject
+    subtype = "html" if is_html else "plain"
+    msg.attach(MIMEText(body, subtype, "utf-8"))
+
+    try:
+        p_num = int(port) if str(port).isdigit() else 587
+        if p_num == 465:
+            server = smtplib.SMTP_SSL(host, p_num, timeout=15.0)
+        else:
+            server = smtplib.SMTP(host, p_num, timeout=15.0)
+            if use_tls:
+                server.starttls()
+        if user and password:
+            server.login(user, password)
+        server.send_message(msg)
+        server.quit()
+        return NodeResult("ok", data=f"Email enviado a {to_addr}")
+    except Exception as exc:
+        return NodeResult("error", error=f"Error al enviar correo SMTP: {exc}")
+
+
+def ntfy(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    topic: str,
+    server: str = "https://ntfy.sh",
+    title: str = "Dédalo",
+    priority: str = "3",
+    tags: str = "robot",
+    secret: str = "",
+) -> NodeResult:
+    """Envía una notificación push mediante ntfy.sh o servidor propio."""
+    if not topic.strip():
+        return NodeResult("error", error="Falta el topic de ntfy")
+    inp = Inputs(inputs)
+    body = inp.text()
+    base = server.rstrip("/")
+    url = f"{base}/{topic.strip()}"
+    headers = {
+        "Title": title,
+        "Priority": str(priority),
+    }
+    if tags.strip():
+        headers["Tags"] = tags.strip()
+    if secret:
+        token = secrets.get(secret)
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            resp = client.post(url, data=body.encode("utf-8"), headers=headers)
+            if resp.status_code >= 400:
+                return NodeResult("error", error=f"ntfy falló con HTTP {resp.status_code}: {resp.text[:100]}")
+            return NodeResult("ok", data=f"Notificación ntfy enviada a {topic}")
+    except Exception as exc:
+        return NodeResult("error", error=f"Error enviando ntfy: {exc}")
+
+
+def discord(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    webhook_url: str = "",
+    secret: str = "",
+    username: str = "Dédalo",
+    title: str = "",
+    content: str = "",
+    use_embed: bool = False,
+) -> NodeResult:
+    """Envía un mensaje a un webhook de Discord."""
+    url = webhook_url
+    if secret:
+        token = secrets.get(secret)
+        if token:
+            url = token
+    if not url.strip():
+        return NodeResult("error", error="Falta la URL del webhook de Discord")
+    inp = Inputs(inputs)
+    msg_content = content.replace("{entrada}", inp.text()) if content else inp.text()
+    payload: dict[str, Any] = {"username": username or "Dédalo"}
+    if use_embed:
+        payload["embeds"] = [{
+            "title": title or "Aviso de Dédalo",
+            "description": msg_content[:4000],
+            "color": 3447003,
+        }]
+    else:
+        payload["content"] = (f"**{title}**\n" if title else "") + msg_content[:2000]
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            resp = client.post(url, json=payload)
+            if resp.status_code >= 400:
+                return NodeResult("error", error=f"Discord webhook falló: {resp.status_code}")
+            return NodeResult("ok", data="Mensaje enviado a Discord con éxito")
+    except Exception as exc:
+        return NodeResult("error", error=f"Error enviando a Discord: {exc}")
+
+
+def slack(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    webhook_url: str = "",
+    secret: str = "",
+    channel: str = "",
+    text: str = "",
+) -> NodeResult:
+    """Envía un mensaje a un Incoming Webhook de Slack."""
+    url = webhook_url
+    if secret:
+        token = secrets.get(secret)
+        if token:
+            url = token
+    if not url.strip():
+        return NodeResult("error", error="Falta la URL del webhook de Slack")
+    inp = Inputs(inputs)
+    msg_text = text.replace("{entrada}", inp.text()) if text else inp.text()
+    payload: dict[str, Any] = {"text": msg_text}
+    if channel.strip():
+        payload["channel"] = channel.strip()
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            resp = client.post(url, json=payload)
+            if resp.status_code >= 400:
+                return NodeResult("error", error=f"Slack webhook falló: {resp.status_code}")
+            return NodeResult("ok", data="Mensaje enviado a Slack con éxito")
+    except Exception as exc:
+        return NodeResult("error", error=f"Error enviando a Slack: {exc}")
+
+
+def command_action(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    cmd: str,
+    timeout: float = 15.0,
+    cwd: str = "",
+) -> NodeResult:
+    """Ejecuta un comando de sistema como acción de salida."""
+    return command_input(ctx, inputs, cmd=cmd, timeout=timeout, cwd=cwd)
 
 
 def rest_webhook(
@@ -641,6 +1345,8 @@ def telegram(
     *,
     chat_id: str = "",
     token_secret: str = "telegram-token",
+    parse_mode: str = "HTML",
+    silent: bool = False,
 ) -> NodeResult:
     """Envía un mensaje a Telegram mediante el bot API."""
     inp = Inputs(inputs)
@@ -655,9 +1361,17 @@ def telegram(
         return NodeResult("error", error="Falta configurar el token del bot de Telegram o el chat_id")
 
     url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload: dict[str, Any] = {
+        "chat_id": dest_chat,
+        "text": text[:4000],
+        "disable_notification": bool(silent),
+    }
+    if parse_mode and parse_mode != "texto":
+        payload["parse_mode"] = parse_mode
+
     try:
         with httpx.Client(timeout=15.0) as client:
-            resp = client.post(url, json={"chat_id": dest_chat, "text": text[:4000]})
+            resp = client.post(url, json=payload)
             if resp.status_code >= 400:
                 return NodeResult("error", error=f"Telegram API falló: {resp.text[:150]}")
             return NodeResult("ok", data="Mensaje de Telegram enviado con éxito")

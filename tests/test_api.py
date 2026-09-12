@@ -80,3 +80,33 @@ def test_run_preview_api():
     assert p_res.status_code == 200
     assert "deleted" in p_res.json()
 
+
+def test_webhook_api():
+    # 1. Guardar un flujo con input.webhook -> transform.template
+    flow_id = "test-hook-flow"
+    graph = {
+        "version": 1,
+        "name": flow_id,
+        "nodes": [
+            {"id": "hook", "type": "input.webhook", "config": {}},
+            {"id": "tmpl", "type": "transform.template", "config": {"template": "Recibido de {sensor}: {valor}C"}},
+        ],
+        "edges": [
+            {"source": "hook", "target": "tmpl", "port": "ok"},
+        ],
+    }
+    save_res = client.post("/api/flow", json={"id": flow_id, "graph": graph, "meta": {}})
+    assert save_res.status_code == 200
+
+    # 2. Llamar al webhook con datos JSON
+    hook_res = client.post(f"/api/webhook/{flow_id}", json={"sensor": "bme280", "valor": 26.8})
+    assert hook_res.status_code == 200
+    data = hook_res.json()
+    assert data["status"] == "ok"
+    assert "tmpl" in data["results"]
+    assert data["results"]["tmpl"]["status"] == "ok"
+    assert data["results"]["tmpl"]["data"] == "Recibido de bme280: 26.8C"
+
+    # Limpiar flujo de prueba
+    client.delete(f"/api/flow?id={flow_id}")
+

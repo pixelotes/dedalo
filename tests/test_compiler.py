@@ -81,3 +81,32 @@ def test_script_node_validation():
     with pytest.raises(compiler.GraphError) as exc:
         compiler.compile(g)
     assert any("no está conectado" in e for e in exc.value.errors)
+
+
+def test_new_nodes_compile_and_execute(tmp_path):
+    db_file = str(tmp_path / "comp_test.db")
+    g = compiler.Graph(
+        name="test_new_nodes",
+        nodes=[
+            _node("hook", "input.webhook"),
+            _node("tmpl", "transform.template", {"template": "Evento: {evento}"}),
+            _node("router", "transform.router", {"condition": "contains", "value": "alerta"}),
+            _node("store", "output.sqlite_exec", {"path": db_file, "query": "CREATE TABLE IF NOT EXISTS t (m TEXT)"}),
+        ],
+        edges=[
+            _edge("hook", "tmpl", "ok"),
+            _edge("tmpl", "router", "ok"),
+            _edge("router", "store", "ok"),
+        ],
+    )
+    src = compiler.compile(g)
+    assert "def run(ctx):" in src
+    assert "runtime.webhook_trigger" in src
+    assert "runtime.template" in src
+    assert "runtime.router" in src
+    assert "runtime.sqlite_exec" in src
+
+    # Ejecutar el código compilado
+    ns = {}
+    exec(src, ns)
+    assert callable(ns["run"])

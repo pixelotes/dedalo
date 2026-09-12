@@ -1526,6 +1526,33 @@ function renderNodeInspector(node, body) {
     body.appendChild(btnBox);
   }
 
+  // Ayuda interactiva para Webhook Entrante
+  if (node.type === 'input.webhook') {
+    const flowId = state.graph.name || 'mi-flujo';
+    const hookUrl = `${window.location.origin}/api/webhook/${flowId}`;
+    const box = document.createElement('div');
+    box.className = 'field-group';
+    box.style.background = 'var(--bg-subtle)';
+    box.style.border = '1px solid var(--border)';
+    box.style.borderRadius = '6px';
+    box.style.padding = '8px 10px';
+    box.style.marginBottom = '14px';
+    box.innerHTML = `
+      <label style="color: var(--primary); font-weight: 600;">URL del Webhook (POST / GET)</label>
+      <div style="display: flex; gap: 6px; margin-top: 4px;">
+        <input type="text" readonly value="${escapeHtml(hookUrl)}" style="font-family: var(--mono); font-size: 0.72rem; flex: 1; padding: 4px 6px;" />
+        <button class="btn sm" id="btnCopyWebhook" title="Copiar URL">Copiar</button>
+      </div>
+      <span class="field-help" style="margin-top: 4px;">Envía datos JSON por POST a esta URL para disparar el flujo desde Home Assistant, cURL o alertas externas.</span>
+    `;
+    const btn = box.querySelector('#btnCopyWebhook');
+    btn.onclick = () => {
+      navigator.clipboard.writeText(hookUrl);
+      toast('URL del webhook copiada');
+    };
+    body.appendChild(box);
+  }
+
   // Campos de configuración
   const allFields = { ...spec.optional, ...node.config };
   spec.required.forEach((rf) => {
@@ -1593,8 +1620,14 @@ function renderNodeInspector(node, body) {
         markDirty();
       };
     } else {
+      const multilineKeys = ['template', 'query', 'cmd', 'prompt', 'system_prompt', 'body', 'headers', 'message'];
+      const isMultiline = multilineKeys.includes(key) || (typeof defaultVal === 'string' && (defaultVal.length > 40 || String(currentVal).includes('\n')));
       inputEl = document.createElement('textarea');
-      inputEl.rows = typeof defaultVal === 'string' && defaultVal.length > 40 ? 3 : 1;
+      inputEl.rows = ['template', 'query', 'prompt', 'system_prompt', 'body'].includes(key) ? 4 : (isMultiline ? 2 : 1);
+      if (['template', 'query', 'cmd', 'body', 'headers'].includes(key)) {
+        inputEl.style.fontFamily = 'var(--mono)';
+        inputEl.style.fontSize = '0.8rem';
+      }
       inputEl.value = currentVal;
       inputEl.oninput = (e) => {
         node.config[key] = e.target.value;

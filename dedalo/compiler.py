@@ -131,6 +131,15 @@ class NodeSpec:
 
 NODE_TYPES: dict[str, NodeSpec] = {
     # -- Entradas -----------------------------------------------------------
+    "input.webhook": NodeSpec(
+        category="input",
+        runtime_fn="webhook_trigger",
+        label="Webhook Entrante",
+        output="payload recibido (dict o texto)",
+        help={
+            "url_info": "Recibe peticiones HTTP en /api/webhook/{nombre_del_flujo}.",
+        },
+    ),
     "input.http_call": NodeSpec(
         category="input",
         runtime_fn="http_call",
@@ -138,8 +147,10 @@ NODE_TYPES: dict[str, NodeSpec] = {
         optional={
             "method": "GET",
             "headers": "",
+            "body": "",
             "secret": "",
             "auth_header": "Authorization",
+            "timeout": 20.0,
         },
         label="Traer de una API",
         output="dict si devuelve JSON, texto si no",
@@ -147,15 +158,17 @@ NODE_TYPES: dict[str, NodeSpec] = {
         choices_from={"secret": "secrets"},
         help={
             "url": "URL de la API REST a consultar.",
+            "body": "Cuerpo para POST/PUT (admite {entrada} o JSON).",
             "secret": "Nombre del secreto con el token de autenticación.",
             "auth_header": "Cabecera donde va el secreto (por defecto Authorization).",
+            "timeout": "Tiempo límite de espera en segundos.",
         },
     ),
     "input.rss": NodeSpec(
         category="input",
         runtime_fn="rss",
         required=frozenset({"url"}),
-        optional={"only_new": False, "corte": "completo"},
+        optional={"only_new": False, "corte": "completo", "max_items": 20, "filter_keyword": ""},
         label="Feed RSS / Atom",
         output="lista de noticias (title, link, guid, date, description)",
         choices={
@@ -168,6 +181,8 @@ NODE_TYPES: dict[str, NodeSpec] = {
         },
         help={
             "only_new": "Salta las noticias ya vistas en ejecuciones anteriores.",
+            "max_items": "Número máximo de noticias a extraer.",
+            "filter_keyword": "Filtra noticias que contengan esta palabra.",
             "corte": "Límite de caracteres por descripción.",
         },
     ),
@@ -184,8 +199,19 @@ NODE_TYPES: dict[str, NodeSpec] = {
         category="input",
         runtime_fn="csv_file",
         required=frozenset({"path"}),
+        optional={"delimiter": ",", "encoding": "utf-8"},
         label="Fichero CSV",
         output="lista de diccionarios (filas)",
+        choices={
+            "delimiter": [
+                {"value": ",", "label": "Coma (,)"},
+                {"value": ";", "label": "Punto y coma (;)"},
+                {"value": "\\t", "label": "Tabulador (\\t)"},
+                {"value": "|", "label": "Pleca (|)"},
+            ],
+            "encoding": ["utf-8", "latin-1", "ascii"],
+        },
+        help={"path": "Ruta al fichero CSV en disco."},
     ),
     "input.json_file": NodeSpec(
         category="input",
@@ -193,6 +219,65 @@ NODE_TYPES: dict[str, NodeSpec] = {
         required=frozenset({"path"}),
         label="Fichero JSON",
         output="dict o lista según el archivo",
+        help={"path": "Ruta al fichero JSON en disco."},
+    ),
+    "input.sqlite_query": NodeSpec(
+        category="input",
+        runtime_fn="sqlite_query",
+        required=frozenset({"query"}),
+        optional={"path": "data/store.db"},
+        label="Consulta SQLite (SELECT)",
+        output="lista de diccionarios (filas)",
+        help={
+            "query": "Consulta SQL SELECT a ejecutar.",
+            "path": "Ruta al fichero de base de datos SQLite.",
+        },
+    ),
+    "input.command": NodeSpec(
+        category="input",
+        runtime_fn="command_input",
+        required=frozenset({"cmd"}),
+        optional={"timeout": 15.0, "cwd": ""},
+        label="Comando del Sistema (Shell)",
+        output="dict con stdout, stderr, exit_code",
+        help={
+            "cmd": "Comando bash/shell a ejecutar (admite {entrada}).",
+            "timeout": "Segundos máximos de ejecución.",
+            "cwd": "Directorio de trabajo relativo o absoluto.",
+        },
+    ),
+    "input.pi_health": NodeSpec(
+        category="input",
+        runtime_fn="pi_health",
+        label="Salud del Sistema (Pi / Linux)",
+        output="dict con cpu_temp_c, memory_percent_used, memory_free_mb, load_1m, disk_percent_used",
+        help={
+            "info": "Lee temperatura de CPU, memoria y carga directamente de /proc y /sys sin dependencias.",
+        },
+    ),
+    "input.directory_scan": NodeSpec(
+        category="input",
+        runtime_fn="directory_scan",
+        optional={"path": ".", "pattern": "*", "recursive": False, "max_items": 50},
+        label="Escanear Directorio",
+        output="lista de ficheros (name, path, size_bytes, modified_at)",
+        help={
+            "path": "Carpeta a escanear.",
+            "pattern": "Patrón de búsqueda (ej. *.log, *.pdf).",
+            "recursive": "Incluir subdirectorios.",
+        },
+    ),
+    "input.http_health": NodeSpec(
+        category="input",
+        runtime_fn="http_health",
+        required=frozenset({"url"}),
+        optional={"timeout": 5.0, "expected_status": 200},
+        label="Comprobación de Salud HTTP",
+        output="dict con url, status_code, latency_ms, is_healthy",
+        help={
+            "url": "URL a comprobar.",
+            "expected_status": "Código de respuesta esperado.",
+        },
     ),
     "input.disk_free": NodeSpec(
         category="input",
@@ -209,6 +294,76 @@ NODE_TYPES: dict[str, NodeSpec] = {
         output="número (% de carga)",
     ),
     # -- Transformaciones ---------------------------------------------------
+    "transform.template": NodeSpec(
+        category="transform",
+        runtime_fn="template",
+        required=frozenset({"template"}),
+        label="Plantilla de Texto",
+        output="texto con variables interpoladas",
+        help={
+            "template": "Plantilla con placeholders como {entrada}, {fecha}, {hora}, {campo}.",
+        },
+    ),
+    "transform.array_ops": NodeSpec(
+        category="transform",
+        runtime_fn="array_ops",
+        optional={"operation": "head", "count": 10, "field": "", "order": "asc", "join_sep": "\\n"},
+        label="Operaciones de Lista",
+        output="lista filtrada/ordenada o texto unido",
+        choices={
+            "operation": [
+                {"value": "head", "label": "Primeros N elementos"},
+                {"value": "tail", "label": "Últimos N elementos"},
+                {"value": "sort", "label": "Ordenar por campo"},
+                {"value": "dedup", "label": "Desduplicar elementos"},
+                {"value": "join", "label": "Unir en un solo texto (Join)"},
+            ],
+            "order": ["asc", "desc"],
+        },
+        help={
+            "field": "Campo sobre el que ordenar o desduplicar (si son diccionarios).",
+            "join_sep": "Separador para la operación join (por defecto salto de línea).",
+        },
+    ),
+    "transform.regex": NodeSpec(
+        category="transform",
+        runtime_fn="regex",
+        required=frozenset({"pattern"}),
+        optional={"action": "find_all", "replace_with": "", "field": ""},
+        label="Expresión Regular (Regex)",
+        output="lista de coincidencias o texto modificado",
+        choices={
+            "action": [
+                {"value": "find_all", "label": "Buscar todas las coincidencias"},
+                {"value": "search", "label": "Buscar primera coincidencia"},
+                {"value": "sub", "label": "Sustituir coincidencias"},
+            ]
+        },
+        help={
+            "pattern": "Expresión regular (ej. [0-9]+).",
+            "replace_with": "Texto de sustitución si la acción es 'sub'.",
+        },
+    ),
+    "transform.router": NodeSpec(
+        category="transform",
+        runtime_fn="router",
+        optional={"condition": "truthy", "field": "", "value": ""},
+        label="Bifurcador Condicional (Router)",
+        output="emite por puerto OK si cumple la condición, o por ERROR si no",
+        choices={
+            "condition": [
+                {"value": "truthy", "label": "Verdadero o con contenido"},
+                {"value": "falsy", "label": "Falso o vacío"},
+                {"value": "equals", "label": "Igual al valor"},
+                {"value": "not_equals", "label": "Distinto del valor"},
+                {"value": "contains", "label": "Contiene texto"},
+            ]
+        },
+        help={
+            "field": "Campo del diccionario a comprobar (opcional).",
+            "value": "Valor a comparar (para equals, not_equals o contains).",
+        },
+    ),
     "transform.agent": NodeSpec(
         category="transform",
         runtime_fn="agent",
@@ -219,12 +374,18 @@ NODE_TYPES: dict[str, NodeSpec] = {
             "model": "",
             "url": "",
             "secret": "",
+            "temperature": 0.7,
+            "system_prompt": "",
+            "json_mode": False,
         },
         label="Agente LLM",
         output="texto generado; lista si per_item",
         choices_from={"secret": "secrets"},
         help={
             "prompt": "Instrucciones para el LLM.",
+            "system_prompt": "Prompt de sistema para guiar el comportamiento (opcional).",
+            "json_mode": "Forzar respuesta en formato JSON estructurado.",
+            "temperature": "Creatividad (0.0 muy determinista, 1.0 muy creativo).",
             "per_item": "Ejecuta una llamada al modelo por cada elemento de una lista.",
             "model": "Nombre del modelo (vacío usa el configurado por defecto).",
             "url": "URL base de la API OpenAI (vacío usa la global).",
@@ -255,13 +416,22 @@ NODE_TYPES: dict[str, NodeSpec] = {
         runtime_fn="threshold",
         required=frozenset({"comparison", "limit"}),
         label="Comparar con límite",
-        output="número o SKIPPED si no se cumple",
+        output="valor o SKIPPED si no se cumple",
         choices={
             "comparison": [
-                {"value": "menor_que", "label": "menor que"},
-                {"value": "menor_o_igual", "label": "menor o igual que"},
-                {"value": "mayor_que", "label": "mayor que"},
-                {"value": "mayor_o_igual", "label": "mayor o igual que"},
+                {"value": "menor_que", "label": "menor que (número)"},
+                {"value": "menor_o_igual", "label": "menor o igual que (número)"},
+                {"value": "mayor_que", "label": "mayor que (número)"},
+                {"value": "mayor_o_igual", "label": "mayor o igual que (número)"},
+                {"value": "igual", "label": "igual a (número)"},
+                {"value": "distinto", "label": "distinto de (número)"},
+                {"value": "contiene", "label": "contiene texto"},
+                {"value": "no_contiene", "label": "no contiene texto"},
+                {"value": "empieza_por", "label": "empieza por texto"},
+                {"value": "termina_por", "label": "termina por texto"},
+                {"value": "regex", "label": "coincide con regex"},
+                {"value": "no_vacio", "label": "no está vacío"},
+                {"value": "es_vacio", "label": "está vacío"},
             ]
         },
         help={"limit": "Si no se cumple la condición, el flujo se detiene aquí en silencio."},
@@ -270,9 +440,22 @@ NODE_TYPES: dict[str, NodeSpec] = {
         category="transform",
         runtime_fn="filter_items",
         required=frozenset({"contains"}),
-        optional={"field": ""},
+        optional={"field": "", "mode": "contains"},
         label="Filtrar elementos",
         output="lista filtrada",
+        choices={
+            "mode": [
+                {"value": "contains", "label": "Contiene texto"},
+                {"value": "not_contains", "label": "No contiene texto"},
+                {"value": "regex", "label": "Expresión regular"},
+                {"value": "gt", "label": "Mayor que (número)"},
+                {"value": "lt", "label": "Menor que (número)"},
+            ]
+        },
+        help={
+            "contains": "Valor o patrón a buscar.",
+            "field": "Campo del objeto donde buscar (opcional).",
+        },
     ),
     "transform.clean_html": NodeSpec(
         category="transform",
@@ -305,6 +488,7 @@ NODE_TYPES: dict[str, NodeSpec] = {
             "content": "inputs",
             "message": "",
             "mode": "sobrescribir",
+            "format": "raw",
         },
         label="Guardar en fichero",
         output="ruta del fichero escrito",
@@ -318,9 +502,125 @@ NODE_TYPES: dict[str, NodeSpec] = {
                 {"value": "añadir", "label": "Añadir al final"},
                 {"value": "numerar", "label": "Numerar si ya existe"},
             ],
+            "format": [
+                {"value": "raw", "label": "Texto / Crudo"},
+                {"value": "json_pretty", "label": "JSON Formateado"},
+            ],
         },
         show_when={"message": {"content": ["static"]}},
-        help={"filename": "Admite {fecha} (año-mes-día)."},
+        help={"filename": "Admite {fecha}, {hora}, {timestamp}."},
+    ),
+    "output.sqlite_exec": NodeSpec(
+        category="output",
+        runtime_fn="sqlite_exec",
+        required=frozenset({"query"}),
+        optional={"path": "data/store.db"},
+        label="Ejecutar en SQLite (INSERT/UPDATE)",
+        output="número de filas afectadas",
+        help={
+            "query": "Sentencia SQL (INSERT INTO ... VALUES (:campo1, :campo2)).",
+            "path": "Ruta de la base de datos SQLite.",
+        },
+    ),
+    "output.email_smtp": NodeSpec(
+        category="output",
+        runtime_fn="email_smtp",
+        required=frozenset({"to_addr"}),
+        optional={
+            "host": "smtp.gmail.com",
+            "port": 587,
+            "user": "",
+            "secret": "",
+            "from_addr": "",
+            "subject": "Aviso de Dédalo",
+            "use_tls": True,
+            "is_html": False,
+        },
+        label="Enviar Correo (SMTP)",
+        output="confirmación de envío",
+        choices_from={"secret": "secrets"},
+        help={
+            "to_addr": "Dirección del destinatario.",
+            "secret": "Secreto que contiene la contraseña o App Password.",
+            "subject": "Asunto del correo electrónico.",
+        },
+    ),
+    "output.ntfy": NodeSpec(
+        category="output",
+        runtime_fn="ntfy",
+        required=frozenset({"topic"}),
+        optional={
+            "server": "https://ntfy.sh",
+            "title": "Dédalo",
+            "priority": "3",
+            "tags": "robot",
+            "secret": "",
+        },
+        label="Notificación Push (ntfy.sh)",
+        output="confirmación de envío",
+        choices={
+            "priority": [
+                {"value": "1", "label": "1 - Mínima"},
+                {"value": "2", "label": "2 - Baja"},
+                {"value": "3", "label": "3 - Normal"},
+                {"value": "4", "label": "4 - Alta"},
+                {"value": "5", "label": "5 - Urgente"},
+            ]
+        },
+        choices_from={"secret": "secrets"},
+        help={
+            "topic": "Nombre del canal/topic de ntfy.",
+            "tags": "Iconos o tags separados por comas (ej. warning,skull,bell).",
+        },
+    ),
+    "output.discord": NodeSpec(
+        category="output",
+        runtime_fn="discord",
+        optional={
+            "webhook_url": "",
+            "secret": "",
+            "username": "Dédalo",
+            "title": "",
+            "content": "",
+            "use_embed": False,
+        },
+        label="Discord Webhook",
+        output="confirmación de envío",
+        choices_from={"secret": "secrets"},
+        help={
+            "webhook_url": "URL del webhook de Discord.",
+            "secret": "O selecciona un secreto con la URL.",
+            "content": "Mensaje (por defecto el contenido de las entradas).",
+        },
+    ),
+    "output.slack": NodeSpec(
+        category="output",
+        runtime_fn="slack",
+        optional={
+            "webhook_url": "",
+            "secret": "",
+            "channel": "",
+            "text": "",
+        },
+        label="Slack Webhook",
+        output="confirmación de envío",
+        choices_from={"secret": "secrets"},
+        help={
+            "webhook_url": "URL del Incoming Webhook de Slack.",
+            "secret": "O selecciona un secreto con la URL.",
+            "text": "Mensaje a enviar (admite {entrada}).",
+        },
+    ),
+    "output.command": NodeSpec(
+        category="output",
+        runtime_fn="command_action",
+        required=frozenset({"cmd"}),
+        optional={"timeout": 15.0, "cwd": ""},
+        label="Ejecutar Acción (Shell)",
+        output="dict con stdout, stderr, exit_code",
+        help={
+            "cmd": "Comando de acción a ejecutar en la shell (ej. systemctl restart servicio).",
+        },
     ),
     "output.rest_webhook": NodeSpec(
         category="output",
@@ -345,9 +645,21 @@ NODE_TYPES: dict[str, NodeSpec] = {
     "output.telegram": NodeSpec(
         category="output",
         runtime_fn="telegram",
-        optional={"chat_id": "", "token_secret": "telegram-token"},
+        optional={
+            "chat_id": "",
+            "token_secret": "telegram-token",
+            "parse_mode": "HTML",
+            "silent": False,
+        },
         label="Telegram",
         output="confirmación de envío",
+        choices={
+            "parse_mode": [
+                {"value": "HTML", "label": "HTML"},
+                {"value": "Markdown", "label": "Markdown"},
+                {"value": "texto", "label": "Texto sin formato"},
+            ]
+        },
         choices_from={"token_secret": "secrets"},
         help={
             "token_secret": "Nombre del secreto que contiene el token del bot.",

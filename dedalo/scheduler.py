@@ -27,6 +27,8 @@ RUN_HISTORY: dict[str, dict[str, Any]] = {}
 class FlowContext:
     flow_name: str
     started_at: float = field(default_factory=time.time)
+    payload: Any = None
+    headers: dict[str, str] = field(default_factory=dict)
 
 
 def _should_run(schedule_expr: str, last_run: float | None) -> bool:

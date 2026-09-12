@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -366,6 +366,75 @@ def run_preview_endpoint(req: RunRequest) -> dict[str, Any]:
             error=str(exc),
         )
         raise HTTPException(status_code=500, detail=f"Error durante la ejecución: {exc}")
+
+
+@app.api_route("/api/webhook/{flow_id}", methods=["GET", "POST", "PUT"])
+async def webhook_endpoint(flow_id: str, request: Request) -> dict[str, Any]:
+    """Recibe una llamada externa para disparar un flujo por webhook."""
+    flow_data = store.load_flow(flow_id)
+    if not flow_data:
+        raise HTTPException(status_code=404, detail=f"Flujo «{flow_id}» no encontrado")
+
+    raw_body = await request.body()
+    body_data: Any = None
+    if raw_body:
+        try:
+            body_data = json.loads(raw_body)
+        except Exception:
+            body_data = raw_body.decode("utf-8", errors="replace")
+    elif request.query_params:
+        body_data = dict(request.query_params)
+    else:
+        body_data = {}
+
+    req_headers = dict(request.headers)
+
+    graph_dict = flow_data.get("graph") or {}
+    try:
+        graph = compiler.Graph.from_dict(graph_dict)
+        source = compiler.compile(graph)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Error al compilar flujo: {exc}")
+
+    flow_name = graph.name or flow_id
+    run_id = history.record_run_start(flow_id=flow_id, flow_name=flow_name, trigger_type="webhook")
+
+    ctx = scheduler.FlowContext(
+        flow_name=flow_id,
+        payload=body_data,
+        headers=req_headers,
+    )
+    ns: dict[str, Any] = {}
+    t0 = time.time()
+    try:
+        exec(compile(source, f"<dedalo:webhook:{flow_id}>", "exec"), ns)
+        run_fn = ns.get("run")
+        if not callable(run_fn):
+            raise RuntimeError("El flujo compilado no contiene función run()")
+        results = run_fn(ctx)
+        duration = time.time() - t0
+        history.record_run_finish(
+            run_id=run_id,
+            status="ok",
+            duration=duration,
+            results=results,
+        )
+        return {
+            "status": "ok",
+            "flow_id": flow_id,
+            "run_id": run_id,
+            "duration": round(duration, 3),
+            "results": results,
+        }
+    except Exception as exc:
+        duration = time.time() - t0
+        history.record_run_finish(
+            run_id=run_id,
+            status="error",
+            duration=duration,
+            error=str(exc),
+        )
+        raise HTTPException(status_code=500, detail=f"Error durante la ejecución del webhook: {exc}")
 
 
 # ---------------------------------------------------------------------------
