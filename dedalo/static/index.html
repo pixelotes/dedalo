@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Dédalo — Flujos visuales en Python plano</title>
+<link rel="stylesheet" href="/assets/dedalo.css" />
+</head>
+<body>
+
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="i-flow" viewBox="0 0 24 24">
+    <rect x="3" y="3" width="6" height="6" rx="1"/><rect x="15" y="15" width="6" height="6" rx="1"/><path d="M6 9v6a3 3 0 0 0 3 3h6"/>
+  </symbol>
+  <symbol id="i-nodes" viewBox="0 0 24 24">
+    <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/>
+  </symbol>
+  <symbol id="i-key" viewBox="0 0 24 24">
+    <path d="M21 2l-2 2m-3 3l-6 6a5 5 0 1 1-7-7l6-6m2 2l2 2m0 0l2-2m-2 2l2 2"/>
+  </symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+  </symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24">
+    <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+  </symbol>
+  <symbol id="i-play" viewBox="0 0 24 24">
+    <polygon points="5 3 19 12 5 21 5 3"/>
+  </symbol>
+  <symbol id="i-code" viewBox="0 0 24 24">
+    <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
+  </symbol>
+  <symbol id="i-save" viewBox="0 0 24 24">
+    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>
+  </symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24">
+    <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+  </symbol>
+  <symbol id="i-x" viewBox="0 0 24 24">
+    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+  </symbol>
+  <symbol id="i-theme" viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="9"/>
+    <path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none"/>
+  </symbol>
+</svg>
+
+<header class="bar">
+  <div class="brand-wrap">
+    <strong class="brand">Dédalo</strong>
+    <span class="badge">Standalone</span>
+  </div>
+
+  <input id="flowName" class="name-input" placeholder="nombre-del-flujo" autocomplete="off" spellcheck="false" />
+
+  <span class="spacer"></span>
+
+  <select id="templatePicker" title="Empezar desde una plantilla">
+    <option value="">— Cargar plantilla —</option>
+  </select>
+
+  <button id="btnNew" class="btn secondary" title="Lienzo en blanco">Vacío</button>
+  <button id="btnCompile" class="btn secondary" title="Ver código generado"><svg class="ic" width="14" height="14"><use href="#i-code"/></svg> Ver código</button>
+  <button id="btnRun" class="btn secondary" title="Probar flujo ahora"><svg class="ic" width="14" height="14"><use href="#i-play"/></svg> Probar</button>
+  <button id="btnSave" class="btn primary" title="Guardar flujo"><svg class="ic" width="14" height="14"><use href="#i-save"/></svg> Guardar</button>
+  <button id="btnTheme" class="btn icon-btn" title="Cambiar tema" aria-label="Cambiar tema"><svg class="ic" width="16" height="16"><use href="#i-theme"/></svg></button>
+</header>
+
+<main class="workspace">
+
+  <!-- Panel lateral izquierdo con pestañas -->
+  <aside class="sidebar" id="sidebar">
+    <nav class="sidebar-nav">
+      <button class="nav-tab active" data-tab="flows" title="Mis Flujos">
+        <svg class="ic" width="16" height="16"><use href="#i-flow"/></svg> Flujos
+      </button>
+      <button class="nav-tab" data-tab="nodes" title="Paleta de Nodos">
+        <svg class="ic" width="16" height="16"><use href="#i-nodes"/></svg> Nodos
+      </button>
+      <button class="nav-tab" data-tab="secrets" title="Gestión de Secretos">
+        <svg class="ic" width="16" height="16"><use href="#i-key"/></svg> Secretos
+      </button>
+      <button class="nav-tab" data-tab="settings" title="Configuración LLM">
+        <svg class="ic" width="16" height="16"><use href="#i-settings"/></svg> Ajustes
+      </button>
+    </nav>
+
+    <!-- Tab 1: Flujos -->
+    <div class="tab-pane active" id="paneFlows">
+      <div class="pane-head">
+        <h3>Mis Flujos</h3>
+        <button id="btnSidebarNewFlow" class="btn sm primary" title="Crear nuevo flujo">
+          <svg class="ic" width="12" height="12"><use href="#i-plus"/></svg> Nuevo
+        </button>
+      </div>
+      <div class="flows-list" id="flowsList">
+        <p class="hint">Cargando flujos...</p>
+      </div>
+    </div>
+
+    <!-- Tab 2: Nodos (Paleta tradicional) -->
+    <div class="tab-pane" id="paneNodes">
+      <div class="pane-head">
+        <h3>Nodos</h3>
+        <span class="hint-inline">Arrastra o haz clic</span>
+      </div>
+      <div class="palette-categories" id="palette"></div>
+    </div>
+
+    <!-- Tab 3: Secretos -->
+    <div class="tab-pane" id="paneSecrets">
+      <div class="pane-head">
+        <h3>Secretos</h3>
+      </div>
+      <p class="hint">Credenciales seguras asociadas a nodos (tokens de APIs, Telegram, etc.) sin exponerse en el grafo.</p>
+      <div class="secret-add-box">
+        <input id="newSecretName" placeholder="nombre-secreto" autocomplete="off" />
+        <input id="newSecretValue" type="password" placeholder="Valor del token" autocomplete="off" />
+        <button id="btnSaveSecret" class="btn sm primary">Guardar secreto</button>
+      </div>
+      <div class="secrets-list" id="secretsList">
+        <p class="hint">No hay secretos registrados.</p>
+      </div>
+    </div>
+
+    <!-- Tab 4: Ajustes LLM -->
+    <div class="tab-pane" id="paneSettings">
+      <div class="pane-head">
+        <h3>Ajustes LLM</h3>
+      </div>
+      <p class="hint">Configura el proveedor de inferencia compatible con OpenAI (Ollama, vLLM, OpenRouter, Groq...).</p>
+      <div class="settings-form">
+        <label>URL Base API:
+          <input id="cfgLlmUrl" placeholder="http://localhost:11434/v1" />
+        </label>
+        <label>Modelo por defecto:
+          <input id="cfgLlmModel" placeholder="llama3" />
+        </label>
+        <label>API Key global:
+          <input id="cfgLlmKey" type="password" placeholder="(Opcional si es local)" />
+        </label>
+        <button id="btnSaveConfig" class="btn sm primary">Guardar configuración</button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Lienzo central interactivo -->
+  <section class="canvas-wrap" id="canvasWrap">
+    <svg class="wires" id="wires"></svg>
+    <div class="nodes" id="nodes"></div>
+    <div class="empty-hint" id="emptyHint">
+      Selecciona la pestaña <b>Nodos</b> y añade uno para empezar.<br />
+      Conecta el punto verde (<b>ok</b>) o rojo (<b>error</b>) de un nodo al siguiente.
+    </div>
+  </section>
+
+  <!-- Inspector derecho de propiedades del nodo -->
+  <aside class="inspector" id="inspector">
+    <h2>Ajustes del Nodo</h2>
+    <div id="inspectorBody">
+      <p class="hint">Selecciona un nodo del lienzo para configurar sus propiedades.</p>
+    </div>
+  </aside>
+
+</main>
+
+<div class="status" id="status"></div>
+
+<!-- Modal para ver código Python o traza de ejecución -->
+<div class="sheet" id="sheet" hidden>
+  <div class="sheet-box">
+    <div class="sheet-head">
+      <strong id="sheetTitle">Código generado</strong>
+      <button id="sheetClose" class="icon-btn" title="Cerrar"><svg class="ic" width="14" height="14"><use href="#i-x"/></svg></button>
+    </div>
+    <pre id="sheetBody"></pre>
+    <div id="sheetTrace" class="trace" hidden></div>
+  </div>
+</div>
+
+<!-- Modal para editar scripts Python personalizados -->
+<div class="sheet" id="codeSheet" hidden>
+  <div class="sheet-box code-box">
+    <div class="sheet-head">
+      <strong>Código del nodo: <span id="codeNodeId"></span></strong>
+      <button id="codeCancel" class="icon-btn" title="Cerrar"><svg class="ic" width="14" height="14"><use href="#i-x"/></svg></button>
+    </div>
+    <div class="code-body">
+      <aside class="code-inputs" id="codeInputs"></aside>
+      <div class="code-editor-wrap">
+        <textarea id="codeTextarea" spellcheck="false" class="code-textarea" placeholder="# Escribe tu código Python aquí&#10;return entrada.text()"></textarea>
+      </div>
+    </div>
+    <div class="sheet-foot">
+      <span class="hint" id="codeHint">Se comprueba la sintaxis al guardar.</span>
+      <button id="codeSave" class="btn primary">Aceptar</button>
+    </div>
+  </div>
+</div>
+
+<script src="/assets/dedalo.js"></script>
+</body>
+</html>
