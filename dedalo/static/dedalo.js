@@ -62,6 +62,47 @@ function markDirty() {
 }
 
 // ---------------------------------------------------------------------------
+// Gestión de Cambios sin Guardar
+// ---------------------------------------------------------------------------
+
+let unsavedPendingAction = null;
+
+function withUnsavedCheck(action) {
+  if (!state.isDirty) {
+    action();
+    return;
+  }
+  unsavedPendingAction = action;
+  $('unsavedFlowName').textContent = state.graph.name || 'sin nombre';
+  $('unsavedSheet').hidden = false;
+}
+
+function closeUnsavedModal() {
+  $('unsavedSheet').hidden = true;
+  unsavedPendingAction = null;
+  const picker = $('templatePicker');
+  if (picker) picker.value = '';
+}
+
+function onUnsavedDiscard() {
+  state.isDirty = false;
+  $('unsavedSheet').hidden = true;
+  const action = unsavedPendingAction;
+  unsavedPendingAction = null;
+  if (action) action();
+}
+
+async function onUnsavedSave() {
+  const success = await saveFlow();
+  if (success !== false) {
+    $('unsavedSheet').hidden = true;
+    const action = unsavedPendingAction;
+    unsavedPendingAction = null;
+    if (action) action();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Navegación de Pestañas en Sidebar
 // ---------------------------------------------------------------------------
 
@@ -83,14 +124,17 @@ function setupEvents() {
     markDirty();
   };
 
-  $('btnNew').onclick = () => resetGraph('nuevo-flujo');
-  $('btnSidebarNewFlow').onclick = () => resetGraph('nuevo-flujo');
+  $('btnNew').onclick = () => withUnsavedCheck(() => resetGraph('nuevo-flujo'));
+  $('btnSidebarNewFlow').onclick = () => withUnsavedCheck(() => resetGraph('nuevo-flujo'));
   $('btnSchedule').onclick = () => openScheduleModal(state.graph.name);
   $('btnCompile').onclick = compileGraph;
   $('btnRun').onclick = runPreview;
   $('btnSave').onclick = saveFlow;
   $('templatePicker').onchange = (e) => {
-    if (e.target.value) loadTemplate(e.target.value);
+    const val = e.target.value;
+    if (val) {
+      withUnsavedCheck(() => loadTemplate(val));
+    }
   };
 
   $('sheetClose').onclick = () => $('sheet').hidden = true;
@@ -102,11 +146,17 @@ function setupEvents() {
   $('btnSchedRunNow').onclick = runScheduleModalNow;
   $('schedPreset').onchange = onSchedPresetChange;
 
+  $('unsavedClose').onclick = () => closeUnsavedModal();
+  $('btnUnsavedCancel').onclick = () => closeUnsavedModal();
+  $('btnUnsavedDiscard').onclick = onUnsavedDiscard;
+  $('btnUnsavedSave').onclick = onUnsavedSave;
+
   $('btnSaveSecret').onclick = addSecret;
   $('btnSaveConfig').onclick = saveConfig;
 
-  // Eventos globales de arrastre en el canvas
+  // Eventos globales de arrastre y clic en el canvas
   const canvas = $('canvasWrap');
+  canvas.onmousedown = onCanvasMouseDown;
   canvas.onmousemove = onCanvasMouseMove;
   canvas.onmouseup = onCanvasMouseUp;
 }
@@ -203,7 +253,16 @@ function renderFlowsList() {
   state.flows.forEach((fl) => {
     const card = document.createElement('div');
     card.className = 'flow-card' + (fl.id === state.graph.name ? ' active' : '');
-    card.onclick = () => openFlow(fl.id);
+    card.onclick = () => {
+      if (fl.id === state.graph.name) {
+        if (state.selectedNodeId !== null) {
+          state.selectedNodeId = null;
+          render();
+        }
+        return;
+      }
+      withUnsavedCheck(() => openFlow(fl.id));
+    };
 
     const isEnabled = fl.enabled !== false;
     const badgeClass = isEnabled ? 'badge-active' : 'badge-paused';
@@ -500,6 +559,7 @@ async function loadTemplate(templateName) {
 
 async function saveFlow() {
   const id = state.graph.name || 'flujo';
+  state.meta.name = id;
   const payload = {
     id,
     graph: state.graph,
@@ -515,13 +575,16 @@ async function saveFlow() {
     const data = await res.json();
     if (!res.ok) {
       alert('Error de validación:\n' + (Array.isArray(data.detail) ? data.detail.join('\n') : data.detail));
-      return;
+      return false;
     }
     state.isDirty = false;
     toast(`Flujo «${id}» guardado correctamente.`);
     await loadFlows();
+    render();
+    return true;
   } catch (e) {
     toast('Error al guardar el flujo.');
+    return false;
   }
 }
 
@@ -657,7 +720,21 @@ function renderNodes() {
     // Cabecera
     const head = document.createElement('div');
     head.className = 'node-header';
-    head.innerHTML = `<span>${escapeHtml(node.label || node.id)}</span><span class="node-type-tag">${node.type.split('.')[1]}</span>`;
+    head.innerHTML = `
+      <span class="node-title-wrap" title="${escapeHtml(node.label || node.id)}">${escapeHtml(node.label || node.id)}</span>
+      <div class="node-header-right">
+        <span class="node-type-tag">${node.type.split('.')[1]}</span>
+        <button class="node-btn-del" title="Eliminar nodo">
+          <svg class="ic" width="12" height="12"><use href="#i-trash"/></svg>
+        </button>
+      </div>
+    `;
+    const btnDel = head.querySelector('.node-btn-del');
+    btnDel.onmousedown = (e) => e.stopPropagation();
+    btnDel.onclick = (e) => {
+      e.stopPropagation();
+      removeNode(node.id);
+    };
     el.appendChild(head);
 
     // Cuerpo
@@ -702,6 +779,7 @@ function renderNodes() {
     // Selección y Arrastre del nodo
     el.onmousedown = (e) => {
       if (e.target.classList.contains('port')) return;
+      if (e.target.closest('.node-btn-del')) return;
       state.selectedNodeId = node.id;
       state.dragNode = node;
       const rect = el.getBoundingClientRect();
@@ -759,6 +837,16 @@ function renderWires() {
 // ---------------------------------------------------------------------------
 // Arrastre e Interacción en Canvas
 // ---------------------------------------------------------------------------
+
+function onCanvasMouseDown(e) {
+  if (e.target.closest('.node') || e.target.closest('.port')) {
+    return;
+  }
+  if (state.selectedNodeId !== null) {
+    state.selectedNodeId = null;
+    render();
+  }
+}
 
 function onCanvasMouseMove(e) {
   const canvasRect = $('canvasWrap').getBoundingClientRect();
@@ -826,13 +914,21 @@ function finishWire(targetNodeId) {
 // ---------------------------------------------------------------------------
 
 function renderInspector() {
+  const titleEl = $('inspectorTitle');
   const body = $('inspectorBody');
-  const node = state.graph.nodes.find((n) => n.id === state.selectedNodeId);
-  if (!node) {
-    body.innerHTML = '<p class="hint">Selecciona un nodo para configurar sus opciones.</p>';
-    return;
-  }
+  if (!body) return;
 
+  const node = state.graph.nodes.find((n) => n.id === state.selectedNodeId);
+  if (node) {
+    if (titleEl) titleEl.textContent = 'Ajustes del Nodo';
+    renderNodeInspector(node, body);
+  } else {
+    if (titleEl) titleEl.textContent = 'Ajustes del Flujo';
+    renderFlowInspector(body);
+  }
+}
+
+function renderNodeInspector(node, body) {
   const spec = state.catalog.node_types[node.type] || { required: [], optional: {}, help: {} };
   body.innerHTML = '';
 
@@ -967,6 +1063,191 @@ function renderInspector() {
   btnDel.innerHTML = '<svg class="ic" width="14" height="14"><use href="#i-trash"/></svg> Eliminar nodo';
   btnDel.onclick = () => removeNode(node.id);
   body.appendChild(btnDel);
+}
+
+function renderFlowInspector(body) {
+  body.innerHTML = '';
+
+  // Nombre del flujo
+  const nameGrp = document.createElement('div');
+  nameGrp.className = 'field-group';
+  nameGrp.innerHTML = '<label>Nombre del flujo *</label>';
+  const nameInput = document.createElement('input');
+  nameInput.value = state.graph.name || '';
+  nameInput.placeholder = 'ej. mi-flujo';
+  nameInput.oninput = (e) => {
+    const slug = e.target.value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+    state.graph.name = slug;
+    state.meta.name = slug;
+    $('flowName').value = slug;
+    markDirty();
+  };
+  nameGrp.appendChild(nameInput);
+  body.appendChild(nameGrp);
+
+  // Descripción
+  const descGrp = document.createElement('div');
+  descGrp.className = 'field-group';
+  descGrp.innerHTML = '<label>Descripción</label>';
+  const descInput = document.createElement('textarea');
+  descInput.rows = 2;
+  descInput.value = state.meta.description || '';
+  descInput.placeholder = 'Notas o propósito de este flujo...';
+  descInput.oninput = (e) => {
+    state.meta.description = e.target.value;
+    markDirty();
+  };
+  descGrp.appendChild(descInput);
+  body.appendChild(descGrp);
+
+  // Sección de Estado y Programación
+  const secSched = document.createElement('div');
+  secSched.className = 'inspector-section';
+  secSched.textContent = 'Programación y Estado';
+  body.appendChild(secSched);
+
+  // Checkbox: Flujo activo
+  const enabledGrp = document.createElement('div');
+  enabledGrp.className = 'field-group';
+  enabledGrp.style.flexDirection = 'row';
+  enabledGrp.style.alignItems = 'center';
+  enabledGrp.style.justifyContent = 'space-between';
+  const enabledLbl = document.createElement('label');
+  enabledLbl.style.margin = '0';
+  enabledLbl.style.cursor = 'pointer';
+  enabledLbl.textContent = 'Flujo activo';
+  const enabledInput = document.createElement('input');
+  enabledInput.type = 'checkbox';
+  enabledInput.checked = state.meta.enabled !== false;
+  enabledInput.onchange = (e) => {
+    state.meta.enabled = e.target.checked;
+    markDirty();
+    renderFlowsList();
+  };
+  enabledLbl.onclick = () => enabledInput.click();
+  enabledGrp.appendChild(enabledLbl);
+  enabledGrp.appendChild(enabledInput);
+  body.appendChild(enabledGrp);
+
+  // Presets de periodicidad
+  const presetGrp = document.createElement('div');
+  presetGrp.className = 'field-group';
+  presetGrp.innerHTML = '<label>Frecuencia de ejecución</label>';
+  const presetSelect = document.createElement('select');
+  const presets = [
+    { value: '', label: 'Manual (sin programación)' },
+    { value: '* * * * *', label: 'Cada minuto' },
+    { value: '*/5 * * * *', label: 'Cada 5 minutos' },
+    { value: '*/15 * * * *', label: 'Cada 15 minutos' },
+    { value: '0 * * * *', label: 'Cada hora' },
+    { value: '0 9 * * *', label: 'Diario (09:00)' },
+    { value: 'custom', label: 'Personalizado (cron)' },
+  ];
+  const currSched = state.meta.schedule || '';
+  let matchedPreset = false;
+  presets.forEach((p) => {
+    const opt = document.createElement('option');
+    opt.value = p.value;
+    opt.textContent = p.label;
+    if (currSched === p.value) {
+      opt.selected = true;
+      matchedPreset = true;
+    }
+    presetSelect.appendChild(opt);
+  });
+  if (!matchedPreset && currSched) {
+    presetSelect.value = 'custom';
+  }
+  presetGrp.appendChild(presetSelect);
+  body.appendChild(presetGrp);
+
+  // Input de expresión Cron
+  const cronGrp = document.createElement('div');
+  cronGrp.className = 'field-group';
+  cronGrp.innerHTML = '<label>Expresión Cron</label>';
+  const cronInput = document.createElement('input');
+  cronInput.value = currSched;
+  cronInput.placeholder = 'ej. */5 * * * *';
+  cronInput.style.display = (currSched || presetSelect.value === 'custom') ? 'block' : 'none';
+  cronInput.oninput = (e) => {
+    state.meta.schedule = e.target.value.trim();
+    markDirty();
+  };
+  const cronHelp = document.createElement('span');
+  cronHelp.className = 'field-help';
+  cronHelp.textContent = 'Formato cron estándar de 5 campos (min hora día mes dds).';
+  cronHelp.style.display = cronInput.style.display;
+  cronGrp.appendChild(cronInput);
+  cronGrp.appendChild(cronHelp);
+  body.appendChild(cronGrp);
+
+  presetSelect.onchange = (e) => {
+    if (e.target.value === 'custom') {
+      cronInput.style.display = 'block';
+      cronHelp.style.display = 'block';
+    } else {
+      state.meta.schedule = e.target.value;
+      cronInput.value = e.target.value;
+      cronInput.style.display = e.target.value ? 'block' : 'none';
+      cronHelp.style.display = e.target.value ? 'block' : 'none';
+      markDirty();
+    }
+  };
+
+  // Resumen del flujo
+  const secStats = document.createElement('div');
+  secStats.className = 'inspector-section';
+  secStats.textContent = 'Estructura del Grafo';
+  body.appendChild(secStats);
+
+  const statsBox = document.createElement('div');
+  statsBox.innerHTML = `
+    <div class="flow-stats-row">
+      <span>Nodos en lienzo:</span>
+      <span class="flow-stats-val">${state.graph.nodes.length}</span>
+    </div>
+    <div class="flow-stats-row">
+      <span>Conexiones (cables):</span>
+      <span class="flow-stats-val">${state.graph.edges.length}</span>
+    </div>
+    <div class="flow-stats-row">
+      <span>Estado cambios:</span>
+      <span class="flow-stats-val" style="color: ${state.isDirty ? 'var(--port-err)' : 'var(--port-ok)'}">${state.isDirty ? 'Sin guardar' : 'Al día'}</span>
+    </div>
+  `;
+  body.appendChild(statsBox);
+
+  // Acciones rápidas
+  const secActions = document.createElement('div');
+  secActions.className = 'inspector-section';
+  secActions.textContent = 'Acciones';
+  body.appendChild(secActions);
+
+  const actBox = document.createElement('div');
+  actBox.style.display = 'flex';
+  actBox.style.flexDirection = 'column';
+  actBox.style.gap = '8px';
+  actBox.style.marginTop = '8px';
+
+  const btnSave = document.createElement('button');
+  btnSave.className = 'btn primary sm';
+  btnSave.innerHTML = '<svg class="ic" width="13" height="13"><use href="#i-save"/></svg> Guardar flujo';
+  btnSave.onclick = saveFlow;
+
+  const btnRun = document.createElement('button');
+  btnRun.className = 'btn secondary sm';
+  btnRun.innerHTML = '<svg class="ic" width="13" height="13"><use href="#i-play"/></svg> Probar ejecución';
+  btnRun.onclick = runPreview;
+
+  const btnAdvSched = document.createElement('button');
+  btnAdvSched.className = 'btn secondary sm';
+  btnAdvSched.innerHTML = '<svg class="ic" width="13" height="13"><use href="#i-clock"/></svg> Programación avanzada...';
+  btnAdvSched.onclick = () => openScheduleModal(state.graph.name);
+
+  actBox.appendChild(btnSave);
+  actBox.appendChild(btnRun);
+  actBox.appendChild(btnAdvSched);
+  body.appendChild(actBox);
 }
 
 function createField(label, value, onChange) {

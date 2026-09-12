@@ -296,13 +296,42 @@ select {
   box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.4);
 }
 .node-header {
-  padding: 8px 12px;
+  padding: 6px 10px;
   font-size: 0.85rem;
   font-weight: 600;
   border-bottom: 1px solid var(--border);
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+.node-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.node-header-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.node-btn-del {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+.node-btn-del:hover {
+  color: var(--port-err);
+  background: rgba(239, 68, 68, 0.15);
 }
 .node-type-tag {
   font-size: 0.65rem;
@@ -363,6 +392,27 @@ select {
   outline: none; border-color: var(--border-focus);
 }
 .field-help { font-size: 0.72rem; color: var(--text-muted); line-height: 1.3; }
+.inspector-section {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  font-weight: 600;
+  margin: 16px 0 10px 0;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.flow-stats-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+.flow-stats-val {
+  font-weight: 600;
+  color: var(--text);
+}
 
 /* Status Toast */
 .status {

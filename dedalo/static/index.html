@@ -158,12 +158,10 @@
     </div>
   </section>
 
-  <!-- Inspector derecho de propiedades del nodo -->
+  <!-- Inspector derecho -->
   <aside class="inspector" id="inspector">
-    <h2>Ajustes del Nodo</h2>
-    <div id="inspectorBody">
-      <p class="hint">Selecciona un nodo del lienzo para configurar sus propiedades.</p>
-    </div>
+    <h2 id="inspectorTitle">Ajustes del Flujo</h2>
+    <div id="inspectorBody"></div>
   </aside>
 
 </main>
@@ -243,6 +241,29 @@
     <div class="sheet-foot">
       <button id="btnSchedRunNow" class="btn secondary"><svg class="ic" width="14" height="14"><use href="#i-play"/></svg> Ejecutar ahora</button>
       <button id="btnSchedSave" class="btn primary">Guardar programación</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal para confirmar cambios sin guardar al cambiar de flujo -->
+<div class="sheet" id="unsavedSheet" hidden>
+  <div class="sheet-box" style="width: 460px;">
+    <div class="sheet-head">
+      <strong>Cambios sin guardar</strong>
+      <button id="unsavedClose" class="icon-btn" title="Cerrar"><svg class="ic" width="14" height="14"><use href="#i-x"/></svg></button>
+    </div>
+    <div class="schedule-body">
+      <p style="font-size: 0.88rem; line-height: 1.5;">
+        Tienes modificaciones sin guardar en el flujo actual (<b><span id="unsavedFlowName"></span></b>).
+      </p>
+      <p class="hint">¿Deseas guardar los cambios antes de continuar o prefieres descartarlos?</p>
+    </div>
+    <div class="sheet-foot">
+      <button id="btnUnsavedCancel" class="btn secondary">Cancelar</button>
+      <div style="display: flex; gap: 8px;">
+        <button id="btnUnsavedDiscard" class="btn secondary" style="color: var(--port-err);">Descartar</button>
+        <button id="btnUnsavedSave" class="btn primary">Guardar y continuar</button>
+      </div>
     </div>
   </div>
 </div>
