@@ -34,6 +34,7 @@ data/secrets/*.secret
 # Runtime state and logs
 data/state/
 data/logs/
+data/outputs/
 data/*.db
 data/*.db-*
 *.log
