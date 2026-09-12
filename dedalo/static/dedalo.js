@@ -1168,12 +1168,33 @@ function removeEdge(source, target, port) {
 // Renderizado del Lienzo y Cables SVG
 // ---------------------------------------------------------------------------
 
+const elementFor = new Map();
+
+function portCentre(id, which) {
+  const node = state.graph.nodes.find((n) => n.id === id);
+  if (!node) return null;
+  const el = elementFor.get(id) || document.querySelector(`.node[data-id="${id}"]`);
+  const w = el ? el.offsetWidth : 200;
+  const h = el ? el.offsetHeight : 70;
+  const x = which === 'in' ? node.x : node.x + w;
+  let y;
+  if (which === 'in') y = node.y + h * 0.5;
+  else if (which === 'ok') y = node.y + h * 0.33;
+  else y = node.y + h * 0.67;
+  return { x, y };
+}
+
+function curve(from, to) {
+  const dx = Math.max(38, Math.abs(to.x - from.x) * 0.45);
+  return `M ${from.x} ${from.y} C ${from.x + dx} ${from.y}, ${to.x - dx} ${to.y}, ${to.x} ${to.y}`;
+}
+
 function render() {
   $('flowName').value = state.graph.name || '';
   $('emptyHint').style.display = state.graph.nodes.length ? 'none' : 'block';
 
-  renderWires();
   renderNodes();
+  renderWires();
   renderInspector();
   updateTransform();
 }
@@ -1181,6 +1202,7 @@ function render() {
 function renderNodes() {
   const container = $('nodes');
   container.innerHTML = '';
+  elementFor.clear();
 
   state.graph.nodes.forEach((node) => {
     const el = document.createElement('div');
@@ -1240,38 +1262,47 @@ function renderNodes() {
     }
     el.appendChild(body);
 
-    // Puertos
-    const ports = document.createElement('div');
-    ports.className = 'node-ports';
-
-    // Entrada (puerto 'in')
+    // Puertos en los bordes laterales (estilo tomos)
+    // Entrada: borde izquierdo
     const inPort = document.createElement('div');
     inPort.className = 'port in';
+    inPort.dataset.role = 'in';
     inPort.title = 'Entrada';
     inPort.onmouseup = (e) => {
-      e.stopPropagation();
-      finishWire(node.id);
+      if (state.wiring && state.wiring.sourceNodeId !== node.id) {
+        e.stopPropagation();
+        finishWire(node.id);
+      }
     };
-    ports.appendChild(inPort);
+    el.appendChild(inPort);
 
-    // Salidas (ok y error)
-    const outGroup = document.createElement('div');
-    outGroup.className = 'port-group';
-
+    // Salidas OK y ERROR: borde derecho
     const okPort = document.createElement('div');
-    okPort.className = 'port ok';
+    okPort.className = 'port ok out-ok';
+    okPort.dataset.role = 'out';
+    okPort.dataset.port = 'ok';
     okPort.title = 'Salida OK (éxito)';
     okPort.onmousedown = (e) => startWire(e, node.id, 'ok');
+    el.appendChild(okPort);
 
     const errPort = document.createElement('div');
-    errPort.className = 'port error';
+    errPort.className = 'port error out-error';
+    errPort.dataset.role = 'out';
+    errPort.dataset.port = 'error';
     errPort.title = 'Salida ERROR (fallo)';
     errPort.onmousedown = (e) => startWire(e, node.id, 'error');
+    el.appendChild(errPort);
 
-    outGroup.appendChild(okPort);
-    outGroup.appendChild(errPort);
-    ports.appendChild(outGroup);
-    el.appendChild(ports);
+    // Etiquetas de puerto en borde derecho (ok / error)
+    const tagOk = document.createElement('span');
+    tagOk.className = 'port-tag ok';
+    tagOk.textContent = 'ok';
+    el.appendChild(tagOk);
+
+    const tagErr = document.createElement('span');
+    tagErr.className = 'port-tag error';
+    tagErr.textContent = 'error';
+    el.appendChild(tagErr);
 
     // Selección y Arrastre del nodo
     el.onmousedown = (e) => {
@@ -1294,12 +1325,21 @@ function renderNodes() {
       renderInspector();
     };
 
+    // Soltar cable en cualquier parte del nodo para conectarlo
+    el.onmouseup = (e) => {
+      if (state.wiring && state.wiring.sourceNodeId !== node.id) {
+        e.stopPropagation();
+        finishWire(node.id);
+      }
+    };
+
     el.ondblclick = (e) => {
       e.stopPropagation();
       setInspectorCollapsed(false);
     };
 
     container.appendChild(el);
+    elementFor.set(node.id, el);
   });
 }
 
@@ -1308,22 +1348,15 @@ function renderWires() {
   svg.innerHTML = '';
 
   state.graph.edges.forEach((edge) => {
-    const sNode = state.graph.nodes.find((n) => n.id === edge.source);
-    const tNode = state.graph.nodes.find((n) => n.id === edge.target);
-    if (!sNode || !tNode) return;
+    const from = portCentre(edge.source, edge.port === 'error' ? 'error' : 'ok');
+    const to = portCentre(edge.target, 'in');
+    if (!from || !to) return;
 
-    const pOffset = edge.port === 'ok' ? 145 : 175;
-    const x1 = sNode.x + pOffset;
-    const y1 = sNode.y + 70;
-    const x2 = tNode.x + 20;
-    const y2 = tNode.y + 70;
-
-    const dx = Math.max(40, Math.abs(x2 - x1) * 0.5);
-    const d = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
+    const d = curve(from, to);
 
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     path.setAttribute('d', d);
-    path.setAttribute('class', `wire wire-${edge.port}`);
+    path.setAttribute('class', `wire wire-${edge.port} ${edge.port === 'error' ? 'error' : 'ok'}`);
     path.style.pointerEvents = 'stroke';
     path.style.cursor = 'pointer';
     path.title = 'Haz clic derecho para desconectar';
@@ -1336,12 +1369,12 @@ function renderWires() {
 
   // Cable temporal durante arrastre
   if (state.wiring) {
-    const { startX, startY, currX, currY, port } = state.wiring;
-    const dx = Math.max(40, Math.abs(currX - startX) * 0.5);
-    const d = `M ${startX} ${startY} C ${startX + dx} ${startY}, ${currX - dx} ${currY}, ${currX} ${currY}`;
+    const from = { x: state.wiring.startX, y: state.wiring.startY };
+    const to = { x: state.wiring.currX, y: state.wiring.currY };
+    const d = curve(from, to);
     const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     p.setAttribute('d', d);
-    p.setAttribute('class', `wire wire-draft wire-${port}`);
+    p.setAttribute('class', `wire wire-draft wire-${state.wiring.port} dragging`);
     svg.appendChild(p);
   }
 }
@@ -1390,7 +1423,7 @@ function onCanvasMouseMove(e) {
     state.dragNode.y = Math.round(mouseWorld.y - state.dragOffset.y);
     markDirty();
     renderWires();
-    const nodeEl = document.querySelector(`.node[data-id="${state.dragNode.id}"]`);
+    const nodeEl = elementFor.get(state.dragNode.id) || document.querySelector(`.node[data-id="${state.dragNode.id}"]`);
     if (nodeEl) {
       nodeEl.style.left = `${state.dragNode.x}px`;
       nodeEl.style.top = `${state.dragNode.y}px`;
@@ -1402,47 +1435,72 @@ function onCanvasMouseMove(e) {
   }
 }
 
-function onCanvasMouseUp() {
+function onCanvasMouseUp(e) {
   if (state.isPanning) {
     state.isPanning = false;
     $('canvasWrap').classList.remove('panning');
   }
   if (state.dragNode) state.dragNode = null;
   if (state.wiring) {
+    const { sourceNodeId, port } = state.wiring;
     state.wiring = null;
+    document.body.classList.remove('is-wiring');
+
+    if (e) {
+      const dropped = document.elementFromPoint(e.clientX, e.clientY);
+      const targetEl = dropped && dropped.closest('.node');
+      if (targetEl) {
+        const targetId = targetEl.dataset.id;
+        if (targetId && targetId !== sourceNodeId) {
+          finishWireAction(sourceNodeId, targetId, port);
+          return;
+        }
+      }
+    }
+    renderWires();
+  }
+}
+
+function finishWireAction(sourceId, targetId, port) {
+  if (sourceId === targetId) return;
+  const exists = state.graph.edges.some(
+    (edge) => edge.source === sourceId && edge.target === targetId && edge.port === port
+  );
+  if (!exists) {
+    state.graph.edges.push({ source: sourceId, target: targetId, port });
+    markDirty();
+    render();
+    toast(`Conectado por «${port}»`);
+  } else {
     renderWires();
   }
 }
 
 function startWire(e, sourceNodeId, port) {
   e.stopPropagation();
+  if (e.button !== 0) return;
   const sNode = state.graph.nodes.find((n) => n.id === sourceNodeId);
   if (!sNode) return;
-  const pOffset = port === 'ok' ? 145 : 175;
+  const from = portCentre(sourceNodeId, port);
+  if (!from) return;
   state.wiring = {
     sourceNodeId,
     port,
-    startX: sNode.x + pOffset,
-    startY: sNode.y + 70,
-    currX: sNode.x + pOffset,
-    currY: sNode.y + 70,
+    startX: from.x,
+    startY: from.y,
+    currX: from.x,
+    currY: from.y,
   };
+  document.body.classList.add('is-wiring');
+  renderWires();
 }
 
 function finishWire(targetNodeId) {
   if (!state.wiring) return;
   const { sourceNodeId, port } = state.wiring;
   state.wiring = null;
-
-  if (sourceNodeId === targetNodeId) return; // No auto-bucles
-  const exists = state.graph.edges.some(
-    (e) => e.source === sourceNodeId && e.target === targetNodeId && e.port === port
-  );
-  if (!exists) {
-    state.graph.edges.push({ source: sourceNodeId, target: targetNodeId, port });
-    markDirty();
-    render();
-  }
+  document.body.classList.remove('is-wiring');
+  finishWireAction(sourceNodeId, targetNodeId, port);
 }
 
 // ---------------------------------------------------------------------------

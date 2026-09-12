@@ -354,9 +354,9 @@ select {
   stroke-width: 2.5px;
   transition: stroke 0.15s;
 }
-.wire-ok { stroke: var(--port-ok); }
-.wire-error { stroke: var(--port-err); stroke-dasharray: 4 2; }
-.wire-draft { stroke: var(--text-muted); stroke-width: 2px; stroke-dasharray: 4 4; }
+.wire-ok, .wire.ok { stroke: var(--port-ok); }
+.wire-error, .wire.error { stroke: var(--port-err); stroke-dasharray: 4 2; }
+.wire-draft, .wire.dragging { stroke: var(--primary); stroke-width: 2px; stroke-dasharray: 4 4; }
 
 .nodes {
   position: absolute;
@@ -436,6 +436,7 @@ select {
   cursor: move;
   z-index: 2;
   pointer-events: auto;
+  overflow: visible;
   transition: box-shadow 0.15s, border-color 0.15s;
 }
 .node.selected {
@@ -519,30 +520,92 @@ select {
   font-size: 0.75rem;
   color: var(--text-muted);
   font-family: var(--mono);
+  border-radius: 0 0 7px 7px;
 }
-.node-ports {
-  display: flex;
-  justify-content: space-between;
-  padding: 6px 12px;
-  border-top: 1px solid var(--border);
-  background: var(--bg-subtle);
-  border-radius: 0 0 8px 8px;
-}
-.port-group { display: flex; gap: 8px; }
+
+/* Puertos en los bordes del nodo (estilo tomos) */
 .port {
-  width: 12px; height: 12px;
+  position: absolute;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
-  border: 2px solid var(--border);
-  background: var(--bg-panel);
+  border: 2px solid var(--bg-panel);
   cursor: crosshair;
-  position: relative;
+  z-index: 5;
   pointer-events: auto;
+  box-sizing: border-box;
+  transition: transform 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
 }
-.port.in { background: var(--text-muted); }
-.port.ok { border-color: var(--port-ok); }
-.port.ok:hover, .port.ok.active { background: var(--port-ok); }
-.port.error { border-color: var(--port-err); }
-.port.error:hover, .port.error.active { background: var(--port-err); }
+.port:hover {
+  transform: scale(1.4);
+  z-index: 6;
+}
+.port.in {
+  left: -7px;
+  top: 50%;
+  margin-top: -6px;
+  background: var(--text-muted);
+}
+.port.in:hover {
+  background: var(--primary);
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.7);
+}
+.port.out-ok,
+.port.ok {
+  right: -7px;
+  top: 33%;
+  margin-top: -6px;
+  background: var(--port-ok);
+}
+.port.out-ok:hover,
+.port.ok:hover {
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.7);
+}
+.port.out-error,
+.port.error {
+  right: -7px;
+  top: 67%;
+  margin-top: -6px;
+  background: var(--port-err);
+}
+.port.out-error:hover,
+.port.error:hover {
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.7);
+}
+
+.port-tag {
+  position: absolute;
+  right: -2.3rem;
+  font-size: 0.62rem;
+  font-family: var(--mono);
+  font-weight: 600;
+  pointer-events: none;
+  user-select: none;
+  line-height: 1;
+}
+.port-tag.ok {
+  top: calc(33% - 0.4rem);
+  color: var(--port-ok);
+}
+.port-tag.error {
+  top: calc(67% - 0.4rem);
+  color: var(--port-err);
+}
+
+/* Estado interactivo mientras se arrastra un cable */
+body.is-wiring,
+body.is-wiring .canvas-wrap,
+body.is-wiring .node {
+  cursor: crosshair !important;
+}
+body.is-wiring .port.in {
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.4);
+  animation: pulse-port 1.2s infinite ease-in-out;
+}
+@keyframes pulse-port {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.35); box-shadow: 0 0 8px rgba(59, 130, 246, 0.8); }
+}
 
 /* Inspector Derecho */
 .inspector {
