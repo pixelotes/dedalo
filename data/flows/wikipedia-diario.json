@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "name": "wikipedia-diario",
+  "nodes": [
+    {
+      "id": "fetch_wikipedia",
+      "type": "input.http_call",
+      "label": "Artículo aleatorio (API)",
+      "config": {
+        "url": "https://es.wikipedia.org/api/rest_v1/page/random/summary",
+        "method": "GET",
+        "engine": "auto",
+        "impersonate": "chrome",
+        "timeout": 15.0
+      },
+      "x": 80.0,
+      "y": 140.0
+    },
+    {
+      "id": "resumir_luhn",
+      "type": "transform.summarize",
+      "label": "Resumen largo (Luhn)",
+      "config": {
+        "engine": "luhn",
+        "length": "long",
+        "field": "extract"
+      },
+      "x": 380.0,
+      "y": 140.0
+    },
+    {
+      "id": "formatear_articulo",
+      "type": "transform.template",
+      "label": "Formatear informe",
+      "config": {
+        "fan_in": "all",
+        "template": "# Artículo Diario de Wikipedia ({fecha})\n\n## {title}\n- **Enlace:** {content_urls.desktop.page}\n- **Descripción:** {description}\n\n### Resumen del Artículo (Luhn):\n{entrada}\n"
+      },
+      "x": 680.0,
+      "y": 140.0
+    },
+    {
+      "id": "guardar_articulo",
+      "type": "output.file",
+      "label": "Guardar wikipedia-articulo-diario.md",
+      "config": {
+        "filename": "wikipedia-articulo-diario.md",
+        "directory": "",
+        "mode": "sobrescribir"
+      },
+      "x": 980.0,
+      "y": 140.0
+    }
+  ],
+  "edges": [
+    {
+      "source": "fetch_wikipedia",
+      "target": "resumir_luhn",
+      "port": "ok"
+    },
+    {
+      "source": "resumir_luhn",
+      "target": "formatear_articulo",
+      "port": "ok"
+    },
+    {
+      "source": "fetch_wikipedia",
+      "target": "formatear_articulo",
+      "port": "ok"
+    },
+    {
+      "source": "formatear_articulo",
+      "target": "guardar_articulo",
+      "port": "ok"
+    }
+  ]
+}

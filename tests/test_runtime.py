@@ -307,3 +307,72 @@ def test_web_read_passthrough(monkeypatch):
     assert called_with["impersonate"] == "firefox"
     assert called_with["user_agent"] == "firefox"
 
+
+def test_html_extract_records():
+    html = """
+    <div class="noticia">
+        <h2><a href="/art1">Titulo 1</a></h2>
+        <span class="cat">Juegos</span>
+        <p class="desc">Descripcion de la noticia 1</p>
+    </div>
+    <div class="noticia">
+        <h2><a href="/art2">Titulo 2</a></h2>
+        <span class="cat">Hardware</span>
+        <p class="desc">Descripcion de la noticia 2</p>
+    </div>
+    """
+    inp = runtime.NodeResult("ok", data=html)
+    fields = '{"title": "h2 a", "link": "h2 a@href", "category": "span.cat", "summary": "p.desc"}'
+    res = runtime.html_extract(
+        None,
+        [inp],
+        selector="div.noticia",
+        fields=fields,
+        base_url="https://ejemplo.com",
+        output_format="records",
+    )
+    assert res.ok
+    assert len(res.data) == 2
+    assert res.data[0]["title"] == "Titulo 1"
+    assert res.data[0]["link"] == "https://ejemplo.com/art1"
+    assert res.data[0]["category"] == "Juegos"
+    assert res.data[0]["summary"] == "Descripcion de la noticia 1"
+
+
+def test_html_extract_text_template():
+    html = """
+    <article class="post">
+        <h3><a href="/p1">Post Uno</a></h3>
+    </article>
+    <article class="post">
+        <h3><a href="/p2">Post Dos</a></h3>
+    </article>
+    """
+    inp = runtime.NodeResult("ok", data=html)
+    res = runtime.html_extract(
+        None,
+        [inp],
+        selector="article.post",
+        fields='{"title": "h3 a", "url": "h3 a@href"}',
+        base_url="https://blog.test",
+        output_format="text",
+        header_text="# Mi Blog",
+        item_template="- [{title}]({url})",
+    )
+    assert res.ok
+    assert "# Mi Blog" in res.data
+    assert "- [Post Uno](https://blog.test/p1)" in res.data
+    assert "- [Post Dos](https://blog.test/p2)" in res.data
+
+
+def test_summarize_dict_field():
+    article_dict = {
+        "title": "Historia de la Computación",
+        "extract": "La historia de la computación abarca varios siglos. En el siglo XIX Charles Babbage diseñó la máquina analítica. Ada Lovelace escribió el primer algoritmo para esta máquina. En el siglo XX Alan Turing formalizó el concepto de algoritmo con la máquina de Turing. Durante la Segunda Guerra Mundial se construyeron los primeros computadores electrónicos como Colossus y ENIAC. Más tarde llegaron los transistores y los circuitos integrados revolucionando el mundo.",
+    }
+    inp = runtime.NodeResult("ok", data=article_dict)
+    res = runtime.summarize_text(None, [inp], engine="luhn", length="short", field="extract")
+    assert res.ok
+    assert "máquina" in res.data.lower() or "computación" in res.data.lower()
+
+

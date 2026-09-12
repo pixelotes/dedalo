@@ -465,6 +465,7 @@ NODE_TYPES: dict[str, NodeSpec] = {
             "engine": "luhn",
             "length": "medium",
             "prompt": "",
+            "field": "",
         },
         label="Resumir texto",
         output="texto resumido",
@@ -476,6 +477,11 @@ NODE_TYPES: dict[str, NodeSpec] = {
             "length": ["short", "medium", "long", "full"],
         },
         show_when={"prompt": {"engine": ["llm"]}},
+        help={
+            "engine": "Algoritmo de resumen: Luhn (extractivo rápido sin LLM) o LLM.",
+            "length": "Longitud del resumen (short, medium, long, full).",
+            "field": "Campo específico si la entrada es un diccionario (ej. 'extract', 'content').",
+        },
     ),
     "transform.threshold": NodeSpec(
         category="transform",
@@ -529,6 +535,37 @@ NODE_TYPES: dict[str, NodeSpec] = {
         optional={"url": ""},
         label="Limpiar HTML",
         output="texto plano sin etiquetas",
+    ),
+    "transform.html_extract": NodeSpec(
+        category="transform",
+        runtime_fn="html_extract",
+        required=frozenset({"selector"}),
+        optional={
+            "fields": "",
+            "output_format": "records",
+            "item_template": "",
+            "header_text": "",
+            "base_url": "",
+            "limit": 10,
+        },
+        label="Extraer con Selector CSS",
+        output="lista de diccionarios, textos o informe formateado",
+        choices={
+            "output_format": [
+                {"value": "records", "label": "Registros (lista de diccionarios)"},
+                {"value": "text", "label": "Texto formateado (usando plantilla)"},
+                {"value": "list", "label": "Lista simple de valores"},
+            ],
+        },
+        help={
+            "selector": "Selector CSS para los elementos contenedores (ej. 'div.new', 'article', 'h2 a').",
+            "fields": "Mapeo JSON o clave=selector de subcampos (ej. {'title': 'h2 a', 'link': 'h2 a@href'}).",
+            "output_format": "Formato de salida deseado.",
+            "item_template": "Plantilla por elemento si salida es texto (ej. '### {title}\\n{link}\\n{summary}').",
+            "header_text": "Encabezado opcional al inicio del texto formateado (admite {fecha}).",
+            "base_url": "URL base para convertir enlaces relativos (/noticias/...) en absolutos.",
+            "limit": "Número máximo de elementos a extraer (0 para todos).",
+        },
     ),
     "transform.merge": NodeSpec(
         category="transform",

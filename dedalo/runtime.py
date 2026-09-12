@@ -22,6 +22,7 @@ import sys
 import time
 import urllib.parse
 import xml.etree.ElementTree as ET
+from html.parser import HTMLParser
 from dataclasses import dataclass, field
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -815,6 +816,187 @@ def clean_html(ctx: Any, inputs: list[NodeResult], *, url: str = "") -> NodeResu
     return NodeResult("ok", data=clean)
 
 
+class _SimpleDOMElement:
+    def __init__(self, tag: str, attrs: list[tuple[str, str | None]], parent: _SimpleDOMElement | None = None):
+        self.tag = tag.lower()
+        self.attrs = {k.lower(): v or "" for k, v in attrs}
+        self.parent = parent
+        self.children: list[_SimpleDOMElement] = []
+        self.text_chunks: list[str] = []
+
+    @property
+    def classes(self) -> list[str]:
+        return self.attrs.get("class", "").split()
+
+    @property
+    def id(self) -> str:
+        return self.attrs.get("id", "")
+
+    @property
+    def text(self) -> str:
+        texts = list(self.text_chunks)
+        for c in self.children:
+            texts.append(c.text)
+        return " ".join("".join(texts).split())
+
+
+class _SimpleDOMParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.root = _SimpleDOMElement("root", [])
+        self.current = self.root
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]):
+        elem = _SimpleDOMElement(tag, attrs, self.current)
+        self.current.children.append(elem)
+        if tag.lower() not in ("meta", "link", "br", "hr", "img", "input", "source", "wbr", "area", "col"):
+            self.current = elem
+
+    def handle_endtag(self, tag: str):
+        curr = self.current
+        while curr and curr.tag != tag.lower() and curr.parent:
+            curr = curr.parent
+        if curr and curr.parent:
+            self.current = curr.parent
+
+    def handle_data(self, data: str):
+        self.current.text_chunks.append(data)
+
+
+def _match_dom_token(elem: _SimpleDOMElement, token: str) -> bool:
+    if not token or elem.tag == "root":
+        return False
+    if "#" in token:
+        parts = token.split("#", 1)
+        tag, eid = parts[0], parts[1]
+        if tag and elem.tag != tag.lower():
+            return False
+        return elem.id.lower() == eid.lower()
+    if "." in token:
+        parts = token.split(".")
+        tag = parts[0]
+        classes = parts[1:]
+        if tag and elem.tag != tag.lower():
+            return False
+        return all(c.lower() in [x.lower() for x in elem.classes] for c in classes)
+    return elem.tag == token.lower()
+
+
+def _query_selector_all(root: _SimpleDOMElement, selector: str) -> list[_SimpleDOMElement]:
+    tokens = selector.strip().split()
+    if not tokens:
+        return []
+    current = [root]
+    for token in tokens:
+        next_gen = []
+        for p in current:
+            stack = list(p.children)
+            while stack:
+                node = stack.pop(0)
+                if _match_dom_token(node, token):
+                    next_gen.append(node)
+                stack = list(node.children) + stack
+        current = next_gen
+    return current
+
+
+def html_extract(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    selector: str,
+    fields: str = "",
+    output_format: str = "records",
+    item_template: str = "",
+    header_text: str = "",
+    base_url: str = "",
+    limit: int = 10,
+) -> NodeResult:
+    """Extrae datos de HTML utilizando selectores CSS ligeros sin dependencias externas."""
+    inp = Inputs(inputs)
+    html_content = inp.text()
+    if not html_content:
+        return NodeResult("ok", data=[] if output_format != "text" else "")
+
+    parser = _SimpleDOMParser()
+    try:
+        parser.feed(html_content)
+    except Exception as exc:
+        return NodeResult("error", error=f"Error al procesar HTML: {exc}")
+
+    matched_elements = _query_selector_all(parser.root, selector)
+    if limit and int(limit) > 0:
+        matched_elements = matched_elements[: int(limit)]
+
+    # Parsear fields si se proporcionaron
+    fields_map: dict[str, str] = {}
+    if fields:
+        if isinstance(fields, dict):
+            fields_map = fields
+        else:
+            try:
+                fields_map = json.loads(fields)
+            except Exception:
+                for item in fields.split(","):
+                    if "=" in item:
+                        k, v = item.split("=", 1)
+                        fields_map[k.strip()] = v.strip()
+
+    # Si no hay fields_map, extracción directa del selector
+    if not fields_map:
+        attr_name = None
+        if "@" in selector:
+            sel_clean, attr_name = selector.split("@", 1)
+            matched_elements = _query_selector_all(parser.root, sel_clean)
+            if limit and int(limit) > 0:
+                matched_elements = matched_elements[: int(limit)]
+
+        results_list = []
+        for el in matched_elements:
+            val = el.attrs.get(attr_name, "") if attr_name else el.text
+            if attr_name == "href" and base_url and val:
+                val = urllib.parse.urljoin(base_url, val)
+            results_list.append(val)
+
+        if output_format == "text":
+            return NodeResult("ok", data="\n".join(results_list))
+        return NodeResult("ok", data=results_list)
+
+    # Con fields_map, extraer un registro (dict) por cada elemento contenedor
+    records = []
+    for container in matched_elements:
+        rec = {}
+        for f_name, f_sel in fields_map.items():
+            attr_target = None
+            sel_part = f_sel
+            if "@" in f_sel:
+                sel_part, attr_target = f_sel.split("@", 1)
+            subs = _query_selector_all(container, sel_part)
+            if subs:
+                val = subs[0].attrs.get(attr_target, "") if attr_target else subs[0].text
+                if attr_target == "href" and base_url and val:
+                    val = urllib.parse.urljoin(base_url, val)
+                rec[f_name] = val
+            else:
+                rec[f_name] = ""
+        records.append(rec)
+
+    if output_format == "text":
+        tmpl = item_template or "• " + " | ".join(f"{{{k}}}" for k in fields_map)
+        lines = []
+        if header_text:
+            h = header_text.replace("{fecha}", time.strftime("%Y-%m-%d")).replace("{hora}", time.strftime("%H:%M:%S"))
+            lines.append(h.rstrip() + "\n")
+        for rec in records:
+            item_rendered = tmpl
+            for k, v in rec.items():
+                item_rendered = item_rendered.replace(f"{{{k}}}", str(v))
+            lines.append(item_rendered.rstrip())
+        return NodeResult("ok", data="\n\n".join(lines).strip())
+
+    return NodeResult("ok", data=records)
+
+
 def template(
     ctx: Any,
     inputs: list[NodeResult],
@@ -823,11 +1005,17 @@ def template(
 ) -> NodeResult:
     """Interpola variables en una plantilla de texto."""
     inp = Inputs(inputs)
-    first = inp.first_data()
     context_vars: dict[str, Any] = {}
-    if isinstance(first, dict):
-        context_vars.update(first)
-    context_vars["entrada"] = inp.text()
+    text_parts: list[str] = []
+
+    for it in inputs:
+        if it.ok and it.data is not None:
+            if isinstance(it.data, dict):
+                context_vars.update(it.data)
+            elif isinstance(it.data, str):
+                text_parts.append(it.data)
+
+    context_vars["entrada"] = "\n\n".join(text_parts) if text_parts else inp.text()
     context_vars["now"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     context_vars["fecha"] = time.strftime("%Y-%m-%d")
     context_vars["hora"] = time.strftime("%H:%M:%S")
@@ -1055,10 +1243,26 @@ def summarize_text(
     engine: str = "luhn",
     length: str = "medium",
     prompt: str = "",
+    field: str = "",
 ) -> NodeResult:
     """Resume un texto usando Luhn (extractivo) o LLM."""
     inp = Inputs(inputs)
-    text = inp.text()
+    first = inp.first_data()
+    text = ""
+    if isinstance(first, dict):
+        if field and field in first:
+            text = str(first[field])
+        elif "extract" in first:
+            text = str(first["extract"])
+        elif "content" in first:
+            text = str(first["content"])
+        elif "text" in first:
+            text = str(first["text"])
+        else:
+            text = inp.text()
+    else:
+        text = inp.text()
+
     if not text:
         return NodeResult("ok", data="")
 

@@ -20,7 +20,7 @@ Este documento resume el estado técnico actual de **Dédalo Standalone**, su or
 - **Control de cambios**: Detección de modificaciones no guardadas con modal de confirmación antes de cambiar de flujo.
 - **Optimización de Memoria Activa**: Compactación periódica de heap con recolección de basura forzada y devolución de páginas al OS vía `malloc_trim(0)`.
 - **Evasión Antibot sin Navegador Pesado**: Motor HTTP dual con `curl_cffi` (suplantación de TLS/HTTP/2 de Chrome/Safari/Firefox y User-Agents) y fallback transparente a `httpx`.
-- **Suite de pruebas**: 41 pruebas automatizadas pasando al 100% en `pytest`.
+- **Suite de pruebas**: 44 pruebas automatizadas pasando al 100% en `pytest`.
 
 ---
 
@@ -123,7 +123,7 @@ A continuación se detallan las mejoras realizadas sobre la base standalone:
 ### C. Catálogo de Nodos Ampliado (14 Nuevos Tipos Ultraligeros)
 Sin añadir dependencias pesadas y aprovechando la librería estándar de Python:
 - **Entradas**: `input.webhook` (disparador HTTP), `input.sqlite_query` (consultas SQL locales), `input.command` (ejecución shell controlada), `input.pi_health` (telemetría de CPU/RAM de Raspberry Pi), `input.directory_scan` (escaneo de ficheros), `input.http_health` (comprobación de latencia/estado web).
-- **Transformaciones**: `transform.template` (sustitución de plantillas con variables), `transform.array_ops` (ordenar, filtrar, recortar listas), `transform.regex` (extracciones y reemplazos con expresiones regulares), `transform.router` (bifurcador condicional a puerto `ok` o `error`).
+- **Transformaciones**: `transform.html_extract` (selector CSS y extracción de datos HTML sin dependencias), `transform.template` (sustitución de plantillas con variables), `transform.array_ops` (ordenar, filtrar, recortar listas), `transform.regex` (extracciones y reemplazos con expresiones regulares), `transform.router` (bifurcador condicional a puerto `ok` o `error`).
 - **Salidas**: `output.sqlite_exec` (escritura en base de datos local), `output.email_smtp` (envío de correos vía SMTP), `output.ntfy` (notificaciones push a móviles vía ntfy.sh), `output.discord` (webhooks con mensajes y embeds), `output.slack` (notificaciones para equipos), `output.command` (ejecución de comandos de sistema de salida).
 
 ### D. Optimización Extrema de Memoria y Recursos (3 Niveles Implementados)
