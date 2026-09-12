@@ -59,11 +59,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Servir archivos estáticos
-VENDOR_DIR = STATIC_DIR / "vendor"
-VENDOR_DIR.mkdir(parents=True, exist_ok=True)
-app.mount("/vendor", StaticFiles(directory=str(VENDOR_DIR)), name="vendor")
-app.mount("/assets", StaticFiles(directory=str(STATIC_DIR)), name="assets")
+HEADLESS = os.environ.get("DEDALO_HEADLESS", "").strip().lower() in ("1", "true", "yes")
+
+# Servir archivos estáticos únicamente si la interfaz gráfica está habilitada
+if not HEADLESS:
+    VENDOR_DIR = STATIC_DIR / "vendor"
+    VENDOR_DIR.mkdir(parents=True, exist_ok=True)
+    app.mount("/vendor", StaticFiles(directory=str(VENDOR_DIR)), name="vendor")
+    app.mount("/assets", StaticFiles(directory=str(STATIC_DIR)), name="assets")
 
 
 # ---------------------------------------------------------------------------
@@ -102,9 +105,29 @@ class ConfigUpdateRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-@app.get("/", response_class=HTMLResponse)
-@app.get("/dedalo", response_class=HTMLResponse)
-def index_view() -> HTMLResponse:
+@app.get("/health")
+def health_endpoint() -> dict[str, Any]:
+    """Estado de salud y modo de operación del servidor."""
+    return {
+        "status": "ok",
+        "service": "dedalo",
+        "version": "0.1.0",
+        "mode": "headless" if HEADLESS else "full",
+        "scheduler": sched._running,
+    }
+
+
+@app.get("/")
+@app.get("/dedalo")
+def index_view():
+    """Vista principal o respuesta minimalista si está en modo headless."""
+    if HEADLESS:
+        return {
+            "status": "ok",
+            "service": "dedalo",
+            "mode": "headless",
+            "message": "Dédalo ejecutándose en modo sin interfaz (headless). Webhooks y planificador activos.",
+        }
     index_file = STATIC_DIR / "index.html"
     if not index_file.is_file():
         return HTMLResponse("<h1>Dédalo: Error al cargar static/index.html</h1>", status_code=500)
@@ -366,6 +389,8 @@ def run_preview_endpoint(req: RunRequest) -> dict[str, Any]:
             error=str(exc),
         )
         raise HTTPException(status_code=500, detail=f"Error durante la ejecución: {exc}")
+    finally:
+        runtime.compact_memory()
 
 
 @app.api_route("/api/webhook/{flow_id}", methods=["GET", "POST", "PUT"])
@@ -435,6 +460,8 @@ async def webhook_endpoint(flow_id: str, request: Request) -> dict[str, Any]:
             error=str(exc),
         )
         raise HTTPException(status_code=500, detail=f"Error durante la ejecución del webhook: {exc}")
+    finally:
+        runtime.compact_memory()
 
 
 # ---------------------------------------------------------------------------

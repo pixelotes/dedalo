@@ -22,18 +22,24 @@ Para consultar el estado técnico completo, las decisiones de arquitectura, la r
 git clone <tu-repo> dedalo
 cd dedalo
 
-# Arrancar (crea automáticamente el venv si no existe)
+# Arrancar con interfaz web completa
 chmod +x run.sh stop.sh
 ./run.sh
+
+# O bien en modo Headless (solo Webhooks y API, sin interfaz web)
+./run.sh --headless
+
+# O bien como Demonio Puro (solo Scheduler en segundo plano, ~14-18 MB RAM)
+./run.sh --daemon
 ```
 
-Abre en tu navegador `http://localhost:8080`.
+Abre en tu navegador `http://localhost:8080` (en modo con interfaz).
 
 ---
 
 ## Despliegue como servicio en Raspberry Pi (systemd)
 
-Para que arranque automáticamente al encender tu Pi:
+Para que arranque automáticamente al encender tu Pi con control estricto de memoria:
 
 1. Crea el fichero de servicio:
 ```bash
@@ -50,10 +56,16 @@ After=network.target
 Type=simple
 User=pi
 WorkingDirectory=/home/pi/dedalo
-ExecStart=/home/pi/dedalo/.venv/bin/uvicorn dedalo.app:app --host 0.0.0.0 --port 8080
+Environment="MALLOC_TRIM_THRESHOLD_=65536"
+Environment="PYTHONOPTIMIZE=1"
+EnvironmentFile=-/home/pi/dedalo/.env
+ExecStart=/home/pi/dedalo/.venv/bin/uvicorn dedalo.app:app --host 0.0.0.0 --port 8080 --no-access-log --limit-concurrency 15 --timeout-keep-alive 5
 Restart=always
 RestartSec=5
-EnvironmentFile=-/home/pi/dedalo/.env
+
+# Control de consumo de memoria con cgroups
+MemoryHigh=65M
+MemoryMax=85M
 
 [Install]
 WantedBy=multi-user.target
@@ -64,6 +76,8 @@ WantedBy=multi-user.target
 sudo systemctl daemon-reload
 sudo systemctl enable --now dedalo
 ```
+
+> **Consejo para Raspberry Pi**: Instala `zram-tools` (`sudo apt install -y zram-tools`) para disponer de swap comprimido en RAM sin degradar la tarjeta MicroSD.
 
 ---
 

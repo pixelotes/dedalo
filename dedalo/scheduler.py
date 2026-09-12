@@ -16,9 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from croniter import croniter
-
-from dedalo import history, store
+from dedalo import cron, history, runtime, store
 
 RUN_HISTORY: dict[str, dict[str, Any]] = {}
 
@@ -33,54 +31,12 @@ class FlowContext:
 
 def _should_run(schedule_expr: str, last_run: float | None) -> bool:
     """Comprueba si el flujo debe dispararse ahora según su schedule y último run."""
-    now = datetime.now()
-    expr = (schedule_expr or "").strip()
-    if not expr:
-        return False
-
-    # Intervalo simple: @every 30m, 1h, etc.
-    m_int = re.match(r"^(?:@every\s+)?(\d+)\s*([mh])$", expr, re.IGNORECASE)
-    if m_int:
-        amount = int(m_int.group(1))
-        unit = m_int.group(2).lower()
-        delta_sec = amount * 60 if unit == "m" else amount * 3600
-        if last_run is None:
-            return True
-        return (time.time() - last_run) >= delta_sec
-
-    # Formato Cron estándar (5 campos)
-    try:
-        if last_run is None:
-            # Si nunca ha corrido, comprobamos si tocó en el último minuto
-            base_time = datetime.fromtimestamp(time.time() - 60)
-        else:
-            base_time = datetime.fromtimestamp(last_run)
-
-        iter_cron = croniter(expr, base_time)
-        return next_run <= now
-    except Exception:
-        return False
+    return cron.should_run(schedule_expr, last_run)
 
 
 def get_next_run(schedule_expr: str) -> str | None:
     """Devuelve la fecha estimada de la próxima ejecución o None si no es válida."""
-    expr = (schedule_expr or "").strip()
-    if not expr:
-        return None
-
-    m_int = re.match(r"^(?:@every\s+)?(\d+)\s*([mh])$", expr, re.IGNORECASE)
-    if m_int:
-        amount = int(m_int.group(1))
-        unit = m_int.group(2).lower()
-        delta_sec = amount * 60 if unit == "m" else amount * 3600
-        next_dt = datetime.fromtimestamp(time.time() + delta_sec)
-        return next_dt.strftime("%Y-%m-%d %H:%M:%S")
-
-    try:
-        iter_cron = croniter(expr, datetime.now())
-        return iter_cron.get_next(datetime).strftime("%Y-%m-%d %H:%M:%S")
-    except Exception:
-        return None
+    return cron.get_next_run(schedule_expr)
 
 
 def run_flow_sync(flow_id: str, trigger_type: str = "schedule") -> dict[str, Any]:
@@ -133,6 +89,8 @@ def run_flow_sync(flow_id: str, trigger_type: str = "schedule") -> dict[str, Any
             error=str(exc),
         )
         raise
+    finally:
+        runtime.compact_memory()
 
 
 async def trigger_flow(flow_id: str, trigger_type: str = "manual") -> dict[str, Any]:
@@ -191,6 +149,7 @@ class Scheduler:
                 try:
                     await asyncio.to_thread(history.purge_older_than, 30)
                     self._last_purge = time.time()
+                    runtime.compact_memory()
                 except Exception:
                     pass
 

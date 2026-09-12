@@ -9,15 +9,17 @@ Este documento resume el estado técnico actual de **Dédalo Standalone**, su or
 **Dédalo** es un orquestador visual de flujos de trabajo ultraligero diseñado específicamente para entornos de recursos limitados (como una Raspberry Pi o pequeños servidores domésticos) sin incurrir en la sobrecarga de herramientas como n8n, Node-RED o Airflow.
 
 ### Características Principales en Standalone:
-- **Consumo mínimo de RAM**: ~25-35 MB en reposo (frente a los más de 400 MB habituales en aplicaciones basadas en Node.js o Electron).
+- **Consumo mínimo de RAM**: ~14-16 MB en modo demonio puro (`--daemon`), ~28-34 MB en modo servidor web sin frontend (`--headless`), y ~35-42 MB con servidor web completo en Linux/Raspberry Pi (frente a los más de 400 MB habituales en aplicaciones basadas en Node.js o Electron).
 - **Backend**: Python 3.10+ puro con FastAPI, Uvicorn y SQLite en modo WAL.
 - **Frontend**: Vanilla JavaScript (ES6+) y SVG nativo. Sin empaquetadores (Webpack/Vite), sin frameworks pesados (React/Vue).
 - **Compilación a Python plano**: Los grafos visuales no se interpretan paso a paso en un bucle reactivo; se compilan a un script Python determinista (`<slug>.py`) con operadores ternarios y el centinela `SKIPPED`.
+- **Evaluador de Cron Nativo**: Parser de cron e intervalos (`@every 30m`, `@hourly`, etc.) 100% en Python puro sin dependencias externas (`croniter` y `python-dateutil` eliminadas).
 - **Lienzo Infinito**: Sistema de transformación matricial con paneo por arrastre, zoom por rueda o controles en pantalla y coordenadas de mundo desacopladas.
 - **Conexiones en bordes**: Puertos de entrada en el borde lateral izquierdo y bifurcaciones de éxito/fallo (`ok` / `error`) en el borde lateral derecho.
 - **Historial de ejecuciones**: Base de datos SQLite integrada con rotación automática periódica cada 24 horas (elimina ejecuciones con más de 30 días).
 - **Control de cambios**: Detección de modificaciones no guardadas con modal de confirmación antes de cambiar de flujo.
-- **Suite de pruebas**: 29 pruebas automatizadas pasando al 100% en `pytest`.
+- **Optimización de Memoria Activa**: Compactación periódica de heap con recolección de basura forzada y devolución de páginas al OS vía `malloc_trim(0)`.
+- **Suite de pruebas**: 36 pruebas automatizadas pasando al 100% en `pytest`.
 
 ---
 
@@ -123,6 +125,20 @@ Sin añadir dependencias pesadas y aprovechando la librería estándar de Python
 - **Transformaciones**: `transform.template` (sustitución de plantillas con variables), `transform.array_ops` (ordenar, filtrar, recortar listas), `transform.regex` (extracciones y reemplazos con expresiones regulares), `transform.router` (bifurcador condicional a puerto `ok` o `error`).
 - **Salidas**: `output.sqlite_exec` (escritura en base de datos local), `output.email_smtp` (envío de correos vía SMTP), `output.ntfy` (notificaciones push a móviles vía ntfy.sh), `output.discord` (webhooks con mensajes y embeds), `output.slack` (notificaciones para equipos), `output.command` (ejecución de comandos de sistema de salida).
 
+### D. Optimización Extrema de Memoria y Recursos (3 Niveles Implementados)
+Diseñado para operar indefinidamente en servidores pequeños y Raspberry Pis con bajo consumo garantizado:
+1. **Nivel 1: Ajustes Inmediatos de SQLite y Concurrencia**:
+   - Limitación estricta de caché de SQLite en `dedalo/history.py`: `PRAGMA cache_size = -2000` (máximo 2 MB en lugar del default de hasta decenas de MB), `PRAGMA mmap_size = 0` (evita mapeo agresivo en memoria virtual), `PRAGMA temp_store = FILE`.
+   - Banderas de Uvicorn en `run.sh`: `--limit-concurrency 15`, `--timeout-keep-alive 5`, `--no-access-log`.
+2. **Nivel 2: Eliminación de Dependencias, Modos Headless y Compactación Activa**:
+   - **Evaluador de Cron Nativo (`dedalo/cron.py`)**: Reemplazo total de la librería externa `croniter` (y su dependencia pesada `python-dateutil`). Ahorro directo: **~5.4 MB de RAM** en tiempo de carga. Soporta intervalos `@every 30m`, shortcuts `@hourly`, `@daily` y sintaxis clásica de 5 campos cron.
+   - **Compactador de Heap (`dedalo/runtime.py:compact_memory`)**: Ejecuta `gc.collect()` forzado y llama a `libc.malloc_trim(0)` en sistemas Linux para devolver páginas no fragmentadas al sistema operativo de inmediato tras cada ejecución de flujo y en cada ciclo del planificador.
+   - **Modo Web Headless (`./run.sh --headless`)**: Omite el montaje de ficheros estáticos y la UI web. Mantiene la API REST y webhooks activos. Consumo en reposo: **~28-34 MB** en Linux.
+   - **Modo Demonio Puro (`./run.sh --daemon` / `python -m dedalo.headless`)**: Ejecuta únicamente el planificador de flujos (`Scheduler`) sin Uvicorn, FastAPI ni Starlette. Consumo en reposo: **~14-16 MB** en Linux.
+3. **Nivel 3: Aislamiento a Nivel de Sistema Operativo**:
+   - Banderas de entorno glibc en `run.sh`: `MALLOC_TRIM_THRESHOLD_=65536` y `PYTHONOPTIMIZE=1`.
+   - Perfil de servicio `systemd` documentado en `README.md` con límites `MemoryHigh=65M` y `MemoryMax=85M`.
+
 ---
 
 ## 5. Estructura del Repositorio
@@ -131,16 +147,18 @@ Sin añadir dependencias pesadas y aprovechando la librería estándar de Python
 dedalo/
 ├── data/
 │   ├── flows/              # Definiciones JSON y scripts Python compilados
-│   ├── history.db          # Historial de ejecuciones en SQLite (modo WAL)
+│   ├── history.db          # Historial de ejecuciones en SQLite (modo WAL, cache 2MB)
 │   ├── secrets.json        # Tokens y credenciales (permisos 0600)
 │   └── state/              # Estados persistentes entre ejecuciones (p. ej. RSS)
 ├── dedalo/
 │   ├── __init__.py
-│   ├── app.py              # API REST con FastAPI (rutas de flujos, ejecución, webhooks)
+│   ├── app.py              # API REST con FastAPI (soporta flag DEDALO_HEADLESS)
 │   ├── compiler.py         # Compilador de grafos visuales a scripts Python secuenciales
+│   ├── cron.py             # Evaluador de cron nativo ultraligero (reemplazo de croniter)
+│   ├── headless.py         # Ejecutor demonio puro sin servidor web (~14-16 MB RAM)
 │   ├── history.py          # Gestor de base de datos SQLite para historial y purga
-│   ├── runtime.py          # Ejecutor de nodos y funciones de contexto
-│   ├── scheduler.py        # Planificador de tareas en segundo plano (cron/intervalos)
+│   ├── runtime.py          # Ejecutor de nodos, sandbox y compact_memory()
+│   ├── scheduler.py        # Planificador de tareas con cron nativo y compactación
 │   ├── secrets.py          # Carga y almacenamiento seguro de secretos
 │   ├── static/             # Frontend autónomo (HTML, CSS y JS sin empaquetar)
 │   │   ├── dedalo.css
@@ -148,14 +166,15 @@ dedalo/
 │   │   └── index.html
 │   ├── store.py            # Persistencia de flujos en ficheros JSON/PY
 │   └── templates.py        # Plantillas de inicio rápido
-├── tests/                  # Pruebas automatizadas (pytest)
+├── tests/                  # Pruebas automatizadas (pytest - 36 tests)
 │   ├── test_api.py
 │   ├── test_compiler.py
+│   ├── test_cron.py        # Pruebas del evaluador cron e intervalos nativo
 │   ├── test_history.py
 │   ├── test_runtime.py
 │   └── test_secrets.py
-├── pyproject.toml          # Configuración del paquete y dependencias mínimas
-├── run.sh                  # Script de arranque rápido (crea venv si es necesario)
+├── pyproject.toml          # Dependencias mínimas (sin croniter ni dateutil)
+├── run.sh                  # Arranque con opciones --headless y --daemon
 ├── stop.sh                 # Script para detener el servicio
 └── README.md               # Documentación general y despliegue systemd
 ```

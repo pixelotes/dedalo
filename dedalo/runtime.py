@@ -7,7 +7,9 @@ Los scripts compilados invocan directamente estas funciones sin sobrecarga de ru
 from __future__ import annotations
 
 import csv
+import ctypes
 import datetime
+import gc
 import glob
 import json
 import os
@@ -16,6 +18,7 @@ import shutil
 import smtplib
 import sqlite3
 import subprocess
+import sys
 import time
 import urllib.parse
 import xml.etree.ElementTree as ET
@@ -28,6 +31,16 @@ from typing import Any, Callable
 import httpx
 
 from dedalo import secrets
+
+
+def compact_memory() -> None:
+    """Fuerza la recolección de basura de Python y solicita a glibc liberar heap al SO."""
+    gc.collect()
+    if sys.platform.startswith("linux"):
+        try:
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
+        except Exception:
+            pass
 
 DEFAULT_TIMEOUT = 20.0
 DEFAULT_AGENT_TOKENS = 2048

@@ -110,3 +110,13 @@ def test_webhook_api():
     # Limpiar flujo de prueba
     client.delete(f"/api/flow?id={flow_id}")
 
+
+def test_health_api():
+    res = client.get("/health")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "ok"
+    assert "mode" in data
+    assert "service" in data and data["service"] == "dedalo"
+
+
