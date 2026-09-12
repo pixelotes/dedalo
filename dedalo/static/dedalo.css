@@ -43,7 +43,7 @@ body {
 
 /* Sprite SVG oculto */
 .sprite { display: none; }
-.ic { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vertical-align: middle; }
+.ic { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vertical-align: middle; pointer-events: none; }
 
 /* Barra Superior */
 .bar {
@@ -354,6 +354,7 @@ select {
   box-shadow: var(--shadow);
   cursor: move;
   z-index: 2;
+  pointer-events: auto;
   transition: box-shadow 0.15s, border-color 0.15s;
 }
 .node.selected {
@@ -425,6 +426,7 @@ select {
   background: var(--bg-panel);
   cursor: crosshair;
   position: relative;
+  pointer-events: auto;
 }
 .port.in { background: var(--text-muted); }
 .port.ok { border-color: var(--port-ok); }

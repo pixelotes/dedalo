@@ -29,6 +29,7 @@ const state = {
   historyRuns: [],
   selectedRunId: null,
   runHighlights: {},
+  activeInspector: null,
 };
 
 // ---------------------------------------------------------------------------
@@ -284,8 +285,8 @@ function setupEvents() {
   // Eventos globales de arrastre y clic en el canvas
   const canvas = $('canvasWrap');
   canvas.onmousedown = onCanvasMouseDown;
-  canvas.onmousemove = onCanvasMouseMove;
-  canvas.onmouseup = onCanvasMouseUp;
+  window.addEventListener('mousemove', onCanvasMouseMove);
+  window.addEventListener('mouseup', onCanvasMouseUp);
 
   // Controles de Zoom y Centrado
   if ($('btnZoomIn')) $('btnZoomIn').onclick = zoomIn;
@@ -395,11 +396,13 @@ function renderFlowsList() {
     const card = document.createElement('div');
     card.className = 'flow-card' + (fl.id === state.graph.name ? ' active' : '');
     card.onclick = () => {
+      document.querySelectorAll('.flow-card').forEach((c) => c.classList.remove('active'));
+      card.classList.add('active');
+      document.querySelectorAll('.node').forEach((n) => n.classList.remove('selected'));
+      state.selectedNodeId = null;
+      state.activeInspector = 'flow';
       if (fl.id === state.graph.name) {
-        if (state.selectedNodeId !== null) {
-          state.selectedNodeId = null;
-          render();
-        }
+        renderInspector();
         return;
       }
       withUnsavedCheck(() => openFlow(fl.id));
@@ -423,6 +426,7 @@ function renderFlowsList() {
     `;
 
     const badgeEl = info.querySelector('.' + badgeClass);
+    badgeEl.onmousedown = (e) => e.stopPropagation();
     badgeEl.onclick = async (e) => {
       e.stopPropagation();
       await toggleFlow(fl.id);
@@ -435,6 +439,7 @@ function renderFlowsList() {
     btnRunNow.className = 'btn sm icon-btn';
     btnRunNow.title = 'Ejecutar ahora en background';
     btnRunNow.innerHTML = '<svg class="ic" width="12" height="12"><use href="#i-play"/></svg>';
+    btnRunNow.onmousedown = (e) => e.stopPropagation();
     btnRunNow.onclick = async (e) => {
       e.stopPropagation();
       await runFlowNow(fl.id);
@@ -444,6 +449,7 @@ function renderFlowsList() {
     btnSched.className = 'btn sm icon-btn';
     btnSched.title = 'Programar periodicidad';
     btnSched.innerHTML = '<svg class="ic" width="12" height="12"><use href="#i-clock"/></svg>';
+    btnSched.onmousedown = (e) => e.stopPropagation();
     btnSched.onclick = (e) => {
       e.stopPropagation();
       openScheduleModal(fl.id);
@@ -453,8 +459,10 @@ function renderFlowsList() {
     btnDel.className = 'btn sm icon-btn';
     btnDel.title = 'Eliminar flujo';
     btnDel.innerHTML = '<svg class="ic" width="12" height="12"><use href="#i-trash"/></svg>';
+    btnDel.onmousedown = (e) => e.stopPropagation();
     btnDel.onclick = (e) => {
       e.stopPropagation();
+      e.preventDefault();
       deleteFlow(fl.id);
     };
 
@@ -899,7 +907,9 @@ function resetGraph(name = 'nuevo-flujo') {
   state.graph = { name, nodes: [], edges: [], version: 1 };
   state.meta = { name, description: '', schedule: '', enabled: true };
   state.selectedNodeId = null;
+  state.activeInspector = 'flow';
   state.runHighlights = {};
+  state.isDirty = false;
   state.view = { k: 1, x: 0, y: 0 };
   $('flowName').value = name;
   render();
@@ -918,6 +928,7 @@ async function openFlow(flowId) {
     state.meta = data.meta || { name: flowId };
     $('flowName').value = state.graph.name;
     state.selectedNodeId = null;
+    state.activeInspector = 'flow';
     state.runHighlights = {};
     state.isDirty = false;
     render();
@@ -941,6 +952,7 @@ async function loadTemplate(templateName) {
     state.meta = { name: graph.name };
     $('flowName').value = graph.name;
     state.selectedNodeId = null;
+    state.activeInspector = 'flow';
     state.runHighlights = {};
     markDirty();
     render();
@@ -988,12 +1000,17 @@ async function saveFlow() {
 async function deleteFlow(flowId) {
   if (!confirm(`¿Eliminar definitivamente el flujo «${flowId}»?`)) return;
   try {
-    await fetch(`/api/flow?id=${encodeURIComponent(flowId)}`, { method: 'DELETE' });
+    const res = await fetch(`/api/flow?id=${encodeURIComponent(flowId)}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error();
     toast(`Flujo «${flowId}» eliminado.`);
-    if (state.graph.name === flowId) resetGraph();
+    if (state.graph.name === flowId) {
+      state.isDirty = false;
+      state.activeInspector = null;
+      resetGraph('nuevo-flujo');
+    }
     await loadFlows();
   } catch (e) {
-    toast('Error al eliminar');
+    toast('Error al eliminar flujo');
   }
 }
 
@@ -1215,11 +1232,19 @@ function renderNodes() {
       if (e.target.closest('.node-btn-del')) return;
       if (e.target.closest('.node-btn-edit-code')) return;
       if (e.button !== 0) return;
+      e.stopPropagation();
+
       state.selectedNodeId = node.id;
+      state.activeInspector = 'node';
       state.dragNode = node;
       const mouseWorld = screenToWorld(e.clientX, e.clientY);
       state.dragOffset = { x: mouseWorld.x - node.x, y: mouseWorld.y - node.y };
-      render();
+
+      // Actualizar selección visual sin destruir elementos del DOM
+      document.querySelectorAll('.node').forEach((n) => n.classList.remove('selected'));
+      el.classList.add('selected');
+      document.querySelectorAll('.flow-card').forEach((c) => c.classList.remove('active'));
+      renderInspector();
     };
 
     container.appendChild(el);
@@ -1278,10 +1303,13 @@ function onCanvasMouseDown(e) {
     return;
   }
 
-  // Deseleccionar nodo si se hace clic en el lienzo vacío
-  if (state.selectedNodeId !== null) {
+  // Deseleccionar nodo y flujo si se hace clic en el fondo vacío del lienzo
+  if (state.selectedNodeId !== null || state.activeInspector !== null) {
     state.selectedNodeId = null;
-    render();
+    state.activeInspector = null;
+    document.querySelectorAll('.node').forEach((n) => n.classList.remove('selected'));
+    document.querySelectorAll('.flow-card').forEach((c) => c.classList.remove('active'));
+    renderInspector();
   }
 
   // Iniciar paneo arrastrando el fondo del lienzo (botón izquierdo o central)
@@ -1310,7 +1338,7 @@ function onCanvasMouseMove(e) {
     state.dragNode.y = Math.round(mouseWorld.y - state.dragOffset.y);
     markDirty();
     renderWires();
-    const nodeEl = document.querySelector(`.node.selected`);
+    const nodeEl = document.querySelector(`.node[data-id="${state.dragNode.id}"]`);
     if (nodeEl) {
       nodeEl.style.left = `${state.dragNode.x}px`;
       nodeEl.style.top = `${state.dragNode.y}px`;
@@ -1374,14 +1402,31 @@ function renderInspector() {
   const body = $('inspectorBody');
   if (!body) return;
 
-  const node = state.graph.nodes.find((n) => n.id === state.selectedNodeId);
-  if (node) {
-    if (titleEl) titleEl.textContent = 'Ajustes del Nodo';
-    renderNodeInspector(node, body);
-  } else {
+  if (state.selectedNodeId) {
+    const node = state.graph.nodes.find((n) => n.id === state.selectedNodeId);
+    if (node) {
+      if (titleEl) titleEl.textContent = 'Ajustes del Nodo';
+      renderNodeInspector(node, body);
+      return;
+    }
+  }
+
+  if (state.activeInspector === 'flow') {
     if (titleEl) titleEl.textContent = 'Ajustes del Flujo';
     renderFlowInspector(body);
+    return;
   }
+
+  // Estado vacío: clic fuera en el lienzo sin nodo ni flujo seleccionado
+  if (titleEl) titleEl.textContent = 'Inspector';
+  body.innerHTML = `
+    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 260px; text-align: center; color: var(--text-muted); gap: 12px; padding: 20px;">
+      <svg class="ic" width="36" height="36" style="opacity: 0.35;"><use href="#i-flow"/></svg>
+      <p style="font-size: 0.84rem; margin: 0; line-height: 1.5;">
+        Haz clic en un <b>nodo</b> del lienzo o en un <b>flujo</b> de la barra lateral para ver y editar sus ajustes.
+      </p>
+    </div>
+  `;
 }
 
 function renderNodeInspector(node, body) {
@@ -1711,9 +1756,18 @@ function renderFlowInspector(body) {
   btnAdvSched.innerHTML = '<svg class="ic" width="13" height="13"><use href="#i-clock"/></svg> Programación avanzada...';
   btnAdvSched.onclick = () => openScheduleModal(state.graph.name);
 
+  const btnDelFlow = document.createElement('button');
+  btnDelFlow.className = 'btn secondary sm';
+  btnDelFlow.style.color = 'var(--port-err)';
+  btnDelFlow.style.borderColor = 'rgba(239, 68, 68, 0.35)';
+  btnDelFlow.style.marginTop = '6px';
+  btnDelFlow.innerHTML = '<svg class="ic" width="13" height="13"><use href="#i-trash"/></svg> Eliminar este flujo';
+  btnDelFlow.onclick = () => deleteFlow(state.graph.name);
+
   actBox.appendChild(btnSave);
   actBox.appendChild(btnRun);
   actBox.appendChild(btnAdvSched);
+  actBox.appendChild(btnDelFlow);
   body.appendChild(actBox);
 }
 
