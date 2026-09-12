@@ -51,6 +51,15 @@
   <symbol id="i-history" viewBox="0 0 24 24">
     <path d="M12 8v4l3 3m6-3a9 9 0 1 1-2.636-6.364M21 3v5h-5"/>
   </symbol>
+  <symbol id="i-chevron-right" viewBox="0 0 24 24">
+    <polyline points="9 18 15 12 9 6"/>
+  </symbol>
+  <symbol id="i-chevron-left" viewBox="0 0 24 24">
+    <polyline points="15 18 9 12 15 6"/>
+  </symbol>
+  <symbol id="i-sidebar-right" viewBox="0 0 24 24">
+    <rect x="3" y="3" width="18" height="18" rx="2"/><line x1="15" y1="3" x2="15" y2="21"/>
+  </symbol>
   <symbol id="i-theme" viewBox="0 0 24 24">
     <circle cx="12" cy="12" r="9"/>
     <path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none"/>
@@ -76,6 +85,7 @@
   <button id="btnCompile" class="btn secondary" title="Ver código generado"><svg class="ic" width="14" height="14"><use href="#i-code"/></svg> Ver código</button>
   <button id="btnRun" class="btn secondary" title="Probar flujo ahora"><svg class="ic" width="14" height="14"><use href="#i-play"/></svg> Probar</button>
   <button id="btnSave" class="btn primary" title="Guardar flujo"><svg class="ic" width="14" height="14"><use href="#i-save"/></svg> Guardar</button>
+  <button id="btnToggleInspector" class="btn icon-btn" title="Alternar panel derecho" aria-label="Alternar panel de ajustes"><svg class="ic" width="16" height="16"><use href="#i-sidebar-right"/></svg></button>
   <button id="btnTheme" class="btn icon-btn" title="Cambiar tema" aria-label="Cambiar tema"><svg class="ic" width="16" height="16"><use href="#i-theme"/></svg></button>
 </header>
 
@@ -211,11 +221,21 @@
         <svg class="ic" width="14" height="14"><use href="#i-center"/></svg>
       </button>
     </div>
+    <!-- Botón flotante para expandir el inspector cuando está colapsado -->
+    <button id="btnExpandInspector" class="inspector-expand-btn" title="Mostrar panel de ajustes" hidden>
+      <svg class="ic" width="14" height="14"><use href="#i-chevron-left"/></svg>
+      <span>Ajustes</span>
+    </button>
   </section>
 
   <!-- Inspector derecho -->
   <aside class="inspector" id="inspector">
-    <h2 id="inspectorTitle">Ajustes del Flujo</h2>
+    <div class="inspector-head">
+      <h2 id="inspectorTitle">Ajustes del Flujo</h2>
+      <button class="icon-btn" id="btnCollapseInspector" title="Colapsar panel" aria-label="Colapsar panel">
+        <svg class="ic" width="14" height="14"><use href="#i-chevron-right"/></svg>
+      </button>
+    </div>
     <div id="inspectorBody"></div>
   </aside>
 

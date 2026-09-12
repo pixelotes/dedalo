@@ -38,6 +38,7 @@ const state = {
 
 async function init() {
   setupTheme();
+  setupInspector();
   setupEvents();
   await loadCatalog();
   await loadTemplates();
@@ -56,6 +57,51 @@ function setupTheme() {
     document.documentElement.setAttribute('data-theme', next);
     localStorage.setItem('dedalo_theme', next);
   };
+}
+
+function setInspectorCollapsed(collapsed, save = true) {
+  const inspector = $('inspector');
+  const btnExpand = $('btnExpandInspector');
+  const btnToggle = $('btnToggleInspector');
+  if (!inspector) return;
+
+  if (collapsed) {
+    inspector.classList.add('collapsed');
+    if (btnExpand) btnExpand.hidden = false;
+    if (btnToggle) {
+      btnToggle.classList.remove('active');
+      btnToggle.setAttribute('title', 'Mostrar panel lateral (Ajustes)');
+    }
+    if (save) localStorage.setItem('dedalo_inspector_collapsed', 'true');
+  } else {
+    inspector.classList.remove('collapsed');
+    if (btnExpand) btnExpand.hidden = true;
+    if (btnToggle) {
+      btnToggle.classList.add('active');
+      btnToggle.setAttribute('title', 'Ocultar panel lateral (Ajustes)');
+    }
+    if (save) localStorage.setItem('dedalo_inspector_collapsed', 'false');
+  }
+}
+
+function toggleInspector() {
+  const inspector = $('inspector');
+  if (!inspector) return;
+  setInspectorCollapsed(!inspector.classList.contains('collapsed'));
+}
+
+function setupInspector() {
+  const saved = localStorage.getItem('dedalo_inspector_collapsed') === 'true';
+  setInspectorCollapsed(saved, false);
+
+  const btnToggle = $('btnToggleInspector');
+  if (btnToggle) btnToggle.onclick = toggleInspector;
+
+  const btnCollapse = $('btnCollapseInspector');
+  if (btnCollapse) btnCollapse.onclick = () => setInspectorCollapsed(true);
+
+  const btnExpand = $('btnExpandInspector');
+  if (btnExpand) btnExpand.onclick = () => setInspectorCollapsed(false);
 }
 
 function toast(msg) {
@@ -1245,6 +1291,11 @@ function renderNodes() {
       el.classList.add('selected');
       document.querySelectorAll('.flow-card').forEach((c) => c.classList.remove('active'));
       renderInspector();
+    };
+
+    el.ondblclick = (e) => {
+      e.stopPropagation();
+      setInspectorCollapsed(false);
     };
 
     container.appendChild(el);
