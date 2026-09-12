@@ -470,27 +470,106 @@ select {
   color: var(--text);
   background: var(--bg-input);
 }
-.code-box { width: 800px; height: 500px; }
-.code-body { flex: 1; display: flex; overflow: hidden; }
+.code-box {
+  width: 95vw;
+  height: 92vh;
+  max-width: 1600px;
+  max-height: 94vh;
+}
+.code-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
 .code-inputs {
-  width: 220px;
+  width: 290px;
+  flex: none;
   background: var(--bg-subtle);
   border-right: 1px solid var(--border);
-  padding: 12px;
-  font-size: 0.78rem;
+  padding: 14px;
+  font-size: 0.8rem;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
-.code-editor-wrap { flex: 1; display: flex; }
-.code-textarea {
-  flex: 1;
+.code-inputs h3 {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+.code-inputs .wired {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: var(--bg-panel);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: border-color 0.15s;
+}
+.code-inputs .wired:hover {
+  border-color: var(--primary);
+}
+.code-inputs .wired .kind {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+.code-inputs .wired code {
+  font-size: 0.82rem;
+  color: var(--primary);
   background: var(--bg-input);
-  border: none;
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+  display: inline-block;
+  transition: all 0.15s;
+}
+.code-inputs .wired code:hover {
+  background: rgba(59, 130, 246, 0.2);
+  text-decoration: underline;
+}
+.code-inputs .wired .what {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+.code-cheatsheet {
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+.code-cheatsheet code {
   color: var(--text);
+  background: var(--bg-input);
+  padding: 1px 4px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.code-cheatsheet code:hover {
+  color: var(--primary);
+}
+.code-editor-wrap {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  position: relative;
+  background: #282a36;
+}
+.code-editor-wrap .CodeMirror {
+  width: 100%;
+  height: 100%;
   font-family: var(--mono);
-  font-size: 0.85rem;
-  padding: 12px;
-  resize: none;
-  outline: none;
+  font-size: 0.9rem;
   line-height: 1.5;
 }
 .sheet-foot {

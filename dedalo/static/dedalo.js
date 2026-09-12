@@ -138,6 +138,7 @@ function setupEvents() {
   };
 
   $('sheetClose').onclick = () => $('sheet').hidden = true;
+  if ($('codeClose')) $('codeClose').onclick = () => $('codeSheet').hidden = true;
   $('codeCancel').onclick = () => $('codeSheet').hidden = true;
   $('codeSave').onclick = saveScriptCode;
 
@@ -672,6 +673,11 @@ function addNode(typeKey) {
     y: 100 + (state.graph.nodes.length % 5) * 40,
   };
 
+  if (typeKey === 'transform.script' || spec.code_field) {
+    const cf = spec.code_field || 'code';
+    node.config[cf] = '# Procesa los datos de entrada y devuelve el resultado\nreturn entrada.text()';
+  }
+
   state.graph.nodes.push(node);
   state.selectedNodeId = id;
   markDirty();
@@ -740,7 +746,27 @@ function renderNodes() {
     // Cuerpo
     const body = document.createElement('div');
     body.className = 'node-body';
-    body.textContent = node.id;
+    const spec = state.catalog.node_types[node.type];
+    const codeField = spec ? (spec.code_field || (node.type === 'transform.script' ? 'code' : null)) : null;
+
+    if (codeField) {
+      const codeLines = (node.config[codeField] || '').split('\n').filter((l) => l.trim()).length;
+      body.innerHTML = `
+        <div style="margin-bottom: 6px; font-weight: 500;">${escapeHtml(node.id)}</div>
+        <button class="btn sm secondary node-btn-edit-code" style="width: 100%; font-size: 0.72rem; padding: 3px 6px; display: flex; align-items: center; justify-content: center; gap: 4px;">
+          <svg class="ic" width="12" height="12"><use href="#i-code"/></svg>
+          <span>${codeLines ? `Editar (${codeLines} lín.)` : 'Escribir código'}</span>
+        </button>
+      `;
+      const btnEdit = body.querySelector('.node-btn-edit-code');
+      btnEdit.onmousedown = (e) => e.stopPropagation();
+      btnEdit.onclick = (e) => {
+        e.stopPropagation();
+        openCodeEditor(node);
+      };
+    } else {
+      body.textContent = node.id;
+    }
     el.appendChild(body);
 
     // Puertos
@@ -780,6 +806,7 @@ function renderNodes() {
     el.onmousedown = (e) => {
       if (e.target.classList.contains('port')) return;
       if (e.target.closest('.node-btn-del')) return;
+      if (e.target.closest('.node-btn-edit-code')) return;
       state.selectedNodeId = node.id;
       state.dragNode = node;
       const rect = el.getBoundingClientRect();
@@ -954,13 +981,24 @@ function renderNodeInspector(node, body) {
   }));
 
   // Botón para editar código si es script
-  if (spec.code_field) {
+  const codeField = spec.code_field || (node.type === 'transform.script' ? 'code' : null);
+  if (codeField) {
+    const codeLines = (node.config[codeField] || '').split('\n').filter((l) => l.trim()).length;
+    const btnBox = document.createElement('div');
+    btnBox.className = 'field-group';
+    btnBox.style.marginBottom = '14px';
+    btnBox.innerHTML = '<label>Código Python *</label>';
+
     const btnCode = document.createElement('button');
     btnCode.className = 'btn primary';
-    btnCode.style.marginBottom = '14px';
-    btnCode.textContent = 'Editar código Python...';
+    btnCode.style.display = 'flex';
+    btnCode.style.alignItems = 'center';
+    btnCode.style.justifyContent = 'center';
+    btnCode.style.gap = '6px';
+    btnCode.innerHTML = `<svg class="ic" width="14" height="14"><use href="#i-code"/></svg> <span>${codeLines ? `Editar código (${codeLines} líneas)` : 'Escribir código…'}</span>`;
     btnCode.onclick = () => openCodeEditor(node);
-    body.appendChild(btnCode);
+    btnBox.appendChild(btnCode);
+    body.appendChild(btnBox);
   }
 
   // Campos de configuración
@@ -970,7 +1008,7 @@ function renderNodeInspector(node, body) {
   });
 
   Object.entries(allFields).forEach(([key, defaultVal]) => {
-    if (key === 'fan_in' || key === spec.code_field) return;
+    if (key === 'fan_in' || key === codeField || (codeField && key === 'code')) return;
 
     // Comprobar show_when
     if (spec.show_when && spec.show_when[key]) {
@@ -1264,36 +1302,151 @@ function createField(label, value, onChange) {
 }
 
 // ---------------------------------------------------------------------------
-// Editor de Scripts Python para nodos `transform.script`
+// Editor de Scripts Python para nodos `transform.script` con CodeMirror
 // ---------------------------------------------------------------------------
+
+let codeMirrorInstance = null;
 
 function openCodeEditor(node) {
   state.editingScriptNodeId = node.id;
-  $('codeNodeId').textContent = node.id;
-  $('codeTextarea').value = node.config.code || 'return entrada.text()';
+  const spec = state.catalog.node_types[node.type];
+  const codeField = (spec && spec.code_field) || 'code';
 
-  // Mostrar lista de nodos entrantes disponibles
-  const inputsPanel = $('codeInputs');
-  const incoming = state.graph.edges.filter((e) => e.target === node.id);
-  inputsPanel.innerHTML = '<strong>Entradas conectadas:</strong><br/>';
-  if (!incoming.length) {
-    inputsPanel.innerHTML += '<p class="hint">No hay nodos conectados a este script.</p>';
+  $('codeNodeId').textContent = node.id;
+  $('codeSheet').hidden = false;
+
+  const currentCode = node.config[codeField] !== undefined
+    ? node.config[codeField]
+    : '# Procesa los datos de entrada y devuelve el resultado\nreturn entrada.text()';
+
+  // Inicializar CodeMirror si no existe aún
+  if (!codeMirrorInstance) {
+    const editorDiv = $('codeEditor');
+    editorDiv.innerHTML = '';
+    if (typeof CodeMirror !== 'undefined') {
+      codeMirrorInstance = CodeMirror(editorDiv, {
+        value: currentCode,
+        mode: 'python',
+        theme: 'dracula',
+        lineNumbers: true,
+        indentUnit: 4,
+        tabSize: 4,
+        indentWithTabs: false,
+        lineWrapping: true,
+        autofocus: true,
+        extraKeys: {
+          'Tab': (cm) => cm.execCommand('insertSoftTab'),
+          'Cmd-Enter': () => saveScriptCode(),
+          'Ctrl-Enter': () => saveScriptCode(),
+        },
+      });
+    }
   } else {
-    incoming.forEach((e) => {
-      inputsPanel.innerHTML += `<div><code>entrada["${escapeHtml(e.source)}"]</code></div>`;
+    codeMirrorInstance.setValue(currentCode);
+  }
+
+  // Refrescar CodeMirror tras mostrar el modal para calcular las dimensiones correctamente
+  if (codeMirrorInstance) {
+    setTimeout(() => {
+      codeMirrorInstance.refresh();
+      codeMirrorInstance.focus();
+    }, 20);
+  }
+
+  renderCodeEditorInputs(node);
+}
+
+function renderCodeEditorInputs(node) {
+  const inputsPanel = $('codeInputs');
+  inputsPanel.innerHTML = '';
+
+  const head = document.createElement('h3');
+  head.textContent = 'Variables de entrada';
+  inputsPanel.appendChild(head);
+
+  const incoming = state.graph.edges.filter((e) => e.target === node.id);
+  if (!incoming.length) {
+    const hint = document.createElement('p');
+    hint.className = 'hint';
+    hint.textContent = 'Conecta otros nodos a este para acceder a sus datos.';
+    inputsPanel.appendChild(hint);
+  } else {
+    incoming.forEach((edge) => {
+      const srcNode = state.graph.nodes.find((n) => n.id === edge.source);
+      const srcSpec = srcNode ? state.catalog.node_types[srcNode.type] : null;
+
+      const card = document.createElement('div');
+      card.className = 'wired';
+
+      const kind = document.createElement('span');
+      kind.className = 'kind';
+      kind.textContent = `${srcSpec ? srcSpec.label : (srcNode ? srcNode.type : '?')} · puerto ${edge.port}`;
+
+      const codeChip = document.createElement('code');
+      codeChip.textContent = `entrada["${edge.source}"]`;
+      codeChip.title = 'Haz clic para insertar en el código';
+      codeChip.onclick = () => {
+        if (codeMirrorInstance) {
+          codeMirrorInstance.replaceSelection(`entrada["${edge.source}"]`);
+          codeMirrorInstance.focus();
+        }
+      };
+
+      const what = document.createElement('span');
+      what.className = 'what';
+      what.textContent = srcSpec && srcSpec.output ? `Devuelve: ${srcSpec.output}` : 'Salida del nodo';
+
+      card.appendChild(kind);
+      card.appendChild(codeChip);
+      card.appendChild(what);
+      inputsPanel.appendChild(card);
     });
   }
-  $('codeSheet').hidden = false;
+
+  // Cheatsheet de métodos útiles de entrada
+  const cheatsheet = document.createElement('div');
+  cheatsheet.className = 'code-cheatsheet';
+  cheatsheet.innerHTML = `
+    <strong style="color: var(--text); display: block; margin-bottom: 4px;">Atajos de entrada:</strong>
+    <div>▸ <code title="Texto combinado">entrada.text()</code></div>
+    <div>▸ <code title="Primer dato entrante">entrada.first</code></div>
+    <div>▸ <code title="Diccionario seguro">entrada.get("id")</code></div>
+    <div>▸ <code title="Lista de entradas">list(entrada)</code></div>
+    <p style="margin-top: 6px; font-size: 0.7rem; color: var(--text-muted); line-height: 1.3;">
+      Usa <code style="cursor: default;">return</code> para pasar el valor a los nodos siguientes.<br/>
+      <span style="opacity: 0.8;">(Ctrl+Enter para aplicar)</span>
+    </p>
+  `;
+  cheatsheet.querySelectorAll('code').forEach((el) => {
+    if (el.title) {
+      el.onclick = () => {
+        if (codeMirrorInstance) {
+          codeMirrorInstance.replaceSelection(el.textContent);
+          codeMirrorInstance.focus();
+        }
+      };
+    }
+  });
+  inputsPanel.appendChild(cheatsheet);
 }
 
 function saveScriptCode() {
   const node = state.graph.nodes.find((n) => n.id === state.editingScriptNodeId);
-  if (node) {
-    node.config.code = $('codeTextarea').value;
-    markDirty();
-    toast('Código del nodo actualizado.');
+  if (!node) {
+    $('codeSheet').hidden = true;
+    return;
   }
+
+  const spec = state.catalog.node_types[node.type];
+  const codeField = (spec && spec.code_field) || 'code';
+  const val = codeMirrorInstance ? codeMirrorInstance.getValue() : '';
+
+  node.config[codeField] = val;
+  markDirty();
   $('codeSheet').hidden = true;
+  renderNodes();
+  renderInspector();
+  toast(`Código de «${node.id}» actualizado.`);
 }
 
 // ---------------------------------------------------------------------------

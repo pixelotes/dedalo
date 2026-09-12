@@ -184,18 +184,24 @@
 <div class="sheet" id="codeSheet" hidden>
   <div class="sheet-box code-box">
     <div class="sheet-head">
-      <strong>Código del nodo: <span id="codeNodeId"></span></strong>
-      <button id="codeCancel" class="icon-btn" title="Cerrar"><svg class="ic" width="14" height="14"><use href="#i-x"/></svg></button>
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <svg class="ic" width="18" height="18" style="color: var(--primary);"><use href="#i-code"/></svg>
+        <strong>Editor Python: <span id="codeNodeId" style="color: var(--primary);"></span></strong>
+      </div>
+      <button id="codeClose" class="icon-btn" title="Cerrar"><svg class="ic" width="14" height="14"><use href="#i-x"/></svg></button>
     </div>
     <div class="code-body">
       <aside class="code-inputs" id="codeInputs"></aside>
       <div class="code-editor-wrap">
-        <textarea id="codeTextarea" spellcheck="false" class="code-textarea" placeholder="# Escribe tu código Python aquí&#10;return entrada.text()"></textarea>
+        <div id="codeEditor" style="height: 100%; width: 100%;"></div>
       </div>
     </div>
     <div class="sheet-foot">
-      <span class="hint" id="codeHint">Se comprueba la sintaxis al guardar.</span>
-      <button id="codeSave" class="btn primary">Aceptar</button>
+      <span class="hint" id="codeHint">Se comprueba la sintaxis al guardar el flujo. Pulsa sobre cualquier variable de entrada para insertarla.</span>
+      <div style="display: flex; gap: 8px;">
+        <button id="codeCancel" class="btn secondary">Cancelar</button>
+        <button id="codeSave" class="btn primary"><svg class="ic" width="14" height="14"><use href="#i-save"/></svg> Aplicar cambios</button>
+      </div>
     </div>
   </div>
 </div>
@@ -268,6 +274,10 @@
   </div>
 </div>
 
+<link rel="stylesheet" href="/vendor/codemirror.min.css" />
+<link rel="stylesheet" href="/vendor/dracula.min.css" />
+<script src="/vendor/codemirror.min.js"></script>
+<script src="/vendor/codemirror-python.min.js"></script>
 <script src="/assets/dedalo.js"></script>
 </body>
 </html>

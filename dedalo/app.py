@@ -58,8 +58,9 @@ app.add_middleware(
 )
 
 # Servir archivos estáticos
-if (STATIC_DIR / "vendor").is_dir():
-    app.mount("/vendor", StaticFiles(directory=str(STATIC_DIR / "vendor")), name="vendor")
+VENDOR_DIR = STATIC_DIR / "vendor"
+VENDOR_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/vendor", StaticFiles(directory=str(VENDOR_DIR)), name="vendor")
 app.mount("/assets", StaticFiles(directory=str(STATIC_DIR)), name="assets")
 
 
@@ -125,6 +126,7 @@ def get_catalog() -> dict[str, Any]:
             "output": spec.output,
             "required": sorted(spec.required),
             "optional": spec.optional,
+            "code_field": spec.code_field,
             "choices": spec.choices,
             "choices_from": spec.choices_from,
             "show_when": spec.show_when,
