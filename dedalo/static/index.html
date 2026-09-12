@@ -24,6 +24,12 @@
   <symbol id="i-plus" viewBox="0 0 24 24">
     <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
   </symbol>
+  <symbol id="i-minus" viewBox="0 0 24 24">
+    <line x1="5" y1="12" x2="19" y2="12"/>
+  </symbol>
+  <symbol id="i-center" viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>
+  </symbol>
   <symbol id="i-play" viewBox="0 0 24 24">
     <polygon points="5 3 19 12 5 21 5 3"/>
   </symbol>
@@ -150,11 +156,30 @@
 
   <!-- Lienzo central interactivo -->
   <section class="canvas-wrap" id="canvasWrap">
-    <svg class="wires" id="wires"></svg>
-    <div class="nodes" id="nodes"></div>
+    <div class="canvas-content" id="canvasContent">
+      <svg class="wires" id="wires"></svg>
+      <div class="nodes" id="nodes"></div>
+    </div>
     <div class="empty-hint" id="emptyHint">
       Selecciona la pestaña <b>Nodos</b> y añade uno para empezar.<br />
       Conecta el punto verde (<b>ok</b>) o rojo (<b>error</b>) de un nodo al siguiente.
+    </div>
+
+    <!-- Controles flotantes de Zoom y Pan -->
+    <div class="zoombar" id="zoombar">
+      <button class="zoom-btn" id="btnZoomIn" title="Acercar (Zoom In)">
+        <svg class="ic" width="14" height="14"><use href="#i-plus"/></svg>
+      </button>
+      <button class="zoom-btn zoom-level-btn" id="btnZoomReset" title="Restablecer zoom (100%)">
+        <span id="zoomLevel">100%</span>
+      </button>
+      <button class="zoom-btn" id="btnZoomOut" title="Alejar (Zoom Out)">
+        <svg class="ic" width="14" height="14"><use href="#i-minus"/></svg>
+      </button>
+      <div class="zoom-sep"></div>
+      <button class="zoom-btn" id="btnZoomCenter" title="Centrar y encuadrar flujo">
+        <svg class="ic" width="14" height="14"><use href="#i-center"/></svg>
+      </button>
     </div>
   </section>
 

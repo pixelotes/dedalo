@@ -16,6 +16,11 @@ const state = {
   secrets: [],
   isDirty: false,
   activeTab: 'flows',
+  // Transformación y navegación 2D del lienzo (Pan y Zoom)
+  view: { k: 1, x: 0, y: 0 },
+  isPanning: false,
+  panStart: { x: 0, y: 0 },
+  panOrigin: { x: 0, y: 0 },
   // Interacción de arrastre y cableado
   dragNode: null,
   dragOffset: { x: 0, y: 0 },
@@ -103,6 +108,105 @@ async function onUnsavedSave() {
 }
 
 // ---------------------------------------------------------------------------
+// Navegación 2D: Zoom, Pan y Centrado
+// ---------------------------------------------------------------------------
+
+function screenToWorld(clientX, clientY) {
+  const rect = $('canvasWrap').getBoundingClientRect();
+  return {
+    x: (clientX - rect.left - state.view.x) / state.view.k,
+    y: (clientY - rect.top - state.view.y) / state.view.k,
+  };
+}
+
+function updateTransform() {
+  const content = $('canvasContent');
+  if (content) {
+    content.style.transform = `translate(${state.view.x}px, ${state.view.y}px) scale(${state.view.k})`;
+  }
+  const wrap = $('canvasWrap');
+  if (wrap) {
+    wrap.style.backgroundPosition = `${state.view.x}px ${state.view.y}px`;
+    wrap.style.backgroundSize = `${20 * state.view.k}px ${20 * state.view.k}px`;
+  }
+  const zoomLbl = $('zoomLevel');
+  if (zoomLbl) {
+    zoomLbl.textContent = `${Math.round(state.view.k * 100)}%`;
+  }
+}
+
+function middle() {
+  const wrap = $('canvasWrap');
+  return [wrap.clientWidth / 2, wrap.clientHeight / 2];
+}
+
+function zoomAt(px, py, factor) {
+  const minK = 0.2;
+  const maxK = 2.5;
+  const nextK = Math.min(maxK, Math.max(minK, state.view.k * factor));
+  const realFactor = nextK / state.view.k;
+  state.view.x = px - (px - state.view.x) * realFactor;
+  state.view.y = py - (py - state.view.y) * realFactor;
+  state.view.k = nextK;
+  updateTransform();
+}
+
+function zoomIn() {
+  zoomAt(...middle(), 1.25);
+}
+
+function zoomOut() {
+  zoomAt(...middle(), 1 / 1.25);
+}
+
+function resetZoom() {
+  const [cx, cy] = middle();
+  const worldCenterX = (cx - state.view.x) / state.view.k;
+  const worldCenterY = (cy - state.view.y) / state.view.k;
+  state.view.k = 1.0;
+  state.view.x = cx - worldCenterX * state.view.k;
+  state.view.y = cy - worldCenterY * state.view.k;
+  updateTransform();
+  toast('Zoom restablecido (100%)');
+}
+
+function centerFlow() {
+  if (!state.graph.nodes.length) {
+    state.view.x = 0;
+    state.view.y = 0;
+    state.view.k = 1.0;
+    updateTransform();
+    toast('Lienzo centrado.');
+    return;
+  }
+
+  const wrap = $('canvasWrap');
+  const boxW = wrap.clientWidth;
+  const boxH = wrap.clientHeight;
+
+  const xs = state.graph.nodes.map((n) => n.x);
+  const ys = state.graph.nodes.map((n) => n.y);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs) + 200;
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys) + 120;
+
+  const bboxW = Math.max(200, maxX - minX);
+  const bboxH = Math.max(120, maxY - minY);
+
+  const pad = 60;
+  const fitK = Math.min(1.5, Math.max(0.25, Math.min((boxW - pad * 2) / bboxW, (boxH - pad * 2) / bboxH)));
+
+  state.view.k = fitK;
+  const centerX = (minX + maxX) / 2;
+  const centerY = (minY + maxY) / 2;
+  state.view.x = boxW / 2 - centerX * state.view.k;
+  state.view.y = boxH / 2 - centerY * state.view.k;
+  updateTransform();
+  toast('Flujo centrado.');
+}
+
+// ---------------------------------------------------------------------------
 // Navegación de Pestañas en Sidebar
 // ---------------------------------------------------------------------------
 
@@ -160,6 +264,20 @@ function setupEvents() {
   canvas.onmousedown = onCanvasMouseDown;
   canvas.onmousemove = onCanvasMouseMove;
   canvas.onmouseup = onCanvasMouseUp;
+
+  // Controles de Zoom y Centrado
+  if ($('btnZoomIn')) $('btnZoomIn').onclick = zoomIn;
+  if ($('btnZoomOut')) $('btnZoomOut').onclick = zoomOut;
+  if ($('btnZoomReset')) $('btnZoomReset').onclick = resetZoom;
+  if ($('btnZoomCenter')) $('btnZoomCenter').onclick = centerFlow;
+
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+    zoomAt(px, py, Math.exp(-e.deltaY * 0.0015));
+  }, { passive: false });
 }
 
 // ---------------------------------------------------------------------------
@@ -518,6 +636,7 @@ function resetGraph(name = 'nuevo-flujo') {
   state.graph = { name, nodes: [], edges: [], version: 1 };
   state.meta = { name, description: '', schedule: '', enabled: true };
   state.selectedNodeId = null;
+  state.view = { k: 1, x: 0, y: 0 };
   $('flowName').value = name;
   render();
   toast('Lienzo en blanco.');
@@ -535,6 +654,7 @@ async function openFlow(flowId) {
     state.isDirty = false;
     render();
     renderFlowsList();
+    centerFlow();
     toast(`Flujo «${flowId}» cargado.`);
   } catch (e) {
     toast('Error al cargar flujo.');
@@ -552,6 +672,7 @@ async function loadTemplate(templateName) {
     state.selectedNodeId = null;
     markDirty();
     render();
+    centerFlow();
     toast(`Plantilla «${templateName}» cargada.`);
   } catch (e) {
     toast('Error al cargar plantilla.');
@@ -711,6 +832,7 @@ function render() {
   renderWires();
   renderNodes();
   renderInspector();
+  updateTransform();
 }
 
 function renderNodes() {
@@ -807,10 +929,11 @@ function renderNodes() {
       if (e.target.classList.contains('port')) return;
       if (e.target.closest('.node-btn-del')) return;
       if (e.target.closest('.node-btn-edit-code')) return;
+      if (e.button !== 0) return;
       state.selectedNodeId = node.id;
       state.dragNode = node;
-      const rect = el.getBoundingClientRect();
-      state.dragOffset = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      const mouseWorld = screenToWorld(e.clientX, e.clientY);
+      state.dragOffset = { x: mouseWorld.x - node.x, y: mouseWorld.y - node.y };
       render();
     };
 
@@ -866,23 +989,40 @@ function renderWires() {
 // ---------------------------------------------------------------------------
 
 function onCanvasMouseDown(e) {
-  if (e.target.closest('.node') || e.target.closest('.port')) {
+  if (e.target.closest('.node') || e.target.closest('.port') || e.target.closest('.zoombar')) {
     return;
   }
+
+  // Deseleccionar nodo si se hace clic en el lienzo vacío
   if (state.selectedNodeId !== null) {
     state.selectedNodeId = null;
     render();
   }
+
+  // Iniciar paneo arrastrando el fondo del lienzo (botón izquierdo o central)
+  if (e.button === 0 || e.button === 1) {
+    state.isPanning = true;
+    state.panStart = { x: e.clientX, y: e.clientY };
+    state.panOrigin = { x: state.view.x, y: state.view.y };
+    $('canvasWrap').classList.add('panning');
+  }
 }
 
 function onCanvasMouseMove(e) {
-  const canvasRect = $('canvasWrap').getBoundingClientRect();
-  const mouseX = e.clientX - canvasRect.left;
-  const mouseY = e.clientY - canvasRect.top;
+  if (state.isPanning) {
+    const dx = e.clientX - state.panStart.x;
+    const dy = e.clientY - state.panStart.y;
+    state.view.x = state.panOrigin.x + dx;
+    state.view.y = state.panOrigin.y + dy;
+    updateTransform();
+    return;
+  }
+
+  const mouseWorld = screenToWorld(e.clientX, e.clientY);
 
   if (state.dragNode) {
-    state.dragNode.x = Math.max(10, mouseX - state.dragOffset.x);
-    state.dragNode.y = Math.max(10, mouseY - state.dragOffset.y);
+    state.dragNode.x = Math.round(mouseWorld.x - state.dragOffset.x);
+    state.dragNode.y = Math.round(mouseWorld.y - state.dragOffset.y);
     markDirty();
     renderWires();
     const nodeEl = document.querySelector(`.node.selected`);
@@ -891,13 +1031,17 @@ function onCanvasMouseMove(e) {
       nodeEl.style.top = `${state.dragNode.y}px`;
     }
   } else if (state.wiring) {
-    state.wiring.currX = mouseX;
-    state.wiring.currY = mouseY;
+    state.wiring.currX = mouseWorld.x;
+    state.wiring.currY = mouseWorld.y;
     renderWires();
   }
 }
 
 function onCanvasMouseUp() {
+  if (state.isPanning) {
+    state.isPanning = false;
+    $('canvasWrap').classList.remove('panning');
+  }
   if (state.dragNode) state.dragNode = null;
   if (state.wiring) {
     state.wiring = null;

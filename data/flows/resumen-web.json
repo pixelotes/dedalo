@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "name": "resumen-web",
+  "nodes": [
+    {
+      "id": "pagina",
+      "type": "input.web_read",
+      "label": "",
+      "config": {
+        "url": "https://example.com",
+        "length": "medium"
+      },
+      "x": 80.0,
+      "y": 120.0
+    },
+    {
+      "id": "resumir",
+      "type": "transform.summarize",
+      "label": "",
+      "config": {
+        "engine": "luhn",
+        "length": "short"
+      },
+      "x": 380.0,
+      "y": 120.0
+    },
+    {
+      "id": "salida",
+      "type": "output.file",
+      "label": "",
+      "config": {
+        "filename": "resumen.txt",
+        "mode": "sobrescribir"
+      },
+      "x": 680.0,
+      "y": 120.0
+    }
+  ],
+  "edges": [
+    {
+      "source": "pagina",
+      "target": "resumir",
+      "port": "ok"
+    },
+    {
+      "source": "resumir",
+      "target": "salida",
+      "port": "ok"
+    }
+  ]
+}
