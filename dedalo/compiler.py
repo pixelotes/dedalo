@@ -484,7 +484,104 @@ NODE_TYPES: dict[str, NodeSpec] = {
             "mark_as_read": "Si es verdadero, marca los mensajes como leídos.",
         },
     ),
+    "input.sitemap": NodeSpec(
+        category="input",
+        runtime_fn="sitemap_read",
+        required=frozenset({"url"}),
+        optional={
+            "max_urls": 50,
+            "filter_hours": 0.0,
+            "filter_keyword": "",
+            "follow_sub_sitemaps": True,
+        },
+        label="Lector de Sitemap (XML)",
+        output="lista de URLs encontradas con fecha lastmod",
+        help={
+            "url": "URL del archivo sitemap.xml (ej. https://ejemplo.com/sitemap.xml).",
+            "max_urls": "Número máximo de URLs a recuperar.",
+            "filter_hours": "Horas recientes según fecha lastmod (0 = sin límite, ej. 24).",
+            "filter_keyword": "Filtrar URLs que contengan esta palabra o segmento.",
+            "follow_sub_sitemaps": "Si es un sitemapindex, desciende automáticamente a sub-sitemaps.",
+        },
+    ),
+    "input.weather": NodeSpec(
+        category="input",
+        runtime_fn="weather_forecast",
+        optional={
+            "city": "Valencia",
+            "latitude": 0.0,
+            "longitude": 0.0,
+            "forecast_days": 1,
+            "format": "summary",
+        },
+        label="Meteorología (Open-Meteo)",
+        output="resumen del tiempo y previsión",
+        choices={
+            "format": [
+                {"value": "summary", "label": "Resumen estructurado (dict)"},
+                {"value": "markdown", "label": "Texto formateado (Markdown)"},
+                {"value": "raw", "label": "JSON crudo Open-Meteo"},
+            ]
+        },
+        help={
+            "city": "Ciudad a consultar (geocodificación automática sin API key).",
+            "latitude": "Latitud exacta (opcional si se indica ciudad).",
+            "longitude": "Longitud exacta (opcional si se indica ciudad).",
+            "forecast_days": "Días de previsión a incluir (1 a 7).",
+        },
+    ),
     # -- Transformaciones ---------------------------------------------------
+    "transform.delay": NodeSpec(
+        category="transform",
+        runtime_fn="delay_execution",
+        optional={
+            "seconds": 2.0,
+            "jitter": 0.0,
+        },
+        label="Pausa / Espera (Delay)",
+        output="mismos datos recibidos (sin modificar)",
+        help={
+            "seconds": "Segundos de pausa antes de emitir los datos al siguiente nodo.",
+            "jitter": "Variación aleatoria máxima en segundos (0 a jitter) para evitar detección en scraping.",
+        },
+    ),
+    "transform.datetime": NodeSpec(
+        category="transform",
+        runtime_fn="datetime_ops",
+        optional={
+            "mode": "format",
+            "preset": "es_long",
+            "format_str": "%Y-%m-%d %H:%M:%S",
+            "offset_days": 0,
+            "offset_hours": 0,
+            "offset_minutes": 0,
+            "timezone": "Europe/Madrid",
+        },
+        label="Operaciones de Fecha y Hora",
+        output="fecha formateada (texto) y metadatos (dict)",
+        choices={
+            "mode": [
+                {"value": "format", "label": "Formatear fecha recibida / actual"},
+                {"value": "now", "label": "Hora actual del sistema"},
+                {"value": "offset", "label": "Aplicar offset (sumar/restar tiempo)"},
+            ],
+            "preset": [
+                {"value": "es_long", "label": "Largo español (ej: Domingo, 13 de Septiembre...)"},
+                {"value": "es_short", "label": "Corto español (ej: 13 de Sep de 2026 14:30)"},
+                {"value": "iso", "label": "Estándar ISO 8601"},
+                {"value": "date_only", "label": "Solo fecha (YYYY-MM-DD)"},
+                {"value": "time_only", "label": "Solo hora (HH:MM:SS)"},
+                {"value": "custom", "label": "Personalizado con format_str"},
+            ],
+        },
+        help={
+            "mode": "Modo de operación.",
+            "preset": "Formato predeterminado de salida.",
+            "offset_days": "Días a sumar (positivo) o restar (negativo).",
+            "offset_hours": "Horas a sumar o restar.",
+            "timezone": "Zona horaria IANA (ej. Europe/Madrid, UTC, America/Buenos_Aires).",
+        },
+    ),
     "transform.template": NodeSpec(
         category="transform",
         runtime_fn="template",
@@ -1030,6 +1127,35 @@ NODE_TYPES: dict[str, NodeSpec] = {
         help={
             "token_secret": "Nombre del secreto que contiene el token del bot.",
             "chat_id": "ID del chat o canal receptor.",
+        },
+    ),
+    "output.healthcheck": NodeSpec(
+        category="output",
+        runtime_fn="healthcheck_ping",
+        required=frozenset({"url"}),
+        optional={
+            "method": "GET",
+            "send_status": "auto",
+            "send_payload": False,
+        },
+        label="Ping de Monitorización (Heartbeat)",
+        output="confirmación del ping HTTP (dict)",
+        choices={
+            "method": [
+                {"value": "GET", "label": "GET"},
+                {"value": "POST", "label": "POST"},
+            ],
+            "send_status": [
+                {"value": "auto", "label": "Automático (éxito si nodos previos OK, fallo si error)"},
+                {"value": "success", "label": "Forzar señal de éxito"},
+                {"value": "fail", "label": "Forzar señal de fallo"},
+            ],
+        },
+        help={
+            "url": "URL de ping (Healthchecks.io, Uptime Kuma push o similar).",
+            "method": "Método HTTP para la petición de heartbeat.",
+            "send_status": "Estado a reportar al monitor.",
+            "send_payload": "Si es True, envía el payload o extracto de datos en el cuerpo POST.",
         },
     ),
     "output.alert": NodeSpec(

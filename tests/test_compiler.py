@@ -176,3 +176,33 @@ def test_deterministic_nodes_compile():
     assert callable(ns["run"])
 
 
+def test_n8n_nodes_compile():
+    g = compiler.Graph(
+        name="test_n8n_nodes",
+        nodes=[
+            _node("clima", "input.weather", {"city": "Valencia", "format": "summary"}),
+            _node("mapa", "input.sitemap", {"url": "https://example.com/sitemap.xml", "max_urls": 20}),
+            _node("tiempo", "transform.datetime", {"preset": "es_long", "timezone": "Europe/Madrid"}),
+            _node("pausa", "transform.delay", {"seconds": 1.5, "jitter": 0.5}),
+            _node("ping", "output.healthcheck", {"url": "https://hc-ping.com/123", "method": "GET"}),
+        ],
+        edges=[
+            _edge("clima", "tiempo", "ok"),
+            _edge("tiempo", "pausa", "ok"),
+            _edge("pausa", "ping", "ok"),
+        ],
+    )
+    src = compiler.compile(g)
+    assert "def run(ctx):" in src
+    assert "runtime.weather_forecast" in src
+    assert "runtime.sitemap_read" in src
+    assert "runtime.datetime_ops" in src
+    assert "runtime.delay_execution" in src
+    assert "runtime.healthcheck_ping" in src
+
+    ns = {}
+    exec(src, ns)
+    assert callable(ns["run"])
+
+
+

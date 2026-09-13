@@ -20,6 +20,7 @@ import imaplib
 import json
 import math
 import os
+import random
 import re
 import socket
 import ssl
@@ -2899,6 +2900,452 @@ def imap_read(
         return NodeResult("ok", data=emails_res)
     except Exception as exc:
         return NodeResult("error", error=f"Error leyendo IMAP: {exc}")
+
+
+def delay_execution(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    seconds: float = 2.0,
+    jitter: float = 0.0,
+) -> NodeResult:
+    """Pausa la ejecución durante un tiempo determinado antes de emitir los datos sin modificar."""
+    inp = Inputs(inputs)
+    wait_time = max(0.0, float(seconds))
+    if jitter > 0:
+        wait_time += random.uniform(0, float(jitter))
+    # Limitar a un máximo de 300 segundos para evitar bloqueos
+    wait_time = min(wait_time, 300.0)
+    if wait_time > 0:
+        time.sleep(wait_time)
+
+    first_data = inp.first()
+    if first_data is not None:
+        return NodeResult("ok", data=first_data)
+    text_val = inp.text()
+    return NodeResult("ok", data=text_val or f"Espera completada ({wait_time:.1f}s)")
+
+
+SPANISH_MONTHS = [
+    "", "enero", "febrero", "marzo", "abril", "mayo", "junio",
+    "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"
+]
+SPANISH_DAYS = [
+    "lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"
+]
+
+
+def datetime_ops(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    mode: str = "format",
+    preset: str = "es_long",
+    format_str: str = "",
+    offset_days: int = 0,
+    offset_hours: int = 0,
+    offset_minutes: int = 0,
+    timezone: str = "Europe/Madrid",
+    output_format: str = "text",
+) -> NodeResult:
+    """Calcula, formatea y manipula fechas y horas."""
+    inp = Inputs(inputs)
+
+    # 1. Determinar zona horaria
+    tz: datetime.tzinfo = datetime.timezone.utc
+    if timezone:
+        try:
+            from zoneinfo import ZoneInfo
+            tz = ZoneInfo(timezone.strip())
+        except Exception:
+            tz = datetime.timezone.utc
+
+    # 2. Determinar fecha base
+    dt: datetime.datetime | None = None
+    if mode == "now" or not inp.text().strip():
+        dt = datetime.datetime.now(tz=tz)
+    else:
+        raw_val = inp.text().strip()
+        for fmt in (
+            "%Y-%m-%dT%H:%M:%S%z",
+            "%Y-%m-%dT%H:%M:%SZ",
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d",
+            "%d/%m/%Y %H:%M:%S",
+            "%d/%m/%Y",
+        ):
+            try:
+                dt = datetime.datetime.strptime(raw_val.replace("Z", "+0000"), fmt)
+                break
+            except Exception:
+                pass
+        if dt is None:
+            dt = datetime.datetime.now(tz=tz)
+        elif dt.tzinfo is None and tz is not None:
+            dt = dt.replace(tzinfo=tz)
+
+    # 3. Aplicar desfases
+    delta = datetime.timedelta(
+        days=int(offset_days),
+        hours=int(offset_hours),
+        minutes=int(offset_minutes),
+    )
+    dt = dt + delta
+
+    # 4. Formatear según preset
+    weekday_es = SPANISH_DAYS[dt.weekday()].capitalize()
+    month_es = SPANISH_MONTHS[dt.month].capitalize()
+
+    if preset == "es_long":
+        formatted = f"{weekday_es}, {dt.day} de {month_es} de {dt.year}"
+    elif preset == "es_short":
+        formatted = f"{dt.day} de {month_es[:3]} de {dt.year} {dt.strftime('%H:%M')}"
+    elif preset == "date_only":
+        formatted = dt.strftime("%Y-%m-%d")
+    elif preset == "time_only":
+        formatted = dt.strftime("%H:%M:%S")
+    elif preset == "iso":
+        formatted = dt.isoformat()
+    elif preset == "custom" and format_str.strip():
+        try:
+            formatted = dt.strftime(format_str.strip())
+        except Exception:
+            formatted = dt.isoformat()
+    else:
+        formatted = dt.strftime(format_str.strip() if format_str.strip() else "%Y-%m-%d %H:%M:%S")
+
+    data = {
+        "iso": dt.isoformat(),
+        "formatted": formatted,
+        "timestamp": int(dt.timestamp()),
+        "year": dt.year,
+        "month": dt.month,
+        "month_es": month_es,
+        "day": dt.day,
+        "weekday_es": weekday_es,
+        "hour": dt.hour,
+        "minute": dt.minute,
+        "second": dt.second,
+        "timezone": str(tz),
+    }
+    if output_format == "dict":
+        return NodeResult("ok", data=data)
+    elif output_format == "iso":
+        return NodeResult("ok", data=dt.isoformat())
+    return NodeResult("ok", data=formatted)
+
+
+def sitemap_read(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    url: str = "",
+    max_urls: int = 50,
+    filter_hours: float = 0.0,
+    filter_keyword: str = "",
+    follow_sub_sitemaps: bool = True,
+    output_format: str = "json",
+) -> NodeResult:
+    """Descarga y analiza un sitemap.xml para extraer URLs y fechas de modificación."""
+    inp = Inputs(inputs)
+    target_url = (url or inp.text()).strip()
+    if not target_url:
+        return NodeResult("error", error="Falta la URL del sitemap.")
+    if not (target_url.startswith("http://") or target_url.startswith("https://")):
+        target_url = "https://" + target_url
+
+    max_limit = min(max(1, int(max_urls)), 500)
+    cutoff_time = None
+    if filter_hours and float(filter_hours) > 0:
+        cutoff_time = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=float(filter_hours))
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; Dedalo/1.0; +https://github.com/pixelotes/dedalo)",
+        "Accept": "application/xml, text/xml, */*",
+    }
+
+    try:
+        def fetch_xml(u: str) -> str:
+            with httpx.Client(timeout=15.0, follow_redirects=True, headers=headers) as client:
+                resp = client.get(u)
+                resp.raise_for_status()
+                return resp.text
+
+        def parse_sitemap_content(xml_text: str) -> tuple[list[dict[str, str]], list[str]]:
+            urls_found: list[dict[str, str]] = []
+            sub_sitemaps: list[str] = []
+            try:
+                root = ET.fromstring(xml_text)
+            except Exception:
+                return urls_found, sub_sitemaps
+
+            ns_pattern = re.compile(r"\{.*\}")
+            for elem in root:
+                tag = ns_pattern.sub("", elem.tag).lower()
+                if tag == "sitemap":
+                    loc = ""
+                    for child in elem:
+                        ctag = ns_pattern.sub("", child.tag).lower()
+                        if ctag == "loc" and child.text:
+                            loc = child.text.strip()
+                    if loc:
+                        sub_sitemaps.append(loc)
+                elif tag == "url":
+                    loc = ""
+                    lastmod = ""
+                    for child in elem:
+                        ctag = ns_pattern.sub("", child.tag).lower()
+                        if ctag == "loc" and child.text:
+                            loc = child.text.strip()
+                        elif ctag == "lastmod" and child.text:
+                            lastmod = child.text.strip()
+                    if loc:
+                        urls_found.append({"url": loc, "lastmod": lastmod})
+            return urls_found, sub_sitemaps
+
+        xml_content = fetch_xml(target_url)
+        found_urls, sub_maps = parse_sitemap_content(xml_content)
+
+        if not found_urls and sub_maps and follow_sub_sitemaps:
+            for sub_url in sub_maps[:10]:
+                if len(found_urls) >= max_limit:
+                    break
+                try:
+                    sub_xml = fetch_xml(sub_url)
+                    sub_urls, _ = parse_sitemap_content(sub_xml)
+                    found_urls.extend(sub_urls)
+                except Exception:
+                    continue
+
+        filtered: list[dict[str, str]] = []
+        for item in found_urls:
+            u_loc = item["url"]
+            if filter_keyword and filter_keyword.lower() not in u_loc.lower():
+                continue
+            if cutoff_time and item.get("lastmod"):
+                try:
+                    lm_str = item["lastmod"]
+                    if "T" in lm_str:
+                        lm_dt = datetime.datetime.fromisoformat(lm_str.replace("Z", "+00:00"))
+                    else:
+                        lm_dt = datetime.datetime.strptime(lm_str, "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc)
+                    if lm_dt < cutoff_time:
+                        continue
+                except Exception:
+                    pass
+            filtered.append(item)
+            if len(filtered) >= max_limit:
+                break
+
+        text_lines = [f"- {it['url']}" + (f" ({it['lastmod']})" if it.get("lastmod") else "") for it in filtered]
+        if output_format in ("text", "markdown"):
+            return NodeResult("ok", data="\n".join(text_lines))
+        return NodeResult("ok", data=filtered)
+    except Exception as exc:
+        return NodeResult("error", error=f"Error leyendo sitemap: {exc}")
+
+
+def healthcheck_ping(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    url: str = "",
+    method: str = "GET",
+    send_status: str = "auto",
+    send_payload: bool = False,
+) -> NodeResult:
+    """Envía un ping/heartbeat a Healthchecks.io, Uptime Kuma o servicios similares."""
+    inp = Inputs(inputs)
+    target_url = (url or inp.text()).strip()
+    if not target_url:
+        return NodeResult("error", error="Falta la URL de monitorización (healthcheck).")
+
+    has_prior_error = any(r.failed for r in inputs)
+    is_success = not has_prior_error
+
+    if send_status == "fail":
+        is_success = False
+    elif send_status == "success":
+        is_success = True
+
+    final_url = target_url
+    if "hc-ping.com" in final_url or "/ping/" in final_url:
+        if not is_success and not final_url.endswith("/fail"):
+            final_url = final_url.rstrip("/") + "/fail"
+    elif "/api/push/" in final_url:
+        delim = "&" if "?" in final_url else "?"
+        status_val = "up" if is_success else "down"
+        msg_val = "OK" if is_success else "Error"
+        final_url = f"{final_url}{delim}status={status_val}&msg={msg_val}"
+
+    body_text = None
+    if send_payload:
+        first_data = inp.first()
+        if first_data is not None:
+            if isinstance(first_data, (dict, list)):
+                body_text = json.dumps(first_data, ensure_ascii=False)[:4000]
+            else:
+                body_text = str(first_data)[:4000]
+        else:
+            body_text = inp.text()[:4000]
+
+    try:
+        with httpx.Client(timeout=10.0, follow_redirects=True) as client:
+            if method.upper() == "POST":
+                resp = client.post(final_url, content=body_text.encode("utf-8") if body_text else None)
+            else:
+                resp = client.get(final_url)
+        return NodeResult(
+            "ok",
+            data={
+                "url": final_url,
+                "status_code": resp.status_code,
+                "ok": resp.is_success,
+                "is_success_signal": is_success,
+                "message": f"Healthcheck ping enviado a {final_url} (HTTP {resp.status_code})",
+            },
+        )
+    except Exception as exc:
+        return NodeResult("error", error=f"Error enviando ping de healthcheck: {exc}")
+
+
+WMO_WEATHER_CODES: dict[int, tuple[str, str]] = {
+    0: ("Despejado", "☀️"),
+    1: ("Mayormente despejado", "🌤️"),
+    2: ("Parcialmente nublado", "⛅"),
+    3: ("Nublado", "☁️"),
+    45: ("Niebla", "🌫️"),
+    48: ("Niebla con escarcha", "🌫️"),
+    51: ("Llovizna ligera", "🌦️"),
+    53: ("Llovizna moderada", "🌦️"),
+    55: ("Llovizna densa", "🌧️"),
+    61: ("Lluvia ligera", "🌧️"),
+    63: ("Lluvia moderada", "🌧️"),
+    65: ("Lluvia intensa", "🌧️"),
+    71: ("Nieve ligera", "🌨️"),
+    73: ("Nieve moderada", "🌨️"),
+    75: ("Nieve intensa", "❄️"),
+    77: ("Granizo fino", "🌨️"),
+    80: ("Chubascos ligeros", "🌦️"),
+    81: ("Chubascos moderados", "🌧️"),
+    82: ("Chubascos violentos", "⛈️"),
+    85: ("Chubascos de nieve", "🌨️"),
+    86: ("Chubascos fuertes de nieve", "❄️"),
+    95: ("Tormenta eléctrica", "⛈️"),
+    96: ("Tormenta con granizo ligero", "⛈️"),
+    99: ("Tormenta con granizo fuerte", "⛈️"),
+}
+
+
+def weather_forecast(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    city: str = "Valencia",
+    latitude: float = 0.0,
+    longitude: float = 0.0,
+    forecast_days: int = 1,
+    format: str = "summary",
+) -> NodeResult:
+    """Obtiene datos meteorológicos y previsión desde Open-Meteo sin necesidad de API key."""
+    inp = Inputs(inputs)
+    target_city = city.strip()
+    if not target_city and inp.text().strip():
+        target_city = inp.text().strip()
+
+    lat = float(latitude)
+    lon = float(longitude)
+    resolved_city = target_city or "Ubicación"
+
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            if (lat == 0.0 and lon == 0.0) and target_city:
+                geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={urllib.parse.quote(target_city)}&count=1&language=es&format=json"
+                geo_resp = client.get(geo_url)
+                geo_resp.raise_for_status()
+                geo_data = geo_resp.json()
+                results = geo_data.get("results")
+                if not results:
+                    return NodeResult("error", error=f"No se pudo geocodificar la ciudad '{target_city}'.")
+                lat = results[0]["latitude"]
+                lon = results[0]["longitude"]
+                resolved_city = results[0].get("name", target_city)
+                country = results[0].get("country", "")
+                if country:
+                    resolved_city = f"{resolved_city}, {country}"
+
+            if lat == 0.0 and lon == 0.0:
+                lat, lon = 39.4699, -0.3763
+
+            days = min(max(1, int(forecast_days)), 7)
+            api_url = (
+                f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
+                f"&current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m"
+                f"&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max"
+                f"&forecast_days={days}&timezone=auto"
+            )
+            resp = client.get(api_url)
+            resp.raise_for_status()
+            wdata = resp.json()
+
+        curr = wdata.get("current", {})
+        daily = wdata.get("daily", {})
+
+        w_code = curr.get("weather_code", 0)
+        desc, emoji = WMO_WEATHER_CODES.get(w_code, ("Desconocido", "🌡️"))
+        temp = curr.get("temperature_2m", 0.0)
+        feels_like = curr.get("apparent_temperature", temp)
+        humidity = curr.get("relative_humidity_2m", 0)
+        wind = curr.get("wind_speed_10m", 0.0)
+        precip = curr.get("precipitation", 0.0)
+
+        daily_summary = []
+        if daily and daily.get("time"):
+            for i, d_date in enumerate(daily["time"]):
+                d_code = daily["weather_code"][i] if i < len(daily.get("weather_code", [])) else 0
+                d_desc, d_emoji = WMO_WEATHER_CODES.get(d_code, ("Desconocido", "🌡️"))
+                daily_summary.append({
+                    "date": d_date,
+                    "max_temp": daily["temperature_2m_max"][i] if i < len(daily.get("temperature_2m_max", [])) else None,
+                    "min_temp": daily["temperature_2m_min"][i] if i < len(daily.get("temperature_2m_min", [])) else None,
+                    "precip_prob": daily["precipitation_probability_max"][i] if i < len(daily.get("precipitation_probability_max", [])) else None,
+                    "weather_desc": d_desc,
+                    "emoji": d_emoji,
+                })
+
+        summary_dict = {
+            "city": resolved_city,
+            "latitude": lat,
+            "longitude": lon,
+            "temperature": temp,
+            "apparent_temperature": feels_like,
+            "weather_desc": desc,
+            "emoji": emoji,
+            "humidity": humidity,
+            "wind_speed_kmh": wind,
+            "precipitation_mm": precip,
+            "forecast": daily_summary,
+        }
+
+        today_forecast = daily_summary[0] if daily_summary else {}
+        prob_str = f" · 🌧️ {today_forecast.get('precip_prob')}% lluvia" if today_forecast.get("precip_prob") is not None else ""
+        temp_range = f" (Mín: {today_forecast.get('min_temp')}°C / Máx: {today_forecast.get('max_temp')}°C)" if today_forecast.get("max_temp") is not None else ""
+
+        markdown_text = (
+            f"{emoji} **{resolved_city}**: {temp}°C (Sensación {feels_like}°C) · {desc}\n"
+            f"💨 Viento {wind} km/h · 💧 Humedad {humidity}%{prob_str}{temp_range}"
+        )
+        summary_dict["markdown"] = markdown_text
+
+        if format == "raw":
+            return NodeResult("ok", data=wdata)
+        elif format == "markdown":
+            return NodeResult("ok", data=markdown_text)
+        else:
+            return NodeResult("ok", data=summary_dict)
+    except Exception as exc:
+        return NodeResult("error", error=f"Error consultando Open-Meteo: {exc}")
 
 
 def summarize(results_dict: dict[str, NodeResult], ctx: Any) -> dict[str, Any]:

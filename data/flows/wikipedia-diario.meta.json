@@ -1,7 +1,7 @@
 {
-  "name": "wikipedia-diario",
-  "description": "",
-  "schedule": "",
+  "name": "Artículo Diario de Wikipedia",
+  "description": "Obtiene un artículo aleatorio de la API oficial de Wikipedia en español y genera un resumen extractivo largo con el algoritmo de Luhn (sin LLM).",
+  "schedule": "@daily",
   "enabled": true,
-  "updated_at": 1789313835
+  "updated_at": 1789225490
 }

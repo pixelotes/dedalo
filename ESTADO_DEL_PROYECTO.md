@@ -20,7 +20,7 @@ Este documento resume el estado técnico actual de **Dédalo Standalone**, su or
 - **Control de cambios**: Detección de modificaciones no guardadas con modal de confirmación antes de cambiar de flujo.
 - **Optimización de Memoria Activa**: Compactación periódica de heap con recolección de basura forzada y devolución de páginas al OS vía `malloc_trim(0)`.
 - **Evasión Antibot sin Navegador Pesado**: Motor HTTP dual con `curl_cffi` (suplantación de TLS/HTTP/2 de Chrome/Safari/Firefox y User-Agents) y fallback transparente a `httpx`.
-- **Suite de pruebas**: 64 pruebas automatizadas pasando al 100% en `pytest`.
+- **Suite de pruebas**: 70 pruebas automatizadas pasando al 100% en `pytest`.
 
 ---
 
@@ -211,7 +211,17 @@ Para garantizar la máxima autonomía, predictibilidad y rendimiento en Raspberr
 - **Buscador en Vivo en la Paleta de Nodos**:
   - Campo `#paletteSearch` en la pestaña de nodos de la barra lateral que filtra instantáneamente por nombre, tipo, categoría o descripción conforme se escribe, ocultando categorías vacías.
 
-
+### I. 5 Nodos de Alta Utilidad Inspirados en n8n (52 Nodos en Total)
+- **Pausa y Espera con Jitter (`transform.delay`)**:
+  - Detiene el flujo durante `N` segundos (con opción de variación aleatoria `jitter` para eludir patrones mecánicos al scrapear webs) y reenvía los datos sin alterar.
+- **Operaciones de Fecha y Hora (`transform.datetime`)**:
+  - Cálculo, formateo en español (`Domingo, 13 de Septiembre...`), sumas/restas de días u horas (`offset_days`, `offset_hours`), zona horaria IANA con `zoneinfo` nativo y modos de salida en texto o diccionario estructurado.
+- **Lector de Sitemap XML (`input.sitemap`)**:
+  - Descarga y procesa archivos `sitemap.xml` (incluyendo índices anidados `<sitemapindex>`), filtrando por antigüedad en horas (`filter_hours`) o palabras clave en la URL.
+- **Ping de Monitorización Heartbeat (`output.healthcheck`)**:
+  - Emite peticiones GET o POST de confirmación a Healthchecks.io (`/fail` automático si hubo error) o Uptime Kuma Push (`?status=up&msg=OK`), permitiendo vigilar la salud de los crons.
+- **Meteorología Abierta (`input.weather`)**:
+  - Consulta en tiempo real a Open-Meteo (100% libre, sin registro ni claves API) con geocodificación automática por nombre de ciudad, previsión a varios días y códigos WMO traducidos al español con emojis.
 
 ---
 

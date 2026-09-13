@@ -1,7 +1,7 @@
 {
-  "name": "noticias-elotrolado",
-  "description": "",
-  "schedule": "",
+  "name": "Resumen Noticias ElOtroLado.net",
+  "description": "Descarga la portada de ElOtroLado.net usando curl_cffi para saltar antibots, extrae 10 noticias principales por selectores CSS y guarda un resumen en Markdown.",
+  "schedule": "@daily",
   "enabled": true,
-  "updated_at": 1789313835
+  "updated_at": 1789225452
 }

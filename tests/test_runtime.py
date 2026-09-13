@@ -939,6 +939,168 @@ def test_imap_read_mocked(monkeypatch):
     assert "Cuerpo del mensaje" in res.data[0]["body"]
 
 
+def test_delay_execution():
+    import time
+    inp = runtime.NodeResult("ok", data={"key": "val"})
+    start = time.time()
+    res = runtime.delay_execution(None, [inp], seconds=0.05, jitter=0.01)
+    duration = time.time() - start
+    assert res.ok
+    assert res.data == {"key": "val"}
+    assert duration >= 0.04
+
+
+def test_datetime_ops():
+    # 1. Preset español largo con salida dict
+    inp = runtime.NodeResult("ok", data="2026-09-13T14:30:00Z")
+    res = runtime.datetime_ops(None, [inp], preset="es_long", timezone="UTC", output_format="dict")
+    assert res.ok
+    assert "13 de Septiembre de 2026" in res.data["formatted"]
+    assert res.data["year"] == 2026
+    assert res.data["month"] == 9
+    assert res.data["day"] == 13
+
+    # 2. Offset (+2 días, -1 hora) con salida text
+    res_off = runtime.datetime_ops(None, [inp], preset="date_only", offset_days=2, offset_hours=-1, timezone="UTC", output_format="text")
+    assert res_off.ok
+    assert res_off.data == "2026-09-15"
+
+    # 3. Custom format con salida text
+    res_cust = runtime.datetime_ops(None, [inp], preset="custom", format_str="%Y/%m/%d %Hh", timezone="UTC", output_format="text")
+    assert res_cust.ok
+    assert res_cust.data == "2026/09/13 14h"
+
+
+def test_sitemap_read_mocked(monkeypatch):
+    xml_sample = """<?xml version="1.0" encoding="UTF-8"?>
+    <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+        <url>
+            <loc>https://example.com/noticia-tecnologia</loc>
+            <lastmod>2026-09-13T10:00:00+00:00</lastmod>
+        </url>
+        <url>
+            <loc>https://example.com/receta-cocina</loc>
+            <lastmod>2026-09-10T10:00:00+00:00</lastmod>
+        </url>
+    </urlset>
+    """
+
+    class FakeResponse:
+        status_code = 200
+        text = xml_sample
+        def raise_for_status(self): pass
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def get(self, url, **kwargs): return FakeResponse()
+
+    monkeypatch.setattr(runtime.httpx, "Client", FakeClient)
+
+    # 1. Sin filtro
+    res = runtime.sitemap_read(None, [], url="https://example.com/sitemap.xml", max_urls=10)
+    assert res.ok
+    assert len(res.data) == 2
+    assert res.data[0]["url"] == "https://example.com/noticia-tecnologia"
+
+    # 2. Con filtro de palabra clave
+    res_kw = runtime.sitemap_read(None, [], url="https://example.com/sitemap.xml", filter_keyword="tecnologia")
+    assert res_kw.ok
+    assert len(res_kw.data) == 1
+    assert "tecnologia" in res_kw.data[0]["url"]
+
+
+def test_healthcheck_ping_mocked(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        status_code = 200
+        is_success = True
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def get(self, url, **kwargs):
+            calls.append(("GET", url))
+            return FakeResponse()
+        def post(self, url, content=None, **kwargs):
+            calls.append(("POST", url, content))
+            return FakeResponse()
+
+    monkeypatch.setattr(runtime.httpx, "Client", FakeClient)
+
+    # 1. Healthchecks.io con éxito
+    res_ok = runtime.healthcheck_ping(None, [runtime.NodeResult("ok", data="todo bien")], url="https://hc-ping.com/abc-123")
+    assert res_ok.ok
+    assert calls[-1] == ("GET", "https://hc-ping.com/abc-123")
+
+    # 2. Healthchecks.io con fallo previo -> debe añadir /fail
+    res_fail = runtime.healthcheck_ping(None, [runtime.NodeResult("error", error="falló")], url="https://hc-ping.com/abc-123")
+    assert res_fail.ok
+    assert calls[-1] == ("GET", "https://hc-ping.com/abc-123/fail")
+
+    # 3. Uptime Kuma push
+    res_kuma = runtime.healthcheck_ping(None, [runtime.NodeResult("ok")], url="http://kuma:3001/api/push/xyz")
+    assert res_kuma.ok
+    assert "status=up&msg=OK" in calls[-1][1]
+
+
+def test_weather_forecast_mocked(monkeypatch):
+    class FakeGeoResponse:
+        status_code = 200
+        def raise_for_status(self): pass
+        def json(self):
+            return {
+                "results": [
+                    {"name": "Valencia", "country": "España", "latitude": 39.47, "longitude": -0.38}
+                ]
+            }
+
+    class FakeWeatherResponse:
+        status_code = 200
+        def raise_for_status(self): pass
+        def json(self):
+            return {
+                "current": {
+                    "temperature_2m": 22.4,
+                    "apparent_temperature": 23.1,
+                    "relative_humidity_2m": 60,
+                    "wind_speed_10m": 14.5,
+                    "precipitation": 0.0,
+                    "weather_code": 1,
+                },
+                "daily": {
+                    "time": ["2026-09-13"],
+                    "temperature_2m_max": [26.0],
+                    "temperature_2m_min": [18.0],
+                    "precipitation_probability_max": [10],
+                    "weather_code": [1],
+                }
+            }
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def get(self, url, **kwargs):
+            if "geocoding" in url:
+                return FakeGeoResponse()
+            return FakeWeatherResponse()
+
+    monkeypatch.setattr(runtime.httpx, "Client", FakeClient)
+
+    res = runtime.weather_forecast(None, [], city="Valencia", format="summary")
+    assert res.ok
+    assert res.data["city"] == "Valencia, España"
+    assert res.data["temperature"] == 22.4
+    assert "Mayormente despejado" in res.data["weather_desc"]
+    assert "🌤️" in res.data["markdown"]
+    assert "22.4°C" in res.data["markdown"]
+
+
+
 
 
 
