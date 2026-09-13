@@ -492,7 +492,7 @@ def test_summarize_textrank():
     assert res_tr_bullets.ok
     lines = [line.strip() for line in res_tr_bullets.data.splitlines() if line.strip()]
     assert len(lines) == 3
-    assert all(l.startswith("- ") for l in lines)
+    assert all(ln.startswith("- ") for ln in lines)
     # Primera frase central identificada
     assert "Guido van Rossum" in res_tr_bullets.data
 

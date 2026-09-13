@@ -13,7 +13,6 @@ import difflib
 import email
 import email.header
 import gc
-import glob
 import hashlib
 import html
 import imaplib
@@ -2741,7 +2740,7 @@ def mqtt_read(
             if len(connack) < 4 or connack[0] != 0x20 or connack[3] != 0:
                 return NodeResult("error", error="Fallo al conectar con el broker MQTT.")
             sock.sendall(subscribe_packet)
-            suback = sock.recv(5)
+            sock.recv(5)
 
             sock.settimeout(float(timeout))
             data = sock.recv(4096)

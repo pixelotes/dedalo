@@ -1,4 +1,4 @@
-# Python
+# Python y entornos de ejecucion
 __pycache__/
 *.py[cod]
 *$py.class
@@ -19,27 +19,49 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+.pytest_cache/
+.coverage
+htmlcov/
 
-# Virtual environments
+# Entornos virtuales
 .venv/
 venv/
+env/
 ENV/
 
-# Environment and secrets
+# Variables de entorno y secretos
 .env
 .env.*
 !.env.example
-data/secrets/*.secret
+*.secret
+*.pem
+*.key
+data/secrets/
+data/secrets.json
+secrets.json
 
-# Runtime state and logs
-data/state/
-data/logs/
-data/outputs/
+# Bases de datos SQLite
+*.db
+*.db-*
+*.sqlite*
 data/*.db
 data/*.db-*
+data/*.sqlite*
+
+# Flujos de usuario (no publicar flujos privados)
+data/flows/*
+!data/flows/.gitkeep
+
+# Salidas de ejecucion, estado y logs
+data/outputs/
+data/logs/
+data/state/*
+!data/state/.gitkeep
 *.log
 
-# IDE
+# Editores y sistema operativo
 .vscode/
 .idea/
 .DS_Store
+*.swp
+*~

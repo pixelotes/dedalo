@@ -3,7 +3,6 @@
 import io
 import json
 import zipfile
-import pytest
 
 from dedalo import store
 

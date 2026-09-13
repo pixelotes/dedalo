@@ -6,6 +6,7 @@ o mediante variables de entorno `DEDALO_SECRET_<NOMBRE>`.
 
 from __future__ import annotations
 
+import builtins
 import os
 import re
 from pathlib import Path
@@ -31,8 +32,6 @@ def _path(name: str) -> Path:
 def _env_key(name: str) -> str:
     return f"DEDALO_SECRET_{name.upper().replace('-', '_')}"
 
-
-import builtins
 
 def names() -> list[str]:
     """Lista todos los nombres de secretos disponibles (en disco o en el entorno)."""

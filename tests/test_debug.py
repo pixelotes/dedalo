@@ -1,6 +1,6 @@
 import pytest
 from fastapi.testclient import TestClient
-from dedalo import compiler, history, runtime
+from dedalo import history, runtime
 from dedalo.app import app
 
 
