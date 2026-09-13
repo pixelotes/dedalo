@@ -152,8 +152,16 @@ Para evitar los cientos de megabytes de consumo y picos de CPU de un navegador h
 - **User-Agent configurable**: Selección de presets (`chrome`, `safari`, `firefox`, `mobile`, `bot`) o User-Agent personalizado libre.
 - **Fallback resiliente**: Si una petición en modo `auto` encuentra un fallo en `curl_cffi`, se intenta automáticamente mediante `httpx` antes de reportar un error.
 
-### F. Resumen Estadístico Avanzado (Luhn Configurable y Tolerante)
-Se ha potenciado el nodo de resumen determinista sin LLM (`transform.summarize` con motor `luhn`):
+### F. Resumen Estadístico Avanzado (Luhn, Luhn+ y TextRank)
+Se ha potenciado el nodo de resumen determinista sin LLM (`transform.summarize`):
+- **Cuatro Motores Disponibles**:
+  - **`luhn+`** (por defecto): Filtro de más de 120 stopwords (español e inglés), ponderación por densidad informativa normalizada por longitud ($\sqrt{N}$), sesgo de posición (*Lead Bias* +50% a la frase definitoria de apertura) y selección por diversidad (MMR ligero que penaliza la redundancia temática).
+  - **`textrank`**: Implementación nativa en Python puro del algoritmo clásico de Mihalcea & Tarau (2004). Construye un grafo de similitud léxica entre oraciones y calcula su centralidad mediante iteraciones de PageRank amortiguado ($d=0.85$).
+  - **`luhn`**: Algoritmo clásico de frecuencia simple para compatibilidad regresiva.
+  - **`llm`**: Resumen generativo mediante API OpenAI/compatible.
+- **Formato de Salida Flexible (`format`)**:
+  - `paragraph`: Texto continuo clásico en un solo párrafo.
+  - `bullets`: Lista Markdown con viñetas (`- Frase`), ideal para digerir puntos clave sin chirridos sintácticos.
 - **Límites Configurables**: Soporte para número exacto de oraciones (`sentences: int`) o ratio porcentual del documento (`ratio: float`), complementando los presets clásicos (`short`, `medium`, `long`, `full`).
 - **Segmentación de Oraciones Robusta**:
   - Protección de abreviaturas y títulos comunes en español/inglés (`Dr.`, `Dra.`, `Sr.`, `p. ej.`, `art.`, `a. C.`, `c.`, `ca.`, `EE. UU.`, etc.) para evitar fragmentaciones indebidas por puntos internos.

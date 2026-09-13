@@ -462,8 +462,9 @@ NODE_TYPES: dict[str, NodeSpec] = {
         category="transform",
         runtime_fn="summarize_text",
         optional={
-            "engine": "luhn",
+            "engine": "luhn+",
             "length": "medium",
+            "format": "paragraph",
             "prompt": "",
             "field": "",
             "sentences": 0,
@@ -473,17 +474,24 @@ NODE_TYPES: dict[str, NodeSpec] = {
         output="texto resumido",
         choices={
             "engine": [
-                {"value": "luhn", "label": "Luhn (extractivo determinista)"},
+                {"value": "luhn+", "label": "Luhn+ (stopwords, sesgo y diversidad)"},
+                {"value": "textrank", "label": "TextRank (grafo y centralidad)"},
+                {"value": "luhn", "label": "Luhn clásico (frecuencia simple)"},
                 {"value": "llm", "label": "LLM (generativo)"},
             ],
             "length": ["short", "medium", "long", "full"],
+            "format": [
+                {"value": "paragraph", "label": "Párrafo continuo"},
+                {"value": "bullets", "label": "Lista con viñetas (- ...)"},
+            ],
         },
         show_when={"prompt": {"engine": ["llm"]}},
         help={
-            "engine": "Algoritmo de resumen: Luhn (extractivo rápido sin LLM) o LLM.",
+            "engine": "Motor de resumen: Luhn+ (optimizado), TextRank (grafo léxico), Luhn clásico o LLM.",
+            "format": "Formato de salida: 'paragraph' (texto corrido) o 'bullets' (viñetas).",
             "length": "Longitud predefinida (short, medium, long, full). Se ignora si sentences > 0 o ratio > 0.",
             "field": "Campo específico si la entrada es un diccionario (ej. 'extract', o notación punto 'query.pages.0.extract').",
-            "sentences": "Número exacto de frases a extraer con Luhn (0 usa 'length').",
+            "sentences": "Número exacto de frases a extraer (0 usa 'length').",
             "ratio": "Porcentaje de frases a extraer (0.0 a 1.0, ej. 0.3 para 30%).",
         },
     ),

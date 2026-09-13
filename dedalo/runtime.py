@@ -12,8 +12,10 @@ import datetime
 import gc
 import glob
 import json
+import math
 import os
 import re
+from collections import Counter
 import shutil
 import smtplib
 import sqlite3
@@ -1280,18 +1282,50 @@ def web_read(
     return NodeResult("ok", data=txt)
 
 
+_SUMMARIZE_STOPWORDS: frozenset[str] = frozenset({
+    # Español
+    "el", "la", "los", "las", "un", "una", "unos", "unas", "de", "del", "a", "al", "en", "para", "por",
+    "con", "sin", "sobre", "entre", "hasta", "desde", "hacia", "tras", "durante", "mediante", "contra",
+    "y", "e", "ni", "o", "u", "pero", "sino", "aunque", "porque", "pues", "que", "como", "cuando",
+    "donde", "quien", "quienes", "cual", "cuales", "cuyo", "cuya", "cuyos", "cuyas",
+    "este", "esta", "estos", "estas", "ese", "esa", "esos", "esas", "aquel", "aquella", "aquellos", "aquellas",
+    "su", "sus", "mi", "mis", "tu", "tus", "nuestro", "nuestra", "nuestros", "nuestras",
+    "ser", "es", "son", "era", "eran", "fue", "fueron", "sido", "estar", "esta", "estan", "estaba", "estaban",
+    "haber", "hay", "habia", "habian", "hubo", "hacer", "hace", "hizo", "hicieron",
+    "tener", "tiene", "tienen", "tenia", "tenian", "tuvo", "tuvieron",
+    "mas", "menos", "muy", "mucho", "mucha", "muchos", "muchas", "poco", "poca", "pocos", "pocas",
+    "tambien", "tampoco", "ya", "no", "si", "todo", "toda", "todos", "todas", "otro", "otra", "otros", "otras",
+    "mismo", "misma", "mismos", "mismas", "segun", "ademas", "asi", "cada", "tanto", "tanta", "tan",
+    # English
+    "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "with", "by", "from", "up",
+    "about", "into", "over", "after", "is", "are", "was", "were", "be", "been", "being", "have", "has",
+    "had", "do", "does", "did", "can", "could", "shall", "should", "will", "would", "may", "might",
+    "must", "it", "its", "they", "them", "their", "this", "that", "these", "those", "which", "who",
+    "whom", "what", "there", "where", "when", "why", "how", "all", "any", "both", "each", "few", "more",
+    "most", "other", "some", "such", "than", "too", "very", "also", "only"
+})
+
+
+def _format_summary_output(sentences: list[str], output_format: str = "paragraph") -> str:
+    fmt = (output_format or "paragraph").lower().strip()
+    if fmt in ("bullets", "bullet", "viñetas", "vineta", "list", "lista"):
+        return "\n".join(f"- {s}" for s in sentences)
+    return " ".join(sentences)
+
+
 def summarize_text(
     ctx: Any,
     inputs: list[NodeResult],
     *,
-    engine: str = "luhn",
+    engine: str = "luhn+",
     length: str = "medium",
     prompt: str = "",
     field: str = "",
     sentences: int = 0,
     ratio: float = 0.0,
+    format: str = "paragraph",
 ) -> NodeResult:
-    """Resume un texto usando Luhn (extractivo configurable) o LLM."""
+    """Resume un texto usando Luhn, Luhn+, TextRank o LLM."""
     inp = Inputs(inputs)
     first = inp.first_data()
     text = ""
@@ -1315,10 +1349,14 @@ def summarize_text(
     if not text:
         return NodeResult("ok", data="")
 
-    if engine == "luhn":
+    eng = (engine or "luhn+").lower().strip()
+
+    if eng in ("luhn", "luhn+", "luhn_plus", "luhnplus", "textrank", "text_rank"):
         # Limpiar encabezados de secciones comunes (ej. == Encabezado == en Wikipedia o markdown ###)
         cleaned_text = re.sub(r"(?m)^\s*=+[^\n=]+=+\s*$", "", text)
+        cleaned_text = re.sub(r"(?m)^\s*#{1,6}\s+.*$", "", cleaned_text)
 
+        # Proteger abreviaturas y títulos comunes para evitar divisiones erróneas
         protected = re.sub(r"\b(Dr|Dra|Sr|Sra|Srta|Prof|D|Dña)\.", r"\1§DOT§", cleaned_text, flags=re.IGNORECASE)
         protected = re.sub(r"\b(p)\.\s*(ej)\.", r"\1§DOT§ \2§DOT§", protected, flags=re.IGNORECASE)
         protected = re.sub(r"\b(art|núm|apdo|cap|vol|vs|fig)\.", r"\1§DOT§", protected, flags=re.IGNORECASE)
@@ -1342,16 +1380,6 @@ def summarize_text(
         if not sentence_list:
             return NodeResult("ok", data=text)
 
-        words = re.findall(r"\w{4,}", text.lower())
-        freq: dict[str, int] = {}
-        for w in words:
-            freq[w] = freq.get(w, 0) + 1
-
-        scores = []
-        for s in sentence_list:
-            score = sum(freq.get(w, 0) for w in re.findall(r"\w{4,}", s.lower()))
-            scores.append((score, s))
-
         # Determinar número objetivo de frases a extraer
         if int(sentences or 0) > 0:
             target_count = int(sentences)
@@ -1369,14 +1397,120 @@ def summarize_text(
             target_count = preset_counts.get(str(length).lower(), 6)
 
         target_count = min(target_count, len(sentence_list))
-        top = sorted(
-            sorted(scores, key=lambda x: x[0], reverse=True)[:target_count],
-            key=lambda x: sentence_list.index(x[1]),
-        )
-        return NodeResult("ok", data=" ".join(s for _, s in top))
+
+        if eng == "luhn":
+            # Algoritmo Luhn clásico basado en frecuencia simple de palabras de >= 4 caracteres
+            words = re.findall(r"\w{4,}", text.lower())
+            freq: dict[str, int] = {}
+            for w in words:
+                freq[w] = freq.get(w, 0) + 1
+
+            scores = []
+            for s in sentence_list:
+                score = sum(freq.get(w, 0) for w in re.findall(r"\w{4,}", s.lower()))
+                scores.append((score, s))
+
+            top = sorted(
+                sorted(scores, key=lambda x: x[0], reverse=True)[:target_count],
+                key=lambda x: sentence_list.index(x[1]),
+            )
+            return NodeResult("ok", data=_format_summary_output([s for _, s in top], format))
+
+        elif eng in ("luhn+", "luhn_plus", "luhnplus"):
+            # Luhn+ avanzado: filtro de stopwords, normalización por longitud, sesgo posicional y diversidad (MMR)
+            sig_words_all = [
+                w for w in re.findall(r"\b\w{3,}\b", text.lower())
+                if w not in _SUMMARIZE_STOPWORDS and not w.isdigit()
+            ]
+            freq = Counter(sig_words_all)
+            sent_sig_words = [
+                [w for w in re.findall(r"\b\w{3,}\b", s.lower()) if w not in _SUMMARIZE_STOPWORDS and not w.isdigit()]
+                for s in sentence_list
+            ]
+
+            selected_indices: list[int] = []
+            current_freq = dict(freq)
+
+            for _ in range(target_count):
+                best_score = -1.0
+                best_idx = -1
+                for i, (s, w_list) in enumerate(zip(sentence_list, sent_sig_words)):
+                    if i in selected_indices:
+                        continue
+                    raw_score = sum(current_freq.get(w, 0) for w in w_list) if w_list else 0.1
+                    # Normalización por longitud de frase
+                    score = raw_score / math.sqrt(max(1, len(w_list)))
+
+                    # Sesgo de posición (Lead Bias)
+                    if i == 0:
+                        score *= 1.5
+                    elif i == 1:
+                        score *= 1.25
+                    elif i == 2:
+                        score *= 1.1
+
+                    if score > best_score:
+                        best_score = score
+                        best_idx = i
+
+                if best_idx != -1:
+                    selected_indices.append(best_idx)
+                    # Penalización por redundancia sobre palabras ya cubiertas
+                    for w in sent_sig_words[best_idx]:
+                        current_freq[w] = current_freq.get(w, 0) * 0.5
+
+            selected_indices.sort()
+            chosen = [sentence_list[i] for i in selected_indices]
+            return NodeResult("ok", data=_format_summary_output(chosen, format))
+
+        elif eng in ("textrank", "text_rank"):
+            # Algoritmo TextRank: grafo de similitud léxica y centralidad PageRank
+            n = len(sentence_list)
+            if n <= target_count:
+                return NodeResult("ok", data=_format_summary_output(sentence_list, format))
+
+            word_sets = [
+                set(w for w in re.findall(r"\b\w{3,}\b", s.lower()) if w not in _SUMMARIZE_STOPWORDS and not w.isdigit())
+                for s in sentence_list
+            ]
+
+            sim_matrix = [[0.0] * n for _ in range(n)]
+            for i in range(n):
+                for j in range(i + 1, n):
+                    w1, w2 = word_sets[i], word_sets[j]
+                    if w1 and w2:
+                        inter = len(w1 & w2)
+                        sim = inter / (math.log(len(w1) + 1) + math.log(len(w2) + 1))
+                        sim_matrix[i][j] = sim
+                        sim_matrix[j][i] = sim
+
+            degrees = [sum(sim_matrix[i]) for i in range(n)]
+            d = 0.85
+            pr_scores = [1.0] * n
+            for _ in range(10):
+                new_scores = [1.0 - d] * n
+                for i in range(n):
+                    for j in range(n):
+                        if i != j and degrees[j] > 0:
+                            new_scores[i] += d * (sim_matrix[j][i] / degrees[j]) * pr_scores[j]
+                pr_scores = new_scores
+
+            # Sesgo de primera frase en TextRank
+            pr_scores[0] *= 1.25
+
+            ranked_indices = sorted(range(n), key=lambda i: pr_scores[i], reverse=True)[:target_count]
+            ranked_indices.sort()
+            chosen = [sentence_list[i] for i in ranked_indices]
+            return NodeResult("ok", data=_format_summary_output(chosen, format))
 
     # Motor LLM
-    sys_prompt = prompt or "Resume el siguiente texto manteniendo los puntos clave."
+    is_bullet = (format or "").lower().strip() in ("bullets", "bullet", "viñetas", "vineta", "list", "lista")
+    default_sys = (
+        "Resume el siguiente texto manteniendo los puntos clave en una lista de viñetas."
+        if is_bullet
+        else "Resume el siguiente texto manteniendo los puntos clave."
+    )
+    sys_prompt = prompt or default_sys
     limits = {"short": 512, "medium": 1024, "long": 2048, "full": 4096}
     if int(sentences or 0) > 0:
         tokens = min(4096, max(256, int(sentences) * 50))

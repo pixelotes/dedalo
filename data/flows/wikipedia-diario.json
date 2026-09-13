@@ -19,12 +19,13 @@
     {
       "id": "resumir_luhn",
       "type": "transform.summarize",
-      "label": "Resumen extenso (Luhn)",
+      "label": "Puntos clave (Luhn+)",
       "config": {
-        "engine": "luhn",
+        "engine": "luhn+",
         "length": "long",
+        "format": "bullets",
         "field": "query.pages.0.extract",
-        "sentences": 10
+        "sentences": 8
       },
       "x": 380.0,
       "y": 140.0
@@ -35,7 +36,7 @@
       "label": "Formatear informe",
       "config": {
         "fan_in": "all",
-        "template": "# Artículo Diario de Wikipedia ({fecha})\n\n## {query.pages.0.title}\n- **Enlace:** {query.pages.0.canonicalurl}\n\n### Resumen Extenso del Artículo (Luhn):\n{entrada}\n"
+        "template": "# Artículo Diario de Wikipedia ({fecha})\n\n## {query.pages.0.title}\n- **Enlace:** {query.pages.0.canonicalurl}\n\n### Puntos Clave del Artículo (Luhn+):\n{entrada}\n"
       },
       "x": 680.0,
       "y": 140.0

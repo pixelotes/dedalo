@@ -9,11 +9,11 @@ def node_fetch_wikipedia(ctx, inputs):
 
 
 def node_resumir_luhn(ctx, inputs):
-    return runtime.summarize_text(ctx, inputs, engine='luhn', field='query.pages.0.extract', length='long', prompt='', ratio=0.0, sentences=10)
+    return runtime.summarize_text(ctx, inputs, engine='luhn+', field='query.pages.0.extract', format='bullets', length='long', prompt='', ratio=0.0, sentences=8)
 
 
 def node_formatear_articulo(ctx, inputs):
-    return runtime.template(ctx, inputs, template='# Artículo Diario de Wikipedia ({fecha})\n\n## {query.pages.0.title}\n- **Enlace:** {query.pages.0.canonicalurl}\n\n### Resumen Extenso del Artículo (Luhn):\n{entrada}\n')
+    return runtime.template(ctx, inputs, template='# Artículo Diario de Wikipedia ({fecha})\n\n## {query.pages.0.title}\n- **Enlace:** {query.pages.0.canonicalurl}\n\n### Puntos Clave del Artículo (Luhn+):\n{entrada}\n')
 
 
 def node_guardar_articulo(ctx, inputs):

@@ -451,4 +451,56 @@ def test_template_indexing_and_recursive_fallback():
     assert "Titulo: Milenio - URL: https://es.wikipedia.org/wiki/Milenio - Resumen: Texto del resumen." == res2.data
 
 
+def test_summarize_luhn_plus_and_bullets():
+    text = (
+        "El telescopio James Webb es el observatorio espacial más potente jamás construido por la NASA. "
+        "Fue lanzado en diciembre de 2021 a bordo de un cohete Ariane 5 desde la Guayana Francesa. "
+        "Su espejo primario de berilio bañado en oro le permite observar las primeras galaxias del universo. "
+        "Además cuenta con un parasol del tamaño de una pista de tenis para mantener los instrumentos fríos. "
+        "Los astrónomos utilizan sus datos infrarrojos para estudiar atmósferas de exoplanetas distantes."
+    )
+    inp = runtime.NodeResult("ok", data=text)
+
+    # Luhn+ en formato viñetas
+    res_bullets = runtime.summarize_text(None, [inp], engine="luhn+", sentences=2, format="bullets")
+    assert res_bullets.ok
+    assert res_bullets.data.startswith("- ")
+    lines = [line.strip() for line in res_bullets.data.splitlines() if line.strip()]
+    assert len(lines) == 2
+    # El sesgo posicional prioriza la primera oración
+    assert "James Webb" in lines[0]
+
+    # Luhn+ en formato párrafo continuo
+    res_para = runtime.summarize_text(None, [inp], engine="luhn+", sentences=2, format="paragraph")
+    assert res_para.ok
+    assert not res_para.data.startswith("- ")
+    assert "James Webb" in res_para.data
+
+
+def test_summarize_textrank():
+    text = (
+        "Python es un lenguaje de programación de alto nivel concebido por Guido van Rossum. "
+        "Su filosofía enfatiza una sintaxis legible orientada a facilitar el desarrollo rápido de software. "
+        "Python soporta múltiples paradigmas de programación incluyendo la orientación a objetos y programación funcional. "
+        "Es ampliamente utilizado en ciencia de datos, inteligencia artificial y desarrollo web contemporáneo. "
+        "La enorme biblioteca estándar de Python ha impulsado enormemente su popularidad global."
+    )
+    inp = runtime.NodeResult("ok", data=text)
+
+    # TextRank en formato viñetas
+    res_tr_bullets = runtime.summarize_text(None, [inp], engine="textrank", sentences=3, format="bullets")
+    assert res_tr_bullets.ok
+    lines = [line.strip() for line in res_tr_bullets.data.splitlines() if line.strip()]
+    assert len(lines) == 3
+    assert all(l.startswith("- ") for l in lines)
+    # Primera frase central identificada
+    assert "Guido van Rossum" in res_tr_bullets.data
+
+    # TextRank en formato párrafo
+    res_tr_para = runtime.summarize_text(None, [inp], engine="textrank", sentences=2, format="paragraph")
+    assert res_tr_para.ok
+    assert "Python" in res_tr_para.data
+
+
+
 
