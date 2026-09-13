@@ -364,3 +364,43 @@ def test_template_sincronizar_docs_codigo_compiles():
     compiled_obj = compile(code, "<test_sincronizar_docs_codigo>", "exec")
     assert compiled_obj is not None
 
+
+def test_template_triaje_errores_coder_compiles():
+    graph_dict = get_template("triaje-errores-coder")
+    assert graph_dict is not None
+    assert graph_dict["name"] == "triaje-errores-coder"
+    assert len(graph_dict["nodes"]) == 3
+    assert len(graph_dict["edges"]) == 2
+
+    g = compiler.Graph.from_dict(graph_dict)
+    code = compiler.compile(g)
+    assert "def node_webhook_error" in code
+    assert "def node_analista_coder" in code
+    assert "def node_notificacion" in code
+    assert "runtime.webhook_trigger" in code
+    assert "runtime.coder_agent" in code
+    assert "runtime.telegram" in code
+
+    compiled_obj = compile(code, "<test_triaje_errores_coder>", "exec")
+    assert compiled_obj is not None
+
+
+def test_template_generar_tests_coder_compiles():
+    graph_dict = get_template("generar-tests-coder")
+    assert graph_dict is not None
+    assert graph_dict["name"] == "generar-tests-coder"
+    assert len(graph_dict["nodes"]) == 3
+    assert len(graph_dict["edges"]) == 2
+
+    g = compiler.Graph.from_dict(graph_dict)
+    code = compiler.compile(g)
+    assert "def node_lector_git" in code
+    assert "def node_generador_tests" in code
+    assert "def node_guardar_git" in code
+    assert "runtime.git_read" in code
+    assert "runtime.coder_agent" in code
+    assert "runtime.git_commit" in code
+
+    compiled_obj = compile(code, "<test_generar_tests_coder>", "exec")
+    assert compiled_obj is not None
+

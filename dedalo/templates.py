@@ -393,6 +393,121 @@ TEMPLATES: tuple[Template, ...] = (
             [_edge("lector_git", "sincronizador_coder"), _edge("sincronizador_coder", "guardar_git")],
         ),
     ),
+    Template(
+        name="triaje-errores-coder",
+        title="Triaje y propuesta de parche ante excepciones con Coder",
+        description="Recibe trazas de excepción o errores de servidor vía webhook, inspecciona el código circundante en modo de sólo lectura con Coder y genera un diagnóstico con el parche propuesto directo a Telegram.",
+        teaches="Uso del preset de herramientas de sólo lectura (read_only) para diagnóstico seguro y propuesta de parches sin modificar código.",
+        graph=_graph(
+            "triaje-errores-coder",
+            [
+                _node(
+                    "webhook_error",
+                    "input.webhook",
+                    {},
+                    x=60,
+                    y=140,
+                    label="Recepción de Excepción (Webhook)",
+                ),
+                _node(
+                    "analista_coder",
+                    "transform.coder",
+                    {
+                        "prompt": (
+                            "Analiza el informe de excepción o stack trace recibido en la entrada previa. Tareas:\n"
+                            "1. Identifica el archivo y la línea exacta donde se produjo el error.\n"
+                            "2. Usa 'read' o 'grep' para inspeccionar el contexto del código circundante.\n"
+                            "3. Determina la causa raíz del fallo (ej. clave inexistente en diccionario, valor nulo, condición de carrera o tipo incompatible).\n"
+                            "4. Genera un diagnóstico conciso explicando la causa y redacta el parche exacto sugerido en un bloque diff o código corregido.\n"
+                            "No intentes editar archivos en disco; estás en modo de sólo lectura para preservar la estabilidad del entorno."
+                        ),
+                        "tools_preset": "read_only",
+                        "workspace_dir": ".",
+                        "max_turns": 4,
+                        "output_format": "text",
+                    },
+                    x=380,
+                    y=140,
+                    label="Agente Coder (Triaje Read-Only)",
+                ),
+                _node(
+                    "notificacion",
+                    "output.telegram",
+                    {
+                        "chat_id": "TU_CHAT_ID",
+                        "secret": "TELEGRAM_BOT_TOKEN",
+                    },
+                    x=700,
+                    y=140,
+                    label="Enviar Diagnóstico y Parche",
+                ),
+            ],
+            [_edge("webhook_error", "analista_coder"), _edge("analista_coder", "notificacion")],
+        ),
+    ),
+    Template(
+        name="generar-tests-coder",
+        title="Generación automática de tests con Git y Coder",
+        description="Inspecciona el diff de los últimos cambios con input.git, crea casos de prueba con Coder imitando el estilo existente, valida la ejecución con pytest en bash y genera un commit con los nuevos tests.",
+        teaches="Generación de pruebas en bucle cerrado con validación continua de tests.",
+        graph=_graph(
+            "generar-tests-coder",
+            [
+                _node(
+                    "lector_git",
+                    "input.git",
+                    {
+                        "action": "diff",
+                        "repo_path": ".",
+                        "revision": "HEAD~1..HEAD",
+                        "path_filter": "*.py",
+                        "max_chars": 6000,
+                    },
+                    x=60,
+                    y=140,
+                    label="Diff de Cambios Recientes",
+                ),
+                _node(
+                    "generador_tests",
+                    "transform.coder",
+                    {
+                        "prompt": (
+                            "Analiza el diff de código recibido en la entrada previa. Tareas:\n"
+                            "1. Identifica las nuevas funciones, clases o cambios lógicos introducidos.\n"
+                            "2. Inspecciona la suite de tests existente en 'tests/' usando 'find' y 'read' para comprender los patrones de prueba y aserciones del proyecto.\n"
+                            "3. Escribe o añade casos de prueba unitarios para cubrir los nuevos cambios mediante 'write' o 'edit'.\n"
+                            "4. Ejecuta 'pytest tests/' con 'bash' para verificar que los nuevos tests pasan y no provocan regresiones.\n"
+                            "5. Si algún test falla, ajusta el código del test con 'edit' hasta que la suite completa pase en verde.\n"
+                            "6. Concluye resumiendo los tests creados y el resultado de la suite."
+                        ),
+                        "tools_preset": "coding",
+                        "workspace_dir": ".",
+                        "max_turns": 8,
+                        "output_format": "full",
+                    },
+                    x=360,
+                    y=140,
+                    label="Agente Coder (Generar Tests)",
+                ),
+                _node(
+                    "guardar_git",
+                    "output.git",
+                    {
+                        "repo_path": ".",
+                        "message": "test: agregar pruebas unitarias automáticas generadas por Coder",
+                        "files": "tests/",
+                        "author_name": "Dedalo Test Bot",
+                        "author_email": "bot@dedalo.local",
+                        "push": False,
+                    },
+                    x=680,
+                    y=140,
+                    label="Commit de Tests",
+                ),
+            ],
+            [_edge("lector_git", "generador_tests"), _edge("generador_tests", "guardar_git")],
+        ),
+    ),
 )
 
 

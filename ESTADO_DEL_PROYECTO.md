@@ -302,6 +302,8 @@ Para permitir resolución autónoma de tareas de código, pruebas de regresión 
   - Al alcanzar el 90% del contexto, se preservan los prompts de inicio y las llamadas recientes, y se sintetiza el historial intermedio denso mediante el algoritmo extractivo `Luhn+` (filtrado de stopwords, normalización por longitud, sesgo de posición y diversidad MMR).
   - Truncado defensivo adicional sobre salidas de herramientas individuales desproporcionadas.
 - **Plantillas Oficiales con Coder**:
+  - **Triaje y propuesta de parche ante excepciones (`triaje-errores-coder`)**: Recibe trazas de excepción vía webhook, inspecciona el código circundante en modo de sólo lectura con `read`/`grep`, analiza la causa raíz del fallo y remite el diagnóstico con el parche propuesto a Telegram sin alterar archivos en disco.
+  - **Generación automática de tests (`generar-tests-coder`)**: Extrae el diff de los últimos cambios de código con `input.git`, redacta nuevos tests unitarios en `tests/` con `write`/`edit` imitando la suite existente, ejecuta `pytest` mediante `bash` hasta validar que pasan, y genera un commit atómico con `output.git`.
   - **Auto-reparación de scrapers web (`auto-reparar-scraper`)**: Descarga el HTML actualizado con `input.http_call` (curl_cffi con impersonación de navegador), inspecciona selectores en `scrapers/extractor.py`, aplica parches con `edit` y valida la ejecución local mediante `bash` antes de alertar por Telegram.
   - **Sincronización de documentación con Git (`sincronizar-docs-codigo`)**: Extrae el diff de los últimos cambios de código con `input.git`, compara signaturas y argumentos modificados contra `README.md`, ajusta la documentación con `edit` y genera un commit atómico con `output.git`.
 
