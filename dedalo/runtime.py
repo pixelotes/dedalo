@@ -1275,6 +1275,920 @@ def agent(
         return NodeResult("error", error=f"Error en llamada LLM: {exc}")
 
 
+# ---------------------------------------------------------------------------
+# Algoritmo Luhn+ y Resumen Léxico (Compartido)
+# ---------------------------------------------------------------------------
+
+_SUMMARIZE_STOPWORDS: frozenset[str] = frozenset({
+    # Español
+    "el", "la", "los", "las", "un", "una", "unos", "unas", "de", "del", "a", "al", "en", "para", "por",
+    "con", "sin", "sobre", "entre", "hasta", "desde", "hacia", "tras", "durante", "mediante", "contra",
+    "y", "e", "ni", "o", "u", "pero", "sino", "aunque", "porque", "pues", "que", "como", "cuando",
+    "donde", "quien", "quienes", "cual", "cuales", "cuyo", "cuya", "cuyos", "cuyas",
+    "este", "esta", "estos", "estas", "ese", "esa", "esos", "esas", "aquel", "aquella", "aquellos", "aquellas",
+    "su", "sus", "mi", "mis", "tu", "tus", "nuestro", "nuestra", "nuestros", "nuestras",
+    "ser", "es", "son", "era", "eran", "fue", "fueron", "sido", "estar", "esta", "estan", "estaba", "estaban",
+    "haber", "hay", "habia", "habian", "hubo", "hacer", "hace", "hizo", "hicieron",
+    "tener", "tiene", "tienen", "tenia", "tenian", "tuvo", "tuvieron",
+    "mas", "menos", "muy", "mucho", "mucha", "muchos", "muchas", "poco", "poca", "pocos", "pocas",
+    "tambien", "tampoco", "ya", "no", "si", "todo", "toda", "todos", "todas", "otro", "otra", "otros", "otras",
+    "mismo", "misma", "mismos", "mismas", "segun", "ademas", "asi", "cada", "tanto", "tanta", "tan",
+    # English
+    "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "with", "by", "from", "up",
+    "about", "into", "over", "after", "is", "are", "was", "were", "be", "been", "being", "have", "has",
+    "had", "do", "does", "did", "can", "could", "shall", "should", "will", "would", "may", "might",
+    "must", "it", "its", "they", "them", "their", "this", "that", "these", "those", "which", "who",
+    "whom", "what", "there", "where", "when", "why", "how", "all", "any", "both", "each", "few", "more",
+    "most", "other", "some", "such", "than", "too", "very", "also", "only"
+})
+
+
+def _format_summary_output(sentences: list[str], output_format: str = "paragraph") -> str:
+    fmt = (output_format or "paragraph").lower().strip()
+    if fmt in ("bullets", "bullet", "viñetas", "vineta", "list", "lista"):
+        return "\n".join(f"- {s}" for s in sentences)
+    return " ".join(sentences)
+
+
+def _run_luhn_plus(
+    text: str,
+    target_count: int = 6,
+    output_format: str = "paragraph",
+    sentences: list[str] | None = None,
+) -> str:
+    """Ejecuta el algoritmo Luhn+ (filtro de stopwords, normalización por longitud, sesgo posicional y MMR)."""
+    if not text or not text.strip():
+        return ""
+
+    if sentences is not None and len(sentences) > 0:
+        sentence_list = list(sentences)
+    else:
+        cleaned_text = re.sub(r"(?m)^\s*=+[^\n=]+=+\s*$", "", text)
+        cleaned_text = re.sub(r"(?m)^\s*#{1,6}\s+.*$", "", cleaned_text)
+
+        protected = re.sub(r"\b(Dr|Dra|Sr|Sra|Srta|Prof|D|Dña)\.", r"\1§DOT§", cleaned_text, flags=re.IGNORECASE)
+        protected = re.sub(r"\b(p)\.\s*(ej)\.", r"\1§DOT§ \2§DOT§", protected, flags=re.IGNORECASE)
+        protected = re.sub(r"\b(art|núm|apdo|cap|vol|vs|fig)\.", r"\1§DOT§", protected, flags=re.IGNORECASE)
+        protected = re.sub(r"\b([aAdD])\.\s*([cC])\.", r"\1§DOT§ \2.", protected)
+        protected = re.sub(r"\b([eE][eE])\.\s*([uU][uU])\.", r"\1§DOT§ \2§DOT§", protected)
+        protected = re.sub(r"\b([cC][aA]?)\.", r"\1§DOT§", protected)
+
+        raw_parts = [p.strip() for p in re.split(r"\n+", protected) if p.strip()]
+        sentence_list = []
+        for part in raw_parts:
+            for s in re.split(r"(?<=[.?!])\s+", part):
+                s = s.replace("§DOT§", ".").strip()
+                if len(s) >= 15 and len(s.split()) >= 4:
+                    sentence_list.append(s)
+
+        if not sentence_list:
+            sentence_list = [s.strip() for s in re.split(r"(?<=[.?!])\s+", text) if s.strip()]
+
+    if not sentence_list:
+        return text
+
+    target_count = min(max(1, int(target_count)), len(sentence_list))
+
+    sig_words_all = [
+        w for w in re.findall(r"\b\w{3,}\b", text.lower())
+        if w not in _SUMMARIZE_STOPWORDS and not w.isdigit()
+    ]
+    freq = Counter(sig_words_all)
+    sent_sig_words = [
+        [w for w in re.findall(r"\b\w{3,}\b", s.lower()) if w not in _SUMMARIZE_STOPWORDS and not w.isdigit()]
+        for s in sentence_list
+    ]
+
+    selected_indices: list[int] = []
+    current_freq = dict(freq)
+
+    for _ in range(target_count):
+        best_score = -1.0
+        best_idx = -1
+        for i, (s, w_list) in enumerate(zip(sentence_list, sent_sig_words)):
+            if i in selected_indices:
+                continue
+            raw_score = sum(current_freq.get(w, 0) for w in w_list) if w_list else 0.1
+            score = raw_score / math.sqrt(max(1, len(w_list)))
+
+            # Sesgo de posición (Lead Bias)
+            if i == 0:
+                score *= 1.5
+            elif i == 1:
+                score *= 1.25
+            elif i == 2:
+                score *= 1.1
+
+            if score > best_score:
+                best_score = score
+                best_idx = i
+
+        if best_idx != -1:
+            selected_indices.append(best_idx)
+            for w in sent_sig_words[best_idx]:
+                current_freq[w] = current_freq.get(w, 0) * 0.5
+
+    selected_indices.sort()
+    chosen = [sentence_list[i] for i in selected_indices]
+    return _format_summary_output(chosen, output_format)
+
+
+def _estimate_messages_tokens(messages: list[dict[str, Any]]) -> int:
+    """Estima de forma ultraligera el número de tokens en la lista de mensajes (~3.5 caracteres/token)."""
+    total_chars = 0
+    for m in messages:
+        content = m.get("content")
+        if content:
+            total_chars += len(str(content))
+        tool_calls = m.get("tool_calls")
+        if tool_calls:
+            total_chars += len(json.dumps(tool_calls))
+    return max(1, int(total_chars / 3.5))
+
+
+def _compact_conversation_history(
+    messages: list[dict[str, Any]],
+    context_window: int,
+    preserve_recent_turns: int = 1,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Si los mensajes superan el 90% del contexto soportado, compacta el historial previo con Luhn+."""
+    threshold = int(context_window * 0.90)
+    current_tokens = _estimate_messages_tokens(messages)
+    if current_tokens < threshold:
+        return messages, False
+
+    did_compact = False
+    new_msgs = list(messages)
+
+    # 1. Compactar mensajes de herramientas que individualmente superen el umbral o sean desproporcionados
+    for idx, m in enumerate(new_msgs):
+        if m.get("role") == "tool" and m.get("content"):
+            c_text = str(m["content"])
+            # Si el contenido de la tool supera el 40% del umbral de contexto
+            if len(c_text) > int(threshold * 1.5):
+                summary = _run_luhn_plus(c_text, target_count=8, output_format="bullets")
+                compacted_m = dict(m)
+                compacted_m["content"] = f"[Salida de herramienta compactada con Luhn+ (superado 90% contexto)]:\n{summary}"
+                new_msgs[idx] = compacted_m
+                did_compact = True
+
+    # Si tras compactar herramientas ya bajamos del 90%, retornamos
+    if did_compact and _estimate_messages_tokens(new_msgs) < threshold:
+        return new_msgs, True
+
+    # 2. Compactar turnos intermedios si el historial se ha acumulado
+    if len(new_msgs) > 4:
+        head = new_msgs[:2]  # system + user prompt original
+        tail_len = min(len(new_msgs) - 2, max(2, preserve_recent_turns * 2))
+        tail = new_msgs[-tail_len:]
+        middle = new_msgs[2:-tail_len]
+        if middle:
+            chunks = []
+            for m in middle:
+                role = m.get("role")
+                content = m.get("content")
+                name = m.get("name")
+                if role == "assistant":
+                    if content:
+                        chunks.append(f"Asistente: {content}")
+                    if m.get("tool_calls"):
+                        fn_names = [c.get("function", {}).get("name", "") for c in m["tool_calls"]]
+                        chunks.append(f"Llamadas a herramientas: {', '.join(filter(None, fn_names))}")
+                elif role == "tool":
+                    chunks.append(f"Herramienta {name or 'tool'}:\n{content}")
+                elif role == "user":
+                    chunks.append(f"Usuario: {content}")
+
+            raw_middle = "\n\n".join(chunks)
+            summary_bullets = _run_luhn_plus(raw_middle, target_count=8, output_format="bullets")
+
+            summary_msg = {
+                "role": "user",
+                "content": (
+                    f"[Memoria resumida del progreso previo mediante Luhn+ (alcanzado 90% de contexto: {current_tokens}/{context_window} tokens)]:\n"
+                    f"{summary_bullets}"
+                ),
+            }
+            ack_msg = {
+                "role": "assistant",
+                "content": "Comprendido. Mantengo la memoria compactada de las acciones previas y continúo.",
+            }
+
+            new_msgs = [*head, summary_msg, ack_msg, *tail]
+            did_compact = True
+
+    return new_msgs, did_compact
+
+
+def _detect_context_window(
+    base_url: str,
+    target_model: str,
+    api_key: str = "",
+    explicit_ctx: int = 0,
+    timeout: float = 3.0,
+) -> int:
+    """Detecta el tamaño de la ventana de contexto que soporta el servidor de inferencia."""
+    if explicit_ctx and explicit_ctx > 0:
+        return int(explicit_ctx)
+
+    # 1. Probar endpoint de Ollama (/api/show)
+    ollama_root = re.sub(r"/v1/?$", "", base_url)
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.post(f"{ollama_root}/api/show", json={"name": target_model})
+            if resp.status_code == 200:
+                data = resp.json()
+                params = data.get("parameters", "")
+                m = re.search(r"num_ctx\s+(\d+)", params)
+                if m:
+                    return int(m.group(1))
+                model_info = data.get("model_info", {})
+                for k, v in model_info.items():
+                    if k.endswith(".context_length") and isinstance(v, (int, float)):
+                        return int(v)
+    except Exception:
+        pass
+
+    # 2. Probar endpoint OpenAI / OpenRouter (/models)
+    headers = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.get(f"{base_url}/models", headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                models_list = data.get("data") if isinstance(data, dict) else data
+                if isinstance(models_list, list):
+                    for item in models_list:
+                        if isinstance(item, dict):
+                            model_id = str(item.get("id", ""))
+                            if model_id == target_model or target_model in model_id:
+                                ctx = item.get("context_length") or item.get("max_model_len") or item.get("context_window")
+                                if ctx and isinstance(ctx, (int, float)):
+                                    return int(ctx)
+    except Exception:
+        pass
+
+    # 3. Heurística según familia de modelo
+    m_lower = target_model.lower()
+    if any(k in m_lower for k in ("gpt-4o", "gpt-4-turbo", "o1", "o3")):
+        return 128000
+    if "gpt-4" in m_lower:
+        return 8192
+    if "gpt-3.5" in m_lower:
+        return 16385
+    if "claude" in m_lower:
+        return 200000
+    if "deepseek" in m_lower:
+        return 64000
+    if "qwen2.5" in m_lower or "qwen-2.5" in m_lower:
+        return 32768
+    if any(k in m_lower for k in ("llama-3.1", "llama3.1", "llama-3.2", "llama3.2", "llama-3.3", "llama3.3")):
+        return 131072
+    if "llama3" in m_lower or "llama-3" in m_lower:
+        return 8192
+    if "mistral" in m_lower or "mixtral" in m_lower:
+        return 32768
+    if "phi3" in m_lower or "phi-3" in m_lower or "phi4" in m_lower:
+        return 128000
+
+    # 4. Fallback estándar conservador
+    return 8192
+
+
+# ---------------------------------------------------------------------------
+# Microarnés de Agente Programador (transform.coder) y Herramientas
+# ---------------------------------------------------------------------------
+
+ALL_TOOL_NAMES: tuple[str, ...] = ("read", "bash", "edit", "write", "grep", "find", "ls")
+CODING_TOOL_NAMES: tuple[str, ...] = ("read", "bash", "edit", "write")
+READ_ONLY_TOOL_NAMES: tuple[str, ...] = ("read", "grep", "find", "ls")
+
+
+def _resolve_safe_path(base_dir: Path, rel_path: str) -> Path:
+    """Resuelve una ruta y garantiza que no escape del directorio base (anti path-traversal)."""
+    clean_rel = rel_path.strip() if rel_path else "."
+    target = (base_dir / clean_rel).resolve()
+    if target != base_dir and not target.is_relative_to(base_dir):
+        raise PermissionError(f"Ruta fuera del espacio de trabajo permitido: '{rel_path}'")
+    return target
+
+
+def _clip_tool_output(text: str, max_chars: int = 4000) -> str:
+    """Trunca el texto de salida preservando la cabecera y el final del mensaje."""
+    s = str(text)
+    if len(s) <= max_chars:
+        return s
+    head_len = (max_chars - 60) // 2
+    tail_len = max_chars - 60 - head_len
+    return f"{s[:head_len]}\n... [truncado {len(s) - max_chars} caracteres] ...\n{s[-tail_len:]}"
+
+
+def _tool_read(base_dir: Path, path: str, start_line: int = 1, end_line: int | None = None) -> str:
+    """Lee el contenido de un archivo dentro de base_dir con numeración de líneas opcional."""
+    if not path or not path.strip():
+        return "Error: Debes especificar el parámetro 'path'."
+    try:
+        target = _resolve_safe_path(base_dir, path.strip())
+    except PermissionError as pe:
+        return f"Error de seguridad: {pe}"
+    if not target.exists():
+        return f"Error: El archivo '{path}' no existe."
+    if target.is_dir():
+        return f"Error: '{path}' es un directorio. Utiliza la herramienta 'ls' para ver su contenido."
+    try:
+        content = target.read_text(encoding="utf-8", errors="replace")
+    except Exception as exc:
+        return f"Error al leer '{path}': {exc}"
+
+    lines = content.splitlines()
+    total_lines = len(lines)
+    if total_lines == 0:
+        return f"Archivo '{path}' (vacío, 0 líneas)."
+
+    start = max(1, int(start_line or 1))
+    end = min(total_lines, int(end_line or total_lines)) if end_line is not None else total_lines
+    if start > total_lines:
+        return f"Archivo con {total_lines} líneas. Rango solicitado ({start}-{end}) fuera de límites."
+    selected = lines[start - 1 : end]
+    numbered = [f"{i:4d} | {line}" for i, line in enumerate(selected, start=start)]
+    header = f"Archivo: {path} (líneas {start}-{end} de {total_lines})"
+    return header + "\n" + "\n".join(numbered)
+
+
+def _tool_bash(base_dir: Path, command: str, timeout: float = 30.0) -> str:
+    """Ejecuta un comando en la consola dentro de base_dir y retorna la salida combinada."""
+    if not command or not command.strip():
+        return "Error: Comando vacío."
+    try:
+        proc = subprocess.run(
+            command,
+            shell=True,
+            cwd=base_dir,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        parts = []
+        if proc.stdout:
+            parts.append(proc.stdout)
+        if proc.stderr:
+            parts.append(f"[STDERR]\n{proc.stderr}")
+        parts.append(f"[Código de salida: {proc.returncode}]")
+        return "\n".join(parts)
+    except subprocess.TimeoutExpired:
+        return f"Error: El comando superó el tiempo límite de {timeout} segundos."
+    except Exception as exc:
+        return f"Error al ejecutar comando: {exc}"
+
+
+def _tool_edit(base_dir: Path, path: str, old_str: str, new_str: str) -> str:
+    """Edita un archivo reemplazando una única ocurrencia exacta de old_str por new_str."""
+    if not path or not path.strip():
+        return "Error: Debes especificar el parámetro 'path'."
+    if not old_str:
+        return "Error: 'old_str' no puede estar vacío."
+    try:
+        target = _resolve_safe_path(base_dir, path.strip())
+    except PermissionError as pe:
+        return f"Error de seguridad: {pe}"
+    if not target.exists():
+        return f"Error: El archivo '{path}' no existe."
+    if target.is_dir():
+        return f"Error: '{path}' es un directorio."
+    try:
+        content = target.read_text(encoding="utf-8", errors="replace")
+    except Exception as exc:
+        return f"Error al leer '{path}': {exc}"
+
+    count = content.count(old_str)
+    if count == 0:
+        return f"Error: No se encontró 'old_str' en '{path}'. Verifica caracteres, saltos de línea e indentación."
+    if count > 1:
+        return f"Error: 'old_str' aparece {count} veces en '{path}'. Debe ser único para editarlo con seguridad. Añade más contexto circundante."
+
+    updated = content.replace(old_str, new_str, 1)
+    try:
+        target.write_text(updated, encoding="utf-8")
+        return f"Éxito: Archivo '{path}' editado correctamente."
+    except Exception as exc:
+        return f"Error al guardar cambios en '{path}': {exc}"
+
+
+def _tool_write(base_dir: Path, path: str, content: str) -> str:
+    """Crea o sobreescribe un archivo en base_dir."""
+    if not path or not path.strip():
+        return "Error: Debes especificar el parámetro 'path'."
+    try:
+        target = _resolve_safe_path(base_dir, path.strip())
+    except PermissionError as pe:
+        return f"Error de seguridad: {pe}"
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        return f"Éxito: Archivo '{path}' guardado ({len(content)} caracteres)."
+    except Exception as exc:
+        return f"Error al escribir en '{path}': {exc}"
+
+
+def _tool_grep(base_dir: Path, pattern: str, path: str = ".", case_insensitive: bool = False) -> str:
+    """Busca un patrón de texto o expresión regular dentro de base_dir omitiendo carpetas binarias o caches."""
+    if not pattern or not pattern.strip():
+        return "Error: Debes especificar el parámetro 'pattern'."
+    try:
+        target = _resolve_safe_path(base_dir, (path or ".").strip())
+    except PermissionError as pe:
+        return f"Error de seguridad: {pe}"
+    if not target.exists():
+        return f"Error: La ruta '{path}' no existe."
+
+    flags = re.IGNORECASE if case_insensitive else 0
+    try:
+        rx = re.compile(pattern, flags)
+    except re.error as exc:
+        return f"Error en sintaxis de expresión regular '{pattern}': {exc}"
+
+    ignored_names = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", ".ruff_cache", "node_modules", "dist", "build"}
+    matches = []
+    max_matches = 50
+
+    if target.is_file():
+        files_to_scan = [target]
+    else:
+        files_to_scan = []
+        for root, dirs, files in os.walk(target):
+            dirs[:] = [d for d in dirs if d not in ignored_names and not d.startswith(".")]
+            for f in sorted(files):
+                if f.startswith("."):
+                    continue
+                files_to_scan.append(Path(root) / f)
+                if len(files_to_scan) > 1000:
+                    break
+
+    for fpath in files_to_scan:
+        try:
+            rel = fpath.relative_to(base_dir)
+            text = fpath.read_text(encoding="utf-8", errors="ignore")
+            for idx, line in enumerate(text.splitlines(), start=1):
+                if rx.search(line):
+                    matches.append(f"{rel}:{idx}: {line.strip()[:200]}")
+                    if len(matches) >= max_matches:
+                        return "\n".join(matches) + f"\n... (límite de {max_matches} coincidencias alcanzado)"
+        except Exception:
+            continue
+
+    if not matches:
+        return f"Sin coincidencias para '{pattern}' en '{path}'."
+    return "\n".join(matches)
+
+
+def _tool_find(base_dir: Path, pattern: str = "*", path: str = ".") -> str:
+    """Busca archivos o carpetas por patrón glob en base_dir."""
+    try:
+        target = _resolve_safe_path(base_dir, (path or ".").strip())
+    except PermissionError as pe:
+        return f"Error de seguridad: {pe}"
+    if not target.exists():
+        return f"Error: La ruta '{path}' no existe."
+    if not target.is_dir():
+        return f"Error: '{path}' no es un directorio."
+
+    ignored_names = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", ".ruff_cache", "node_modules", "dist", "build"}
+    pat = pattern.strip() if pattern and pattern.strip() else "*"
+    matches = []
+    max_results = 100
+
+    for root, dirs, files in os.walk(target):
+        dirs[:] = [d for d in dirs if d not in ignored_names and not d.startswith(".")]
+        p_root = Path(root)
+        for d in sorted(dirs):
+            if Path(d).match(pat):
+                try:
+                    matches.append(str((p_root / d).relative_to(base_dir)) + "/")
+                except ValueError:
+                    pass
+        for f in sorted(files):
+            if f.startswith("."):
+                continue
+            if Path(f).match(pat):
+                try:
+                    matches.append(str((p_root / f).relative_to(base_dir)))
+                except ValueError:
+                    pass
+            if len(matches) >= max_results:
+                return "\n".join(matches) + f"\n... (límite de {max_results} elementos alcanzado)"
+
+    if not matches:
+        return f"No se encontraron archivos con el patrón '{pat}' en '{path}'."
+    return "\n".join(matches)
+
+
+def _tool_ls(base_dir: Path, path: str = ".") -> str:
+    """Lista el contenido de un directorio en base_dir con tamaños."""
+    try:
+        target = _resolve_safe_path(base_dir, (path or ".").strip())
+    except PermissionError as pe:
+        return f"Error de seguridad: {pe}"
+    if not target.exists():
+        return f"Error: La ruta '{path}' no existe."
+    if target.is_file():
+        size = target.stat().st_size
+        return f"[FILE] {path} ({size} bytes)"
+
+    ignored_names = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", ".ruff_cache"}
+    entries = []
+    try:
+        items = sorted(target.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower()))
+        for item in items:
+            if item.name in ignored_names:
+                continue
+            if item.is_dir():
+                entries.append(f"[DIR]  {item.name}/")
+            else:
+                entries.append(f"[FILE] {item.name} ({item.stat().st_size} bytes)")
+            if len(entries) >= 150:
+                entries.append("... (más elementos truncados)")
+                break
+    except Exception as exc:
+        return f"Error al listar '{path}': {exc}"
+
+    return "\n".join(entries) if entries else "(directorio vacío)"
+
+
+CODER_TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
+    "read": {
+        "type": "function",
+        "function": {
+            "name": "read",
+            "description": "Lee el contenido de un archivo dentro del espacio de trabajo con numeración de líneas opcional.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Ruta relativa del archivo a leer.",
+                    },
+                    "start_line": {
+                        "type": "integer",
+                        "description": "Línea inicial a leer (1-indexed, opcional).",
+                    },
+                    "end_line": {
+                        "type": "integer",
+                        "description": "Línea final a leer (1-indexed, opcional).",
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    "bash": {
+        "type": "function",
+        "function": {
+            "name": "bash",
+            "description": "Ejecuta un comando en la consola dentro del espacio de trabajo y devuelve la salida combinada y código de salida.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "Comando de shell a ejecutar (ej. 'pytest tests/', 'ruff check .').",
+                    },
+                },
+                "required": ["command"],
+            },
+        },
+    },
+    "edit": {
+        "type": "function",
+        "function": {
+            "name": "edit",
+            "description": "Edita un archivo reemplazando una ocurrencia exacta y única de 'old_str' por 'new_str'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Ruta relativa del archivo a editar.",
+                    },
+                    "old_str": {
+                        "type": "string",
+                        "description": "Cadena de texto exacta existente que se desea reemplazar.",
+                    },
+                    "new_str": {
+                        "type": "string",
+                        "description": "Nueva cadena de texto que sustituirá a 'old_str'.",
+                    },
+                },
+                "required": ["path", "old_str", "new_str"],
+            },
+        },
+    },
+    "write": {
+        "type": "function",
+        "function": {
+            "name": "write",
+            "description": "Crea o sobreescribe un archivo completo con el contenido indicado en el espacio de trabajo.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Ruta relativa del archivo a escribir.",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Contenido completo del archivo a guardar.",
+                    },
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
+    "grep": {
+        "type": "function",
+        "function": {
+            "name": "grep",
+            "description": "Busca un patrón de texto o expresión regular en archivos del proyecto, omitiendo carpetas binarias o de dependencias.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Patrón o expresión regular a buscar.",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Ruta relativa donde buscar (por defecto '.').",
+                    },
+                    "case_insensitive": {
+                        "type": "boolean",
+                        "description": "Indica si la búsqueda debe ignorar mayúsculas y minúsculas (por defecto False).",
+                    },
+                },
+                "required": ["pattern"],
+            },
+        },
+    },
+    "find": {
+        "type": "function",
+        "function": {
+            "name": "find",
+            "description": "Busca archivos y directorios que coincidan con un patrón glob en el espacio de trabajo.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Patrón glob (ej. '*.py', '*test*'). Por defecto '*'.",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Ruta relativa inicial de búsqueda (por defecto '.').",
+                    },
+                },
+            },
+        },
+    },
+    "ls": {
+        "type": "function",
+        "function": {
+            "name": "ls",
+            "description": "Lista el contenido de un directorio en el espacio de trabajo indicando si es archivo o carpeta y su tamaño.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Ruta relativa a listar (por defecto '.').",
+                    },
+                },
+            },
+        },
+    },
+}
+
+
+def coder_agent(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    prompt: str,
+    workspace_dir: str = ".",
+    tools_preset: str = "coding",
+    custom_tools: str = "",
+    max_turns: int = 5,
+    max_tool_chars: int = 4000,
+    max_context: int = 0,
+    output_format: str = "full",
+    model: str = "",
+    url: str = "",
+    secret: str = "",
+    temperature: float = 0.1,
+    system_prompt: str = "",
+    timeout: float = 120.0,
+) -> NodeResult:
+    """Microarnés de agente programador con bucle ReAct multi-turno, detección de contexto y compactación con Luhn+."""
+    inp = Inputs(inputs)
+    input_text = inp.text()
+    user_msg = f"{prompt}\n\nContexto / Entrada previa:\n{input_text}" if input_text else prompt
+
+    base_path = Path(workspace_dir or ".").expanduser().resolve()
+    if not base_path.exists():
+        return NodeResult("error", error=f"El directorio de trabajo no existe: '{workspace_dir}'")
+
+    preset = (tools_preset or "coding").lower().strip()
+    if preset == "all":
+        active_tool_names = list(ALL_TOOL_NAMES)
+    elif preset == "read_only":
+        active_tool_names = list(READ_ONLY_TOOL_NAMES)
+    elif preset == "custom":
+        custom_list = [t.strip().lower() for t in custom_tools.split(",") if t.strip()]
+        active_tool_names = [t for t in custom_list if t in CODER_TOOL_DEFINITIONS]
+    else:  # coding
+        active_tool_names = list(CODING_TOOL_NAMES)
+
+    tools_spec = [CODER_TOOL_DEFINITIONS[name] for name in active_tool_names if name in CODER_TOOL_DEFINITIONS]
+
+    base_url = (
+        url
+        or os.environ.get("DEDALO_LLM_URL")
+        or "http://localhost:11434/v1"
+    ).rstrip("/")
+    target_model = (
+        model
+        or os.environ.get("DEDALO_LLM_MODEL")
+        or "llama3"
+    )
+
+    api_key = ""
+    if secret:
+        api_key = secrets.get(secret) or ""
+    if not api_key:
+        api_key = os.environ.get("DEDALO_LLM_KEY", "")
+
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    # Detección del tamaño de la ventana de contexto del servidor
+    context_window = _detect_context_window(
+        base_url=base_url,
+        target_model=target_model,
+        api_key=api_key,
+        explicit_ctx=int(max_context or 0),
+        timeout=min(5.0, float(timeout or 120.0)),
+    )
+    compactions_count = 0
+
+    default_system = (
+        "Eres un agente de programación autónomo e inspección de código. "
+        "Tienes acceso a herramientas para explorar, leer, editar y ejecutar pruebas en el proyecto. "
+        "Sé riguroso, objetivo y conciso. Cuando completes la tarea solicitada, resume tus conclusiones o modificaciones."
+    )
+    sys_content = system_prompt.strip() or default_system
+
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": sys_content},
+        {"role": "user", "content": user_msg},
+    ]
+
+    tool_handlers = {
+        "read": lambda args: _tool_read(base_path, args.get("path", ""), args.get("start_line", 1), args.get("end_line")),
+        "bash": lambda args: _tool_bash(base_path, args.get("command", "")),
+        "edit": lambda args: _tool_edit(base_path, args.get("path", ""), args.get("old_str", ""), args.get("new_str", "")),
+        "write": lambda args: _tool_write(base_path, args.get("path", ""), args.get("content", "")),
+        "grep": lambda args: _tool_grep(base_path, args.get("pattern", ""), args.get("path", "."), args.get("case_insensitive", False)),
+        "find": lambda args: _tool_find(base_path, args.get("pattern", "*"), args.get("path", ".")),
+        "ls": lambda args: _tool_ls(base_path, args.get("path", ".")),
+    }
+
+    endpoint = f"{base_url}/chat/completions"
+    turns = 0
+    modified_files: set[str] = set()
+    tool_calls_log: list[dict[str, Any]] = []
+    final_response = ""
+    completed = False
+    turn_limit = max(1, min(int(max_turns or 5), 20))
+
+    try:
+        with httpx.Client(timeout=float(timeout or 120.0)) as client:
+            for _ in range(turn_limit):
+                turns += 1
+
+                # Comprobación de ventana de contexto: compactar con Luhn+ si se alcanza el 90%
+                messages, did_compact = _compact_conversation_history(messages, context_window)
+                if did_compact:
+                    compactions_count += 1
+                    tool_calls_log.append({
+                        "turn": turns,
+                        "tool": "luhn+_compact",
+                        "args": {"context_window": context_window, "threshold": int(context_window * 0.90)},
+                        "output_preview": f"Contexto compactado al 90% con Luhn+ ({_estimate_messages_tokens(messages)} tokens estimados)",
+                    })
+
+                payload: dict[str, Any] = {
+                    "model": target_model,
+                    "messages": messages,
+                    "temperature": float(temperature),
+                }
+                if tools_spec:
+                    payload["tools"] = tools_spec
+
+                resp = client.post(endpoint, headers=headers, json=payload)
+                if resp.status_code >= 400:
+                    return NodeResult("error", error=f"LLM API devolvió HTTP {resp.status_code}: {resp.text[:300]}")
+
+                data = resp.json()
+                choice = data["choices"][0]
+                msg = choice["message"]
+                messages.append(msg)
+
+                tool_calls = msg.get("tool_calls")
+                if not tool_calls:
+                    final_response = (msg.get("content") or "").strip()
+                    completed = True
+                    break
+
+                for call in tool_calls:
+                    call_id = call.get("id") or f"call_{len(tool_calls_log)}"
+                    fn = call.get("function", {})
+                    fn_name = fn.get("name", "")
+                    raw_args = fn.get("arguments", "{}")
+                    if isinstance(raw_args, str):
+                        try:
+                            args = json.loads(raw_args)
+                        except Exception:
+                            args = {}
+                    else:
+                        args = raw_args or {}
+
+                    if fn_name not in active_tool_names or fn_name not in tool_handlers:
+                        result_str = f"Error: La herramienta '{fn_name}' no está disponible o no está autorizada en este nodo."
+                    else:
+                        try:
+                            result_str = tool_handlers[fn_name](args)
+                            if fn_name in ("write", "edit") and "path" in args:
+                                modified_files.add(str(args["path"]))
+                        except Exception as err:
+                            result_str = f"Error al ejecutar '{fn_name}': {err}"
+
+                    clipped = _clip_tool_output(result_str, max_chars=int(max_tool_chars or 4000))
+                    tool_calls_log.append({
+                        "turn": turns,
+                        "tool": fn_name,
+                        "args": args,
+                        "output_preview": clipped[:200],
+                    })
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "name": fn_name,
+                        "content": clipped,
+                    })
+
+            if not completed:
+                # Comprobar compactación antes del resumen final
+                messages, _ = _compact_conversation_history(messages, context_window)
+                messages.append({
+                    "role": "user",
+                    "content": "Se ha alcanzado el límite de turnos. Resume brevemente las acciones realizadas y el estado actual.",
+                })
+                try:
+                    final_resp = client.post(
+                        endpoint,
+                        headers=headers,
+                        json={
+                            "model": target_model,
+                            "messages": messages,
+                            "temperature": float(temperature),
+                        },
+                    )
+                    if final_resp.status_code == 200:
+                        final_data = final_resp.json()
+                        final_response = (final_data["choices"][0]["message"].get("content") or "").strip()
+                except Exception:
+                    final_response = (messages[-2].get("content") or "Límite de turnos alcanzado.").strip()
+
+    except Exception as exc:
+        return NodeResult("error", error=f"Error en bucle del agente programador: {exc}")
+
+    res_data = {
+        "response": final_response,
+        "turns_used": turns,
+        "completed": completed,
+        "context_window": context_window,
+        "compactions_count": compactions_count,
+        "modified_files": sorted(list(modified_files)),
+        "tool_calls_count": len([c for c in tool_calls_log if c["tool"] != "luhn+_compact"]),
+        "tool_history": tool_calls_log,
+    }
+
+    if (output_format or "").lower().strip() == "text":
+        return NodeResult("ok", data=final_response)
+    return NodeResult("ok", data=res_data)
+
+
 def web_read(
     ctx: Any,
     inputs: list[NodeResult],
@@ -1472,37 +2386,6 @@ def web_search(
     return NodeResult("ok", data=results)
 
 
-_SUMMARIZE_STOPWORDS: frozenset[str] = frozenset({
-    # Español
-    "el", "la", "los", "las", "un", "una", "unos", "unas", "de", "del", "a", "al", "en", "para", "por",
-    "con", "sin", "sobre", "entre", "hasta", "desde", "hacia", "tras", "durante", "mediante", "contra",
-    "y", "e", "ni", "o", "u", "pero", "sino", "aunque", "porque", "pues", "que", "como", "cuando",
-    "donde", "quien", "quienes", "cual", "cuales", "cuyo", "cuya", "cuyos", "cuyas",
-    "este", "esta", "estos", "estas", "ese", "esa", "esos", "esas", "aquel", "aquella", "aquellos", "aquellas",
-    "su", "sus", "mi", "mis", "tu", "tus", "nuestro", "nuestra", "nuestros", "nuestras",
-    "ser", "es", "son", "era", "eran", "fue", "fueron", "sido", "estar", "esta", "estan", "estaba", "estaban",
-    "haber", "hay", "habia", "habian", "hubo", "hacer", "hace", "hizo", "hicieron",
-    "tener", "tiene", "tienen", "tenia", "tenian", "tuvo", "tuvieron",
-    "mas", "menos", "muy", "mucho", "mucha", "muchos", "muchas", "poco", "poca", "pocos", "pocas",
-    "tambien", "tampoco", "ya", "no", "si", "todo", "toda", "todos", "todas", "otro", "otra", "otros", "otras",
-    "mismo", "misma", "mismos", "mismas", "segun", "ademas", "asi", "cada", "tanto", "tanta", "tan",
-    # English
-    "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "with", "by", "from", "up",
-    "about", "into", "over", "after", "is", "are", "was", "were", "be", "been", "being", "have", "has",
-    "had", "do", "does", "did", "can", "could", "shall", "should", "will", "would", "may", "might",
-    "must", "it", "its", "they", "them", "their", "this", "that", "these", "those", "which", "who",
-    "whom", "what", "there", "where", "when", "why", "how", "all", "any", "both", "each", "few", "more",
-    "most", "other", "some", "such", "than", "too", "very", "also", "only"
-})
-
-
-def _format_summary_output(sentences: list[str], output_format: str = "paragraph") -> str:
-    fmt = (output_format or "paragraph").lower().strip()
-    if fmt in ("bullets", "bullet", "viñetas", "vineta", "list", "lista"):
-        return "\n".join(f"- {s}" for s in sentences)
-    return " ".join(sentences)
-
-
 def summarize_text(
     ctx: Any,
     inputs: list[NodeResult],
@@ -1608,50 +2491,8 @@ def summarize_text(
 
         elif eng in ("luhn+", "luhn_plus", "luhnplus"):
             # Luhn+ avanzado: filtro de stopwords, normalización por longitud, sesgo posicional y diversidad (MMR)
-            sig_words_all = [
-                w for w in re.findall(r"\b\w{3,}\b", text.lower())
-                if w not in _SUMMARIZE_STOPWORDS and not w.isdigit()
-            ]
-            freq = Counter(sig_words_all)
-            sent_sig_words = [
-                [w for w in re.findall(r"\b\w{3,}\b", s.lower()) if w not in _SUMMARIZE_STOPWORDS and not w.isdigit()]
-                for s in sentence_list
-            ]
-
-            selected_indices: list[int] = []
-            current_freq = dict(freq)
-
-            for _ in range(target_count):
-                best_score = -1.0
-                best_idx = -1
-                for i, (s, w_list) in enumerate(zip(sentence_list, sent_sig_words)):
-                    if i in selected_indices:
-                        continue
-                    raw_score = sum(current_freq.get(w, 0) for w in w_list) if w_list else 0.1
-                    # Normalización por longitud de frase
-                    score = raw_score / math.sqrt(max(1, len(w_list)))
-
-                    # Sesgo de posición (Lead Bias)
-                    if i == 0:
-                        score *= 1.5
-                    elif i == 1:
-                        score *= 1.25
-                    elif i == 2:
-                        score *= 1.1
-
-                    if score > best_score:
-                        best_score = score
-                        best_idx = i
-
-                if best_idx != -1:
-                    selected_indices.append(best_idx)
-                    # Penalización por redundancia sobre palabras ya cubiertas
-                    for w in sent_sig_words[best_idx]:
-                        current_freq[w] = current_freq.get(w, 0) * 0.5
-
-            selected_indices.sort()
-            chosen = [sentence_list[i] for i in selected_indices]
-            return NodeResult("ok", data=_format_summary_output(chosen, format))
+            chosen_summary = _run_luhn_plus(text, target_count=target_count, output_format=format, sentences=sentence_list)
+            return NodeResult("ok", data=chosen_summary)
 
         elif eng in ("textrank", "text_rank"):
             # Algoritmo TextRank: grafo de similitud léxica y centralidad PageRank

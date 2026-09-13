@@ -20,7 +20,7 @@ Este documento resume el estado técnico actual de **Dédalo Standalone**, su or
 - **Control de cambios**: Detección de modificaciones no guardadas con modal de confirmación antes de cambiar de flujo.
 - **Optimización de Memoria Activa**: Compactación periódica de heap con recolección de basura forzada y devolución de páginas al OS vía `malloc_trim(0)`.
 - **Evasión Antibot sin Navegador Pesado**: Motor HTTP dual con `curl_cffi` (suplantación de TLS/HTTP/2 de Chrome/Safari/Firefox y User-Agents) y fallback transparente a `httpx`.
-- **Suite de pruebas**: 94 pruebas automatizadas pasando al 100% en `pytest`.
+- **Suite de pruebas**: 104 pruebas automatizadas pasando al 100% en `pytest`.
 
 ---
 
@@ -280,6 +280,28 @@ Para transformar Dédalo en un orquestador de CI/CD ligero, GitOps y revisión d
 - **Plantilla Oficial "Auditoría de Commits con IA" (`auditoria-commits-git`)**:
   - Conecta `input.git` (modo diff) $\rightarrow$ `transform.agent` (auditoría defensiva buscando credenciales expuestas, regresiones de seguridad y resumen de cambios) $\rightarrow$ `output.telegram`.
 
+### N. Microarnés de Programación ReAct, Herramientas Estructuradas y Compactación Luhn+ (56 Nodos en Total)
+Para permitir resolución autónoma de tareas de código, pruebas de regresión y refactorización guiada:
+- **Protocolo de Tool Calling Nativo (OpenAI Compatible)**:
+  - Implementado directamente mediante peticiones HTTP estándar con `httpx` (cero dependencias externas adicionales), conectando con servidores de inferencia locales (Ollama, vLLM) o remotos (OpenAI, OpenRouter, DeepSeek).
+- **Paleta Canónica de 7 Herramientas y Presets**:
+  - `ALL_TOOL_NAMES`: `("read", "bash", "edit", "write", "grep", "find", "ls")`.
+  - `CODING_TOOL_NAMES`: `("read", "bash", "edit", "write")`.
+  - `READ_ONLY_TOOL_NAMES`: `("read", "grep", "find", "ls")`.
+  - Herramienta `read`: lectura con numeración de líneas y rangos acotados.
+  - Herramienta `edit`: sustitución atómica verificando unicidad estricta del bloque `old_str`.
+  - Herramienta `write`: escritura en disco creando subdirectorios automáticamente.
+  - Herramienta `bash`: ejecución en el espacio de trabajo con timeout y captura de código de salida.
+  - Herramientas `grep`, `find` y `ls`: exploración selectiva ignorando carpetas de dependencias y binarios (`.git`, `.venv`, etc.).
+- **Enjaulado de Rutas (Path Sandboxing)**:
+  - Confinamiento estricto al `workspace_dir` mediante `Path.resolve().is_relative_to(base_dir)`. Todo intento de lectura o modificación fuera del espacio de trabajo es bloqueado con error de seguridad.
+- **Autodetección de Ventana de Contexto del Servidor**:
+  - Función `_detect_context_window`: consulta `/api/show` en Ollama (extrayendo `num_ctx` o `model_info`), `/models` en endpoints OpenAI/OpenRouter y tabla de heurísticas para familias conocidas (`gpt-4o`, `claude`, `qwen2.5-coder`, `deepseek`, `llama-3.x`).
+- **Compactación Automática con Luhn+ al 90% de Saturación**:
+  - Evaluación continua del presupuesto de tokens (`~3.5` caracteres por token).
+  - Al alcanzar el 90% del contexto, se preservan los prompts de inicio y las llamadas recientes, y se sintetiza el historial intermedio denso mediante el algoritmo extractivo `Luhn+` (filtrado de stopwords, normalización por longitud, sesgo de posición y diversidad MMR).
+  - Truncado defensivo adicional sobre salidas de herramientas individuales desproporcionadas.
+
 ---
 
 ## 5. Estructura del Repositorio
@@ -307,8 +329,9 @@ dedalo/
 │   │   └── index.html
 │   ├── store.py            # Persistencia de flujos en JSON/PY y empaquetado ZIP
 │   └── templates.py        # Plantillas de inicio rápido
-├── tests/                  # Pruebas automatizadas (pytest - 94 tests)
+├── tests/                  # Pruebas automatizadas (pytest - 104 tests)
 │   ├── test_api.py
+│   ├── test_coder.py       # Pruebas de transform.coder, herramientas, sandboxing y Luhn+
 │   ├── test_compiler.py
 │   ├── test_cron.py        # Pruebas del evaluador cron e intervalos nativo
 │   ├── test_debug.py       # Pruebas de ejecución aislada, paso a paso y preview en vivo

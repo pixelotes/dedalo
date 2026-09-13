@@ -22,7 +22,7 @@ El sistema incluye una amplia bateria de nodos de transformacion deterministicos
 
 ## Nodos principales
 
-El catalogo incluye mas de 50 nodos modulares (55 en total). Entre los mas utilizados destacan:
+El catalogo incluye mas de 50 nodos modulares (56 en total). Entre los mas utilizados destacan:
 
 ### Nodos de entrada
 - `input.git`: Lectura de repositorios Git locales o remotos (historial de commits, diff de cambios entre revisiones con filtro de rutas, clonado ligero shallow o estado del arbol).
@@ -37,6 +37,7 @@ El catalogo incluye mas de 50 nodos modulares (55 en total). Entre los mas utili
 - `input.ssl_cert` / `input.dns_check` / `input.ping`: Comprobacion de caducidad de certificados TLS, resolucion DNS y latencia de red.
 
 ### Nodos de transformacion
+- `transform.coder`: Microarnes de programacion iterativa con bucle ReAct multi-turno y herramientas estructuradas (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`). Autodetecta la ventana de contexto del servidor de inferencia y compacta el historial previo con Luhn+ al alcanzar el 90% de saturacion.
 - `transform.html_extract`: Extraccion de campos y registros mediante selectores CSS sobre documentos HTML.
 - `transform.regex`: Evaluacion de expresiones regulares con modos de coincidencia, extraccion de grupos y sustitucion.
 - `transform.filter_items` / `transform.array_ops`: Filtrado condicional, ordenacion, limites y proyeccion sobre listas de datos.
@@ -58,10 +59,10 @@ El catalogo incluye mas de 50 nodos modulares (55 en total). Entre los mas utili
 
 ---
 
-## Casos de uso habituales
+## Casos de uso representativos
 
-1. **Monitorizacion de novedades web sin bloqueos antibot**:
-   Extraccion periodica de ofertas o articulos mediante `input.http_call` con suplantacion de TLS, filtrado con `transform.html_extract` y `transform.diff`, y aviso inmediato a Telegram solo cuando aparezcan elementos nuevos.
+1. **Monitorizacion selectiva de fuentes de noticias o boletines oficiales**:
+   Descarga de canales RSS o articulos web, descarte de elementos duplicados mediante `transform.fuzzy_dedup` o `transform.diff`, filtrado de tematicas relevantes y envio de resumen a un canal de Telegram.
 
 2. **Briefing diario de correo electronico sin riesgo de inyeccion**:
    Lectura de correos no leidos con `input.imap`, depuracion de texto oculto y firmas con `transform.clean_email`, compilacion de un resumen ejecutivo priorizado mediante `transform.agent` y envio consolidado al movil a primera hora de la manana.
@@ -74,6 +75,9 @@ El catalogo incluye mas de 50 nodos modulares (55 en total). Entre los mas utili
 
 5. **Auditoria continua de commits y seguridad en Git**:
    Extraccion automatica del parche de cambios reciente mediante `input.git` (modo diff con limite maximo de caracteres para proteger el contexto), analisis de vulnerabilidades y credenciales con `transform.agent` y envio de alertas preventivas a Telegram ante fallos criticos.
+
+6. **Correccion y refactorizacion asistida de codigo en bucle cerrado**:
+   Activacion de `transform.coder` para resolver una incidencia o ajustar un archivo fuente en disco local. El agente consulta archivos con `read`/`grep`, prueba cambios con `bash` y edita de forma atomica con `edit`, compactando memoria via Luhn+ si el contexto se satura, antes de registrar el resultado.
 
 ---
 
