@@ -1,0 +1,150 @@
+{
+  "version": 1,
+  "name": "ofertas-juegos-mesa",
+  "nodes": [
+    {
+      "id": "descargar_mathom",
+      "type": "input.http_call",
+      "label": "Descargar novedades Mathom",
+      "config": {
+        "url": "https://mathom.es/es/nuevos-productos",
+        "method": "GET",
+        "engine": "auto",
+        "impersonate": "chrome",
+        "timeout": 15.0
+      },
+      "x": 80.0,
+      "y": 80.0
+    },
+    {
+      "id": "extraer_mathom",
+      "type": "transform.html_extract",
+      "label": "Extraer juegos Mathom (CSS)",
+      "config": {
+        "selector": "article.product-miniature",
+        "fields": "{\"title\": \".product-title a\", \"url\": \".product-title a@href\", \"price\": \".price\", \"original_price\": \".regular-price\"}",
+        "output_format": "json",
+        "limit": 40,
+        "base_url": "https://mathom.es"
+      },
+      "x": 380.0,
+      "y": 80.0
+    },
+    {
+      "id": "descargar_outletpc",
+      "type": "input.http_call",
+      "label": "Descargar novedades Outlet-PC",
+      "config": {
+        "url": "https://outlet-pc.es/collections/juegos-de-mesa?sort_by=created-descending",
+        "method": "GET",
+        "engine": "auto",
+        "impersonate": "chrome",
+        "timeout": 15.0
+      },
+      "x": 80.0,
+      "y": 260.0
+    },
+    {
+      "id": "extraer_outletpc",
+      "type": "transform.html_extract",
+      "label": "Extraer juegos Outlet-PC (CSS)",
+      "config": {
+        "selector": "div.hover-item",
+        "fields": "{\"title\": \"h3\", \"url\": \"a@href\", \"price\": \".text-price\", \"original_price\": \".line-through\"}",
+        "output_format": "json",
+        "limit": 40,
+        "base_url": "https://outlet-pc.es"
+      },
+      "x": 380.0,
+      "y": 260.0
+    },
+    {
+      "id": "descargar_zacatrus",
+      "type": "input.http_call",
+      "label": "Descargar novedades Zacatrus",
+      "config": {
+        "url": "https://zacatrus.es/juegos-de-mesa.html?dir=desc&order=news_from_date",
+        "method": "GET",
+        "engine": "auto",
+        "impersonate": "chrome",
+        "timeout": 15.0
+      },
+      "x": 80.0,
+      "y": 440.0
+    },
+    {
+      "id": "extraer_zacatrus",
+      "type": "transform.html_extract",
+      "label": "Extraer juegos Zacatrus (CSS)",
+      "config": {
+        "selector": "li.product-item",
+        "fields": "{\"title\": \".product-item-name a\", \"url\": \".product-item-name a@href\", \"price\": \".price\"}",
+        "output_format": "json",
+        "limit": 40,
+        "base_url": "https://zacatrus.es"
+      },
+      "x": 380.0,
+      "y": 440.0
+    },
+    {
+      "id": "combinar_y_comparar",
+      "type": "transform.script",
+      "label": "Deduplicar y comparar ofertas",
+      "config": {
+        "fan_in": "all",
+        "code": "import datetime, re\n\nitems_m = entrada.get('extraer_mathom') or []\nitems_o = entrada.get('extraer_outletpc') or []\nitems_z = entrada.get('extraer_zacatrus') or []\n\nfor x in items_m: x['store'] = 'Mathom'\nfor x in items_o: x['store'] = 'Outlet-PC'\nfor x in items_z: x['store'] = 'Zacatrus'\n\nall_items = items_m + items_o + items_z\n\ndef clean_game_name(title: str) -> str:\n    t = (title or '').strip()\n    # Eliminar prefijos de editoriales o marcas comunes\n    t = re.sub(r'^(?:ASMODEE|Games Workshop|Mattel Games|Ravensburger|Devir|Hasbro Gaming|Topi Games|Maldito Games|SD Games|CRAZE)\\s+', '', t, flags=re.IGNORECASE)\n    # Eliminar coletillas de estado o idioma en Outlet-PC y tiendas\n    t = re.sub(r'(?i)\\s*(?:embalaje\\s+deteriorado|reacondicionado|caja\\s+abierta|instrucciones\\s+en\\s+\\w+|version\\s+\\w+|edicion\\s+en\\s+\\w+)', '', t)\n    t = re.sub(r'(?i)\\s*juego\\s+(?:de\\s+mesa|de\\s+cartas|familiar|de\\s+estrategia|estrategico).*', '', t)\n    t = re.sub(r'\\s*\\([^)]*(?:español|castellano|aleman|ingles|frances|expansion|cartas|piezas)[^)]*\\)', '', t, flags=re.IGNORECASE)\n    return re.sub(r'\\s+', ' ', t).strip(' -:,¡!')\n\ndef normalize_title(text: str) -> str:\n    t = text.lower().strip()\n    for a, b in (('á', 'a'), ('é', 'e'), ('í', 'i'), ('ó', 'o'), ('ú', 'u'), ('ñ', 'n'), ('ü', 'u')):\n        t = t.replace(a, b)\n    t = re.sub(r'[^\\w\\s]', '', t)\n    return re.sub(r'\\s+', ' ', t).strip()\n\ndef matches_game(name1: str, name2: str) -> bool:\n    n1, n2 = normalize_title(name1), normalize_title(name2)\n    if not n1 or not n2:\n        return False\n    if n1 == n2:\n        return True\n    w1, w2 = set(n1.split()), set(n2.split())\n    stopwords = {'de', 'la', 'el', 'en', 'y', 'a', 'los', 'las', 'un', 'una', 'con', 'para', 'por', 'del', 'the', 'edition', 'edicion', 'expansion'}\n    w1_sig = w1 - stopwords\n    w2_sig = w2 - stopwords\n    if not w1_sig or not w2_sig:\n        return False\n    if w1_sig == w2_sig:\n        return True\n    intersection = len(w1_sig & w2_sig)\n    jaccard = intersection / len(w1_sig | w2_sig)\n    subset_ratio = intersection / min(len(w1_sig), len(w2_sig))\n    if min(len(w1_sig), len(w2_sig)) >= 2:\n        return subset_ratio >= 0.8 and intersection >= 2\n    return jaccard >= 0.8\n\n# Agrupar ofertas por juego\ngroups = []\nfor item in all_items:\n    raw_title = item.get('title', '').strip()\n    if not raw_title or len(raw_title) < 3:\n        continue\n    clean_name = clean_game_name(raw_title)\n    if not clean_name or len(clean_name) < 3:\n        clean_name = raw_title\n\n    found_group = None\n    for g in groups:\n        if matches_game(clean_name, g['canonical_name']):\n            found_group = g\n            break\n\n    if found_group:\n        # Evitar duplicados exactos de URL en la misma tienda\n        if not any(o['url'] == item['url'] for o in found_group['offers']):\n            found_group['offers'].append(item)\n    else:\n        groups.append({'canonical_name': clean_name, 'offers': [item]})\n\nmulti_store_groups = [g for g in groups if len(set(o['store'] for o in g['offers'])) > 1]\nsingle_store_groups = [g for g in groups if len(set(o['store'] for o in g['offers'])) == 1]\n\nnow = datetime.datetime.now()\nfecha_str = now.strftime('%Y-%m-%d %H:%M')\n\nlines = [\n    f'# 🎲 Novedades y Ofertas de Juegos de Mesa ({fecha_str})',\n    '',\n    'Compilado diario automatizado (programado a las 12:30) combinando **Mathom**, **Outlet-PC** y **Zacatrus**.',\n    f'- **Total productos escaneados:** {len(all_items)} (Mathom: {len(items_m)}, Outlet-PC: {len(items_o)}, Zacatrus: {len(items_z)})',\n    f'- **Juegos únicos detectados:** {len(groups)}',\n    f'- **Juegos con coincidencia multitienda:** {len(multi_store_groups)}',\n    '',\n    '---',\n    ''\n]\n\nif multi_store_groups:\n    lines.append('## ⚔️ Comparativa Multitienda (Ofertas coincidentes)')\n    lines.append('')\n    for g in multi_store_groups:\n        lines.append(f'### 🎯 {g[\"canonical_name\"]}')\n        for o in g['offers']:\n            pr = o.get('price', '').strip()\n            orig = o.get('original_price', '').strip()\n            price_txt = f'**{pr}**' if pr else 'Consultar precio'\n            if orig and orig != pr:\n                price_txt += f' ~~(antes {orig})~~'\n            lines.append(f'- [{o[\"store\"]}] {price_txt}: [{o[\"title\"]}]({o[\"url\"]})')\n        lines.append('')\n    lines.append('---')\n    lines.append('')\n\nlines.append('## 📦 Últimas Novedades en Mathom')\nlines.append('')\nfor it in items_m[:12]:\n    pr = it.get('price', '').strip()\n    orig = it.get('original_price', '').strip()\n    price_info = f' - **{pr}**' if pr else ''\n    if orig and orig != pr:\n        price_info += f' ~~(antes {orig})~~'\n    lines.append(f'- [{it[\"title\"]}]({it[\"url\"]}){price_info}')\nlines.append('')\n\nlines.append('---')\nlines.append('')\nlines.append('## 🏷️ Chollos y Reacondicionados en Outlet-PC')\nlines.append('')\nfor it in items_o[:12]:\n    pr = it.get('price', '').strip()\n    orig = it.get('original_price', '').strip()\n    price_info = f' - **{pr}**' if pr else ''\n    if orig and orig != pr:\n        price_info += f' ~~(antes {orig})~~'\n    lines.append(f'- [{it[\"title\"]}]({it[\"url\"]}){price_info}')\nlines.append('')\n\nlines.append('---')\nlines.append('')\nlines.append('## 🌟 Últimas Novedades en Zacatrus')\nlines.append('')\nfor it in items_z[:12]:\n    pr = it.get('price', '').strip()\n    price_info = f' - **{pr}**' if pr else ''\n    lines.append(f'- [{it[\"title\"]}]({it[\"url\"]}){price_info}')\nlines.append('')\n\nreturn '\\n'.join(lines)\n"
+      },
+      "x": 680.0,
+      "y": 260.0
+    },
+    {
+      "id": "guardar_compilado",
+      "type": "output.file",
+      "label": "Guardar juegos-mesa-ofertas.md",
+      "config": {
+        "filename": "juegos-mesa-ofertas.md",
+        "directory": "",
+        "mode": "sobrescribir"
+      },
+      "x": 980.0,
+      "y": 260.0
+    }
+  ],
+  "edges": [
+    {
+      "source": "descargar_mathom",
+      "target": "extraer_mathom",
+      "port": "ok"
+    },
+    {
+      "source": "descargar_outletpc",
+      "target": "extraer_outletpc",
+      "port": "ok"
+    },
+    {
+      "source": "descargar_zacatrus",
+      "target": "extraer_zacatrus",
+      "port": "ok"
+    },
+    {
+      "source": "extraer_mathom",
+      "target": "combinar_y_comparar",
+      "port": "ok"
+    },
+    {
+      "source": "extraer_outletpc",
+      "target": "combinar_y_comparar",
+      "port": "ok"
+    },
+    {
+      "source": "extraer_zacatrus",
+      "target": "combinar_y_comparar",
+      "port": "ok"
+    },
+    {
+      "source": "combinar_y_comparar",
+      "target": "guardar_compilado",
+      "port": "ok"
+    }
+  ]
+}
