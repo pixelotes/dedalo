@@ -288,6 +288,27 @@ select {
   color: var(--cat-output-text);
 }
 
+/* Buscador de nodos en paleta */
+.palette-search-wrap {
+  margin-bottom: 10px;
+}
+.palette-search-wrap input {
+  width: 100%;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  box-sizing: border-box;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.palette-search-wrap input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+}
+
 /* Secretos */
 .secret-add-box { display: flex; flex-direction: column; gap: 6px; }
 .secret-add-box input {

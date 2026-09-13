@@ -20,7 +20,7 @@ Este documento resume el estado técnico actual de **Dédalo Standalone**, su or
 - **Control de cambios**: Detección de modificaciones no guardadas con modal de confirmación antes de cambiar de flujo.
 - **Optimización de Memoria Activa**: Compactación periódica de heap con recolección de basura forzada y devolución de páginas al OS vía `malloc_trim(0)`.
 - **Evasión Antibot sin Navegador Pesado**: Motor HTTP dual con `curl_cffi` (suplantación de TLS/HTTP/2 de Chrome/Safari/Firefox y User-Agents) y fallback transparente a `httpx`.
-- **Suite de pruebas**: 54 pruebas automatizadas pasando al 100% en `pytest`.
+- **Suite de pruebas**: 64 pruebas automatizadas pasando al 100% en `pytest`.
 
 ---
 
@@ -184,6 +184,33 @@ Se ha incorporado un nodo de búsqueda web nativo que permite alimentar cualquie
   - `markdown`: Lista formateada con viñetas y enlaces Markdown (`- [Título](URL): Snippet`), lista para encadenar a `transform.summarize`, `output.file` o nodos de mensajería (Telegram, Discord, Slack, Email).
 - **Integración con la UI y Secretos de Dédalo**:
   - El campo `secret` se vincula dinámicamente al almacén de secretos (`choices_from={"secret": "secrets"}`) y se muestra condicionalmente solo cuando se selecciona un motor comercial que lo requiere (`show_when={"secret": {"engine": ["tavily", "exa"]}}`).
+
+### H. Nodos Deterministas sin LLM y Buscador de la Paleta
+Para garantizar la máxima autonomía, predictibilidad y rendimiento en Raspberry Pi (~20 MB RAM) sin incurrir en costes de API ni latencias de modelos de lenguaje, se ha integrado una batería completa de nodos deterministas basados 100% en la librería estándar de Python:
+- **Detección de Cambios y Novedades (`transform.diff`)**:
+  - Conserva una instantánea de estado en `data/state/{flow}_{key}.json` entre ejecuciones sucesivas.
+  - Permite emitir solo elementos nuevos (`added`), modificados (`modified`), eliminados (`removed`) o el resumen global (`all`).
+  - Previene que los flujos periódicos vuelvan a notificar elementos ya vistos en días anteriores.
+- **Deduplicación Difusa Inteligente (`transform.fuzzy_dedup`)**:
+  - Combina `difflib.SequenceMatcher` con similitud de conjuntos léxicos (Jaccard y contención de subconjuntos) para unificar títulos con ligeras variaciones entre tiendas o periódicos.
+  - Modos `keep_first`, `merge_list` (adjunta la lista `duplicates`) y `group` (clusters).
+- **Agregador Estadístico (`transform.aggregate`)**:
+  - Calcula `count`, `sum`, `avg`, `min`, `max`, `median` y `summary` completo sobre campos numéricos, con soporte de agrupación por clave (`group_by`).
+- **Formateador de Tablas (`transform.table`)**:
+  - Renderiza listas de diccionarios en tablas Markdown alineadas o HTML con estilos inline, listo para envíos de correo o notificaciones visuales.
+- **Extracción de Palabras Clave RAKE (`transform.keywords_rake`)**:
+  - Algoritmo *Rapid Automatic Keyword Extraction* implementado en Python puro para extraer conceptos clave y temáticas de textos sin modelos NLP pesados.
+- **Vigilancia de Infraestructura y Red (`input.ssl_cert`, `input.dns_check`, `input.ping`)**:
+  - `ssl_cert`: Días restantes de validez, emisor, sujeto y estado de certificados TLS (`ssl` y `socket`).
+  - `dns_check`: Resolución de direcciones IP y tiempo de respuesta DNS.
+  - `ping_host`: Latencia de conexión en ms vía TCP handshake (sin requerir privilegios root ni raw sockets en Docker/Linux) o ping ICMP nativo.
+- **Conectividad Domótica e IoT (`output.mqtt` / `input.mqtt`)**:
+  - Cliente nativo de protocolo binario MQTT 3.1.1 implementado sobre sockets directos de Python (cero librerías externas necesarias). Publica y lee mensajes en brokers locales como Mosquitto o Home Assistant.
+- **Lector de Correo IMAP (`input.imap`)**:
+  - Conexión segura IMAP sobre TLS (`imaplib` + `email`) con búsqueda por filtros (`UNSEEN`, `ALL`, etc.), decodificación de cabeceras MIME y extracción de cuerpo y adjuntos.
+- **Buscador en Vivo en la Paleta de Nodos**:
+  - Campo `#paletteSearch` en la pestaña de nodos de la barra lateral que filtra instantáneamente por nombre, tipo, categoría o descripción conforme se escribe, ocultando categorías vacías.
+
 
 
 ---

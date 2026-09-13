@@ -1,7 +1,7 @@
 {
-  "name": "Agenda Cultural de Valencia",
-  "description": "Combina y deduplica eventos culturales de Valencia Bonita (artículos de las últimas 24h) y Valencia Secreta mediante selectores CSS y código Python plano sin LLM.",
-  "schedule": "@daily",
+  "name": "agenda-cultural-valencia",
+  "description": "",
+  "schedule": "",
   "enabled": true,
-  "updated_at": 1789312000
+  "updated_at": 1789313835
 }

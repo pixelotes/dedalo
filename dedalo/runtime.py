@@ -9,14 +9,22 @@ from __future__ import annotations
 import csv
 import ctypes
 import datetime
+import difflib
+import email
+import email.header
 import gc
 import glob
+import hashlib
 import html
+import imaplib
 import json
 import math
 import os
 import re
-from collections import Counter
+import socket
+import ssl
+import statistics
+from collections import Counter, defaultdict
 import shutil
 import smtplib
 import sqlite3
@@ -120,6 +128,10 @@ class Inputs:
             if it.ok:
                 return it.data
         return None
+
+    def first(self) -> Any:
+        """Alias de first_data()."""
+        return self.first_data()
 
     def all_ok(self) -> list[Any]:
         """Devuelve una lista con los datos de todas las entradas exitosas."""
@@ -2114,6 +2126,779 @@ def alert(
         pass
 
     return NodeResult("ok", data=log_line)
+
+
+def diff_data(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    key_field: str = "",
+    mode: str = "added",
+    state_key: str = "",
+) -> NodeResult:
+    """Compara los datos actuales con la ejecución anterior y emite novedades o diferencias."""
+    inp = Inputs(inputs)
+    raw_data = inp.first()
+    if raw_data is None:
+        raw_data = inp.text()
+
+    if isinstance(raw_data, list):
+        items = raw_data
+    elif isinstance(raw_data, dict):
+        items = [raw_data]
+    elif isinstance(raw_data, str) and raw_data.strip():
+        items = [line.strip() for line in raw_data.splitlines() if line.strip()]
+    else:
+        items = []
+
+    flow_name = getattr(ctx, "flow_name", "default")
+    s_key = (state_key or "diff").replace("/", "_").replace("\\", "_")
+    state_file = Path("data/state") / f"{flow_name}_{s_key}.json"
+
+    prev_snapshot: dict[str, Any] = {}
+    if state_file.is_file():
+        try:
+            prev_snapshot = json.loads(state_file.read_text(encoding="utf-8"))
+            if not isinstance(prev_snapshot, dict):
+                prev_snapshot = {}
+        except Exception:
+            prev_snapshot = {}
+
+    def _item_key(it: Any) -> str:
+        if isinstance(it, dict):
+            if key_field and key_field in it:
+                return str(it[key_field])
+            for cand in ("url", "link", "guid", "id", "title", "nombre"):
+                if cand in it:
+                    return str(it[cand])
+            return hashlib.sha256(json.dumps(it, sort_keys=True, default=str).encode()).hexdigest()[:16]
+        return str(it)
+
+    curr_snapshot: dict[str, Any] = {}
+    curr_items_order: list[tuple[str, Any]] = []
+    for it in items:
+        k = _item_key(it)
+        curr_snapshot[k] = it
+        curr_items_order.append((k, it))
+
+    added = [it for k, it in curr_items_order if k not in prev_snapshot]
+    removed = [it for k, it in prev_snapshot.items() if k not in curr_snapshot]
+    modified = [it for k, it in curr_items_order if k in prev_snapshot and it != prev_snapshot[k]]
+
+    # Guardar foto actual
+    try:
+        state_file.parent.mkdir(parents=True, exist_ok=True)
+        state_file.write_text(json.dumps(curr_snapshot, indent=2, default=str), encoding="utf-8")
+    except Exception:
+        pass
+
+    m = (mode or "added").lower().strip()
+    if m == "added":
+        return NodeResult("ok", data=added)
+    elif m == "removed":
+        return NodeResult("ok", data=removed)
+    elif m == "modified":
+        return NodeResult("ok", data=modified)
+    elif m in ("all", "todo"):
+        return NodeResult("ok", data={
+            "added": added,
+            "removed": removed,
+            "modified": modified,
+            "count_added": len(added),
+            "count_removed": len(removed),
+            "count_modified": len(modified),
+        })
+    return NodeResult("ok", data=added)
+
+
+def fuzzy_dedup(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    field: str = "",
+    threshold: float = 0.80,
+    merge_strategy: str = "keep_first",
+) -> NodeResult:
+    """Deduplica listas de elementos usando similitud difusa (difflib) sin LLM."""
+    inp = Inputs(inputs)
+    raw_data = inp.first()
+    if not isinstance(raw_data, list):
+        if isinstance(raw_data, dict):
+            return NodeResult("ok", data=[raw_data])
+        return NodeResult("ok", data=raw_data)
+
+    th = max(0.1, min(1.0, float(threshold or 0.80)))
+    strategy = (merge_strategy or "keep_first").lower().strip()
+
+    def _get_str(it: Any) -> str:
+        if isinstance(it, dict):
+            if field and field in it:
+                return str(it[field]).lower().strip()
+            for cand in ("title", "name", "nombre", "titulo"):
+                if cand in it:
+                    return str(it[cand]).lower().strip()
+            return " ".join(str(v) for v in it.values()).lower().strip()
+        return str(it).lower().strip()
+
+    def _calc_similarity(s1: str, s2: str) -> float:
+        if s1 == s2:
+            return 1.0
+        ratio = difflib.SequenceMatcher(None, s1, s2).ratio()
+        w1, w2 = set(re.findall(r"\w+", s1)), set(re.findall(r"\w+", s2))
+        if w1 and w2:
+            intersection = len(w1 & w2)
+            subset_ratio = intersection / min(len(w1), len(w2))
+            jaccard = intersection / len(w1 | w2)
+            token_sim = max(jaccard, subset_ratio * 0.85)
+            return max(ratio, token_sim)
+        return ratio
+
+    unique_items: list[Any] = []
+    unique_strings: list[str] = []
+    duplicates_map: dict[int, list[Any]] = defaultdict(list)
+
+    for it in raw_data:
+        s = _get_str(it)
+        matched_idx = -1
+        for idx, u_s in enumerate(unique_strings):
+            sim = _calc_similarity(s, u_s)
+            if sim >= th:
+                matched_idx = idx
+                break
+
+        if matched_idx == -1:
+            unique_strings.append(s)
+            unique_items.append(it)
+        else:
+            duplicates_map[matched_idx].append(it)
+
+    if strategy == "group":
+        grouped = []
+        for idx, it in enumerate(unique_items):
+            cluster = [it] + duplicates_map[idx]
+            grouped.append(cluster)
+        return NodeResult("ok", data=grouped)
+
+    elif strategy in ("merge_list", "merge"):
+        merged = []
+        for idx, it in enumerate(unique_items):
+            dups = duplicates_map[idx]
+            if isinstance(it, dict):
+                item_copy = dict(it)
+                if dups:
+                    item_copy["duplicates"] = dups
+                merged.append(item_copy)
+            else:
+                merged.append(it)
+        return NodeResult("ok", data=merged)
+
+    return NodeResult("ok", data=unique_items)
+
+
+def aggregate(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    field: str = "",
+    operation: str = "avg",
+    group_by: str = "",
+) -> NodeResult:
+    """Calcula agregaciones y métricas estadísticas sobre listas de diccionarios."""
+    inp = Inputs(inputs)
+    raw_data = inp.first()
+    if not isinstance(raw_data, list):
+        return NodeResult("error", error="La entrada debe ser una lista de elementos.")
+
+    def _to_float(v: Any) -> float | None:
+        if isinstance(v, (int, float)):
+            return float(v)
+        if isinstance(v, str):
+            cleaned = re.sub(r"[^\d.,-]", "", v).strip()
+            if not cleaned:
+                return None
+            if "," in cleaned and "." not in cleaned:
+                cleaned = cleaned.replace(",", ".")
+            elif "," in cleaned and "." in cleaned:
+                if cleaned.rfind(",") > cleaned.rfind("."):
+                    cleaned = cleaned.replace(".", "").replace(",", ".")
+                else:
+                    cleaned = cleaned.replace(",", "")
+            try:
+                return float(cleaned)
+            except ValueError:
+                return None
+        return None
+
+    def _calc_metrics(vals: list[float], op: str) -> Any:
+        if not vals:
+            return 0.0 if op != "summary" else {}
+        op_norm = (op or "avg").lower().strip()
+        if op_norm == "count":
+            return len(vals)
+        elif op_norm == "sum":
+            return round(sum(vals), 4)
+        elif op_norm == "avg":
+            return round(statistics.mean(vals), 4)
+        elif op_norm == "min":
+            return min(vals)
+        elif op_norm == "max":
+            return max(vals)
+        elif op_norm == "median":
+            return round(statistics.median(vals), 4)
+        elif op_norm == "summary":
+            return {
+                "count": len(vals),
+                "sum": round(sum(vals), 4),
+                "avg": round(statistics.mean(vals), 4),
+                "min": min(vals),
+                "max": max(vals),
+                "median": round(statistics.median(vals), 4),
+            }
+        return round(statistics.mean(vals), 4)
+
+    grp_field = group_by.strip()
+    if grp_field:
+        groups: dict[str, list[float]] = defaultdict(list)
+        for it in raw_data:
+            if isinstance(it, dict):
+                g_key = str(it.get(grp_field, "desconocido"))
+                val = _to_float(it.get(field)) if field else _to_float(it)
+                if val is not None:
+                    groups[g_key].append(val)
+        res_grouped = {g: _calc_metrics(v, operation) for g, v in groups.items()}
+        return NodeResult("ok", data=res_grouped)
+
+    values: list[float] = []
+    for it in raw_data:
+        val = _to_float(it.get(field)) if isinstance(it, dict) and field else _to_float(it)
+        if val is not None:
+            values.append(val)
+
+    res = _calc_metrics(values, operation)
+    return NodeResult("ok", data=res)
+
+
+def format_table(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    format: str = "markdown",
+    columns: str = "",
+    headers: str = "",
+    max_rows: int = 100,
+) -> NodeResult:
+    """Convierte una lista estructurada en una tabla formateada Markdown o HTML."""
+    inp = Inputs(inputs)
+    raw_data = inp.first()
+    if not isinstance(raw_data, list):
+        if isinstance(raw_data, dict):
+            raw_data = [raw_data]
+        else:
+            return NodeResult("error", error="format_table requiere una lista de diccionarios.")
+
+    if not raw_data:
+        return NodeResult("ok", data="")
+
+    cols = [c.strip() for c in columns.split(",") if c.strip()]
+    if not cols:
+        first = raw_data[0]
+        if isinstance(first, dict):
+            cols = list(first.keys())
+        else:
+            cols = ["valor"]
+
+    hdrs = [h.strip() for h in headers.split(",") if h.strip()]
+    if len(hdrs) < len(cols):
+        hdrs += [cols[i].replace("_", " ").capitalize() for i in range(len(hdrs), len(cols))]
+
+    limit = max(1, int(max_rows or 100))
+    rows = raw_data[:limit]
+
+    fmt = (format or "markdown").lower().strip()
+    if fmt in ("html", "htm"):
+        html_lines = [
+            '<table style="border-collapse: collapse; width: 100%; font-family: sans-serif; font-size: 0.9rem;">',
+            '  <thead>',
+            '    <tr style="background: #f1f5f9; text-align: left;">',
+        ]
+        for h in hdrs:
+            html_lines.append(f'      <th style="padding: 8px 12px; border: 1px solid #cbd5e1;">{html.escape(h)}</th>')
+        html_lines.append('    </tr>\n  </thead>\n  <tbody>')
+        for r in rows:
+            html_lines.append('    <tr>')
+            for c in cols:
+                val = r.get(c, "") if isinstance(r, dict) else str(r)
+                html_lines.append(f'      <td style="padding: 6px 12px; border: 1px solid #cbd5e1;">{html.escape(str(val))}</td>')
+            html_lines.append('    </tr>')
+        html_lines.append('  </tbody>\n</table>')
+        return NodeResult("ok", data="\n".join(html_lines))
+
+    md_lines = [
+        "| " + " | ".join(hdrs) + " |",
+        "| " + " | ".join(["---"] * len(hdrs)) + " |",
+    ]
+    for r in rows:
+        row_vals = []
+        for c in cols:
+            val = r.get(c, "") if isinstance(r, dict) else str(r)
+            clean_val = str(val).replace("|", "\\|").replace("\n", " ")
+            row_vals.append(clean_val)
+        md_lines.append("| " + " | ".join(row_vals) + " |")
+
+    return NodeResult("ok", data="\n".join(md_lines))
+
+
+def keywords_rake(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    max_keywords: int = 5,
+    min_freq: int = 1,
+    max_words: int = 3,
+    language: str = "es",
+    output_format: str = "list",
+) -> NodeResult:
+    """Extrae palabras y frases clave deterministas mediante RAKE en Python puro."""
+    inp = Inputs(inputs)
+    text = inp.text().strip()
+    if not text:
+        return NodeResult("ok", data=[] if output_format == "list" else "")
+
+    stopwords = _SUMMARIZE_STOPWORDS
+    sentences = re.split(r"[\.\!\?\,\;\:\(\)\[\]\n\t]+", text.lower())
+
+    phrases: list[str] = []
+    for s in sentences:
+        words = s.strip().split()
+        curr: list[str] = []
+        for w in words:
+            w_clean = re.sub(r"^\W+|\W+$", "", w)
+            if not w_clean:
+                continue
+            if w_clean in stopwords:
+                if curr:
+                    phrases.append(" ".join(curr))
+                    curr = []
+            else:
+                curr.append(w_clean)
+        if curr:
+            phrases.append(" ".join(curr))
+
+    m_words = max(1, int(max_words or 3))
+    m_freq = max(1, int(min_freq or 1))
+    phrases = [p for p in phrases if 1 <= len(p.split()) <= m_words]
+
+    word_freq = Counter()
+    word_deg = defaultdict(int)
+    for p in phrases:
+        wlist = p.split()
+        p_len = len(wlist)
+        for w in wlist:
+            word_freq[w] += 1
+            word_deg[w] += p_len
+
+    word_scores = {w: word_deg[w] / word_freq[w] for w in word_freq if word_freq[w] >= m_freq}
+
+    phrase_scores: dict[str, float] = {}
+    for p in phrases:
+        wlist = p.split()
+        if any(w not in word_scores for w in wlist):
+            continue
+        score = sum(word_scores[w] for w in wlist)
+        if p not in phrase_scores or score > phrase_scores[p]:
+            phrase_scores[p] = score
+
+    sorted_phrases = sorted(phrase_scores.items(), key=lambda x: x[1], reverse=True)
+    limit = max(1, int(max_keywords or 5))
+    top_keywords = [p for p, _ in sorted_phrases[:limit]]
+
+    fmt = (output_format or "list").lower().strip()
+    if fmt in ("text", "texto", "string"):
+        return NodeResult("ok", data=", ".join(top_keywords))
+    return NodeResult("ok", data=top_keywords)
+
+
+def ssl_cert(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    host: str,
+    port: int = 443,
+    timeout: float = 5.0,
+) -> NodeResult:
+    """Verifica la validez y los días restantes de un certificado SSL/TLS."""
+    inp = Inputs(inputs)
+    target = (host or inp.text()).strip()
+    target = target.replace("https://", "").replace("http://", "").split("/")[0].split(":")[0]
+    if not target:
+        return NodeResult("error", error="Se requiere un nombre de host para verificar el certificado SSL.")
+
+    target_port = int(port or 443)
+    try:
+        ctx_ssl = ssl.create_default_context()
+        with socket.create_connection((target, target_port), timeout=float(timeout)) as sock:
+            with ctx_ssl.wrap_socket(sock, server_hostname=target) as ssock:
+                cert = ssock.getpeercert()
+
+        if not cert:
+            return NodeResult("error", error=f"No se pudo obtener el certificado de {target}")
+
+        exp_str = cert.get("notAfter", "")
+        exp_date = datetime.datetime.strptime(exp_str, "%b %d %H:%M:%S %Y %Z").replace(tzinfo=datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.timezone.utc)
+        days_left = (exp_date - now).days
+
+        issuer_dict = dict(x[0] for x in cert.get("issuer", ()))
+        subject_dict = dict(x[0] for x in cert.get("subject", ()))
+
+        result = {
+            "host": target,
+            "port": target_port,
+            "days_left": days_left,
+            "expires_at": exp_date.isoformat(),
+            "is_valid": days_left > 0,
+            "issuer": issuer_dict.get("organizationName") or issuer_dict.get("commonName") or str(issuer_dict),
+            "subject": subject_dict.get("commonName") or str(subject_dict),
+            "serial_number": cert.get("serialNumber", ""),
+        }
+        return NodeResult("ok", data=result)
+    except Exception as exc:
+        return NodeResult("error", error=f"Fallo al comprobar certificado SSL de {target}: {exc}")
+
+
+def dns_check(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    host: str,
+    record_type: str = "A",
+    timeout: float = 5.0,
+) -> NodeResult:
+    """Verifica la resolución DNS de un host y mide el tiempo de respuesta."""
+    inp = Inputs(inputs)
+    target = (host or inp.text()).strip()
+    target = target.replace("https://", "").replace("http://", "").split("/")[0].split(":")[0]
+    if not target:
+        return NodeResult("error", error="Se requiere un nombre de host para comprobar DNS.")
+
+    try:
+        t0 = time.perf_counter()
+        name, aliases, ips = socket.gethostbyname_ex(target)
+        duration_ms = round((time.perf_counter() - t0) * 1000, 2)
+        return NodeResult("ok", data={
+            "host": target,
+            "canonical_name": name,
+            "aliases": aliases,
+            "ips": ips,
+            "response_time_ms": duration_ms,
+        })
+    except Exception as exc:
+        return NodeResult("error", error=f"Fallo en resolución DNS de {target}: {exc}")
+
+
+def ping_host(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    host: str,
+    port: int = 80,
+    mode: str = "tcp",
+    timeout: float = 3.0,
+) -> NodeResult:
+    """Mide la latencia y disponibilidad de un host por TCP socket o ICMP."""
+    inp = Inputs(inputs)
+    target = (host or inp.text()).strip()
+    target = target.replace("https://", "").replace("http://", "").split("/")[0].split(":")[0]
+    if not target:
+        return NodeResult("error", error="Se requiere un host para realizar ping.")
+
+    m = (mode or "tcp").lower().strip()
+    to_val = float(timeout or 3.0)
+
+    if m == "icmp":
+        cmd = ["ping", "-c", "1", "-W", str(max(1, int(to_val))), target]
+        try:
+            t0 = time.perf_counter()
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=to_val + 1)
+            duration_ms = round((time.perf_counter() - t0) * 1000, 2)
+            if r.returncode == 0:
+                m_lat = re.search(r"time=([\d.]+)\s*ms", r.stdout)
+                lat = float(m_lat.group(1)) if m_lat else duration_ms
+                return NodeResult("ok", data={"host": target, "alive": True, "latency_ms": lat, "mode": "icmp"})
+            else:
+                return NodeResult("error", error=f"Host {target} inalcanzable por ICMP ping.")
+        except Exception as exc:
+            return NodeResult("error", error=f"Error en ping ICMP: {exc}")
+
+    try:
+        t0 = time.perf_counter()
+        target_port = int(port or 80)
+        with socket.create_connection((target, target_port), timeout=to_val):
+            pass
+        duration_ms = round((time.perf_counter() - t0) * 1000, 2)
+        return NodeResult("ok", data={
+            "host": target,
+            "port": target_port,
+            "alive": True,
+            "latency_ms": duration_ms,
+            "mode": "tcp",
+        })
+    except Exception as exc:
+        return NodeResult("error", error=f"No se pudo conectar a {target}:{port} ({exc})")
+
+
+def _mqtt_encode_len(length: int) -> bytes:
+    res = bytearray()
+    while True:
+        byte = length % 128
+        length //= 128
+        if length > 0:
+            byte |= 128
+        res.append(byte)
+        if length == 0:
+            break
+    return bytes(res)
+
+
+def mqtt_publish(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    broker: str = "localhost",
+    port: int = 1883,
+    topic: str = "",
+    payload: str = "{entrada}",
+    retain: bool = False,
+    qos: int = 0,
+    username: str = "",
+    secret: str = "",
+    timeout: float = 5.0,
+) -> NodeResult:
+    """Publica un mensaje en un broker MQTT sin librerías externas pesadas."""
+    inp = Inputs(inputs)
+    t = topic.strip()
+    if not t:
+        return NodeResult("error", error="Se requiere un 'topic' MQTT.")
+
+    msg = payload.replace("{entrada}", inp.text()) if "{entrada}" in payload else (payload or inp.text())
+    password = secrets.get(secret) if secret else ""
+
+    try:
+        flags = 0x02
+        if username:
+            flags |= 0x80
+        if password:
+            flags |= 0x40
+        vh = b"\x00\x04MQTT\x04" + bytes([flags]) + (60).to_bytes(2, "big")
+        cid = f"dedalo_{int(time.time())}".encode("utf-8")
+        body = vh + len(cid).to_bytes(2, "big") + cid
+        if username:
+            u_b = username.encode("utf-8")
+            body += len(u_b).to_bytes(2, "big") + u_b
+        if password:
+            p_b = password.encode("utf-8")
+            body += len(p_b).to_bytes(2, "big") + p_b
+        connect_packet = b"\x10" + _mqtt_encode_len(len(body)) + body
+
+        byte1 = 0x30 | (1 if retain else 0) | ((int(qos) & 0x03) << 1)
+        t_b = t.encode("utf-8")
+        p_b = msg.encode("utf-8") if isinstance(msg, str) else bytes(msg)
+        pub_body = len(t_b).to_bytes(2, "big") + t_b + p_b
+        publish_packet = bytes([byte1]) + _mqtt_encode_len(len(pub_body)) + pub_body
+
+        disconnect_packet = b"\xe0\x00"
+
+        with socket.create_connection((broker, int(port or 1883)), timeout=float(timeout)) as sock:
+            sock.sendall(connect_packet)
+            connack = sock.recv(4)
+            if len(connack) < 4 or connack[0] != 0x20 or connack[3] != 0:
+                err_code = connack[3] if len(connack) >= 4 else -1
+                return NodeResult("error", error=f"Fallo de conexión MQTT (CONNACK error code {err_code})")
+            sock.sendall(publish_packet)
+            sock.sendall(disconnect_packet)
+
+        return NodeResult("ok", data=f"Publicado en {t}: {msg[:100]}")
+    except Exception as exc:
+        return NodeResult("error", error=f"Error en MQTT publish: {exc}")
+
+
+def mqtt_read(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    broker: str = "localhost",
+    port: int = 1883,
+    topic: str = "",
+    username: str = "",
+    secret: str = "",
+    timeout: float = 5.0,
+) -> NodeResult:
+    """Lee o escucha un mensaje en un broker MQTT."""
+    t = topic.strip()
+    if not t:
+        return NodeResult("error", error="Se requiere un 'topic' MQTT para lectura.")
+
+    password = secrets.get(secret) if secret else ""
+    try:
+        flags = 0x02
+        if username:
+            flags |= 0x80
+        if password:
+            flags |= 0x40
+        vh = b"\x00\x04MQTT\x04" + bytes([flags]) + (60).to_bytes(2, "big")
+        cid = f"dedalo_rx_{int(time.time())}".encode("utf-8")
+        body = vh + len(cid).to_bytes(2, "big") + cid
+        if username:
+            u_b = username.encode("utf-8")
+            body += len(u_b).to_bytes(2, "big") + u_b
+        if password:
+            p_b = password.encode("utf-8")
+            body += len(p_b).to_bytes(2, "big") + p_b
+        connect_packet = b"\x10" + _mqtt_encode_len(len(body)) + body
+
+        pkt_id = 1
+        t_b = t.encode("utf-8")
+        sub_body = pkt_id.to_bytes(2, "big") + len(t_b).to_bytes(2, "big") + t_b + b"\x00"
+        subscribe_packet = b"\x82" + _mqtt_encode_len(len(sub_body)) + sub_body
+
+        with socket.create_connection((broker, int(port or 1883)), timeout=float(timeout)) as sock:
+            sock.sendall(connect_packet)
+            connack = sock.recv(4)
+            if len(connack) < 4 or connack[0] != 0x20 or connack[3] != 0:
+                return NodeResult("error", error="Fallo al conectar con el broker MQTT.")
+            sock.sendall(subscribe_packet)
+            suback = sock.recv(5)
+
+            sock.settimeout(float(timeout))
+            data = sock.recv(4096)
+            sock.sendall(b"\xe0\x00")
+
+            if data and (data[0] & 0xF0) == 0x30:
+                idx = 1
+                rem_len = 0
+                mult = 1
+                while True:
+                    b = data[idx]
+                    rem_len += (b & 127) * mult
+                    mult *= 128
+                    idx += 1
+                    if (b & 128) == 0:
+                        break
+                topic_len = int.from_bytes(data[idx:idx+2], "big")
+                idx += 2 + topic_len
+                payload_bytes = data[idx:]
+                return NodeResult("ok", data=payload_bytes.decode("utf-8", errors="replace"))
+
+        return NodeResult("ok", data="")
+    except socket.timeout:
+        return NodeResult("ok", data="")
+    except Exception as exc:
+        return NodeResult("error", error=f"Error en MQTT read: {exc}")
+
+
+def imap_read(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    host: str = "",
+    port: int = 993,
+    username: str = "",
+    secret: str = "",
+    folder: str = "INBOX",
+    filter: str = "UNSEEN",
+    limit: int = 5,
+    mark_as_read: bool = False,
+    timeout: float = 15.0,
+) -> NodeResult:
+    """Lee correos electrónicos vía IMAP sobre TLS con imaplib nativo."""
+    h = host.strip()
+    u = username.strip()
+    if not h or not u:
+        return NodeResult("error", error="Se requiere 'host' y 'username' para la conexión IMAP.")
+
+    pwd = secrets.get(secret) if secret else ""
+    if not pwd:
+        return NodeResult("error", error="Se requiere un secreto con la contraseña o App Password para IMAP.")
+
+    max_items = max(1, int(limit or 5))
+    try:
+        mail = imaplib.IMAP4_SSL(h, int(port or 993), timeout=float(timeout))
+        mail.login(u, pwd)
+        mail.select(folder or "INBOX")
+
+        crit = filter.strip() or "UNSEEN"
+        status, messages = mail.search(None, crit)
+        if status != "OK" or not messages or not messages[0]:
+            mail.logout()
+            return NodeResult("ok", data=[])
+
+        mail_ids = messages[0].split()
+        selected_ids = mail_ids[-max_items:]
+        selected_ids.reverse()
+
+        emails_res: list[dict[str, Any]] = []
+        for mid in selected_ids:
+            fetch_cmd = "(RFC822)" if mark_as_read else "(BODY.PEEK[])"
+            status, data = mail.fetch(mid, fetch_cmd)
+            if status != "OK" or not data or not data[0]:
+                continue
+
+            raw_email = data[0][1]
+            if not isinstance(raw_email, bytes):
+                continue
+
+            msg = email.message_from_bytes(raw_email)
+
+            def _decode_header_str(header_val: str) -> str:
+                if not header_val:
+                    return ""
+                decoded = []
+                for part, enc in email.header.decode_header(header_val):
+                    if isinstance(part, bytes):
+                        try:
+                            decoded.append(part.decode(enc or "utf-8", errors="replace"))
+                        except Exception:
+                            decoded.append(part.decode("latin-1", errors="replace"))
+                    else:
+                        decoded.append(str(part))
+                return "".join(decoded)
+
+            subject = _decode_header_str(msg.get("Subject", ""))
+            sender = _decode_header_str(msg.get("From", ""))
+            date_str = msg.get("Date", "")
+
+            body_text = ""
+            attachment_names = []
+            if msg.is_multipart():
+                for part in msg.walk():
+                    content_type = part.get_content_type()
+                    content_disp = str(part.get("Content-Disposition", ""))
+                    if "attachment" in content_disp:
+                        fn = part.get_filename()
+                        if fn:
+                            attachment_names.append(_decode_header_str(fn))
+                    elif content_type == "text/plain" and not body_text:
+                        payload = part.get_payload(decode=True)
+                        if payload:
+                            body_text = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+            else:
+                payload = msg.get_payload(decode=True)
+                if payload:
+                    body_text = payload.decode(msg.get_content_charset() or "utf-8", errors="replace")
+
+            emails_res.append({
+                "id": mid.decode() if isinstance(mid, bytes) else str(mid),
+                "subject": subject,
+                "from": sender,
+                "date": date_str,
+                "body": body_text.strip()[:2000],
+                "attachments": attachment_names,
+            })
+
+        mail.logout()
+        return NodeResult("ok", data=emails_res)
+    except Exception as exc:
+        return NodeResult("error", error=f"Error leyendo IMAP: {exc}")
 
 
 def summarize(results_dict: dict[str, NodeResult], ctx: Any) -> dict[str, Any]:

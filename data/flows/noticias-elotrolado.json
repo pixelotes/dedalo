@@ -1,60 +1,6 @@
 {
   "version": 1,
   "name": "noticias-elotrolado",
-  "nodes": [
-    {
-      "id": "descargar_eol",
-      "type": "input.http_call",
-      "label": "Descargar portada EOL",
-      "config": {
-        "url": "https://www.elotrolado.net/",
-        "method": "GET",
-        "engine": "auto",
-        "impersonate": "chrome",
-        "timeout": 20.0
-      },
-      "x": 80.0,
-      "y": 140.0
-    },
-    {
-      "id": "extraer_noticias",
-      "type": "transform.html_extract",
-      "label": "Extraer noticias por CSS",
-      "config": {
-        "selector": "div.new",
-        "fields": "{\"category\": \"a.newcat\", \"title\": \"h2 a\", \"link\": \"h2 a@href\", \"summary\": \"div.body\"}",
-        "output_format": "text",
-        "header_text": "# Noticias de Portada — ElOtroLado.net ({fecha})\n\n",
-        "item_template": "### [{category}] {title}\n- **Enlace:** {link}\n- **Resumen:** {summary}\n",
-        "base_url": "https://www.elotrolado.net",
-        "limit": 10
-      },
-      "x": 380.0,
-      "y": 140.0
-    },
-    {
-      "id": "guardar_noticias",
-      "type": "output.file",
-      "label": "Guardar elotrolado-noticias.md",
-      "config": {
-        "filename": "elotrolado-noticias.md",
-        "directory": "",
-        "mode": "sobrescribir"
-      },
-      "x": 720.0,
-      "y": 140.0
-    }
-  ],
-  "edges": [
-    {
-      "source": "descargar_eol",
-      "target": "extraer_noticias",
-      "port": "ok"
-    },
-    {
-      "source": "extraer_noticias",
-      "target": "guardar_noticias",
-      "port": "ok"
-    }
-  ]
+  "nodes": [],
+  "edges": []
 }

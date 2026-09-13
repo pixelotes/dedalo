@@ -660,6 +660,286 @@ def test_web_search_exa(monkeypatch):
     assert res.data[0]["published_date"] == "2026-01-01"
 
 
+def test_diff_data_stateful(tmp_path, monkeypatch):
+    class FakeCtx:
+        flow_name = "test_diff_flow"
+
+    # Usar tmp_path para Path("data/state")
+    fake_state_dir = tmp_path / "state"
+    fake_state_dir.mkdir(parents=True)
+    monkeypatch.setattr(runtime, "Path", lambda *args: (fake_state_dir / args[1]) if len(args) == 2 and args[0] == "data/state" else tmp_path / "dummy")
+
+    ctx = FakeCtx()
+
+    # Ejecución 1: dos elementos nuevos
+    items_1 = [
+        {"url": "https://example.com/1", "title": "Noticia 1"},
+        {"url": "https://example.com/2", "title": "Noticia 2"},
+    ]
+    inp1 = runtime.NodeResult("ok", data=items_1)
+    res1 = runtime.diff_data(ctx, [inp1], key_field="url", mode="added", state_key="diff_test")
+    assert res1.ok
+    assert len(res1.data) == 2
+
+    # Ejecución 2: Noticia 1 sigue igual, Noticia 2 desaparece, Noticia 3 es nueva
+    items_2 = [
+        {"url": "https://example.com/1", "title": "Noticia 1"},
+        {"url": "https://example.com/3", "title": "Noticia 3 (Nueva)"},
+    ]
+    inp2 = runtime.NodeResult("ok", data=items_2)
+    # Solo nuevos
+    res2_added = runtime.diff_data(ctx, [inp2], key_field="url", mode="added", state_key="diff_test")
+    assert res2_added.ok
+    assert len(res2_added.data) == 1
+    assert res2_added.data[0]["title"] == "Noticia 3 (Nueva)"
+
+    # Ejecución 3: Modo "all"
+    items_3 = [
+        {"url": "https://example.com/1", "title": "Noticia 1 Modificada"},
+    ]
+    inp3 = runtime.NodeResult("ok", data=items_3)
+    res3_all = runtime.diff_data(ctx, [inp3], key_field="url", mode="all", state_key="diff_test")
+    assert res3_all.ok
+    assert res3_all.data["count_added"] == 0
+    assert res3_all.data["count_removed"] == 1
+    assert res3_all.data["count_modified"] == 1
+
+
+def test_fuzzy_dedup():
+    items = [
+        {"title": "Catan (Edición 2024)", "price": 35.0, "store": "Mathom"},
+        {"title": "Catan Ed. 2024", "price": 32.0, "store": "Outlet-PC"},
+        {"title": "Dixit Odyssey", "price": 28.0, "store": "Mathom"},
+        {"title": "Dixit: Odyssey juego familiar", "price": 27.5, "store": "Zacatrus"},
+        {"title": "Carcassonne", "price": 25.0, "store": "Mathom"},
+    ]
+    inp = runtime.NodeResult("ok", data=items)
+
+    # 1. Estrategia keep_first
+    res_keep = runtime.fuzzy_dedup(None, [inp], field="title", threshold=0.75, merge_strategy="keep_first")
+    assert res_keep.ok
+    titles = [x["title"] for x in res_keep.data]
+    assert len(titles) == 3
+    assert "Catan (Edición 2024)" in titles
+    assert "Dixit Odyssey" in titles
+    assert "Carcassonne" in titles
+
+    # 2. Estrategia merge_list
+    res_merge = runtime.fuzzy_dedup(None, [inp], field="title", threshold=0.75, merge_strategy="merge_list")
+    assert res_merge.ok
+    catan_item = next(x for x in res_merge.data if "Catan" in x["title"])
+    assert "duplicates" in catan_item
+    assert len(catan_item["duplicates"]) == 1
+    assert catan_item["duplicates"][0]["store"] == "Outlet-PC"
+
+    # 3. Estrategia group
+    res_grp = runtime.fuzzy_dedup(None, [inp], field="title", threshold=0.75, merge_strategy="group")
+    assert res_grp.ok
+    assert len(res_grp.data) == 3
+    assert len(res_grp.data[0]) == 2  # Catan y su duplicado
+
+
+def test_aggregate():
+    items = [
+        {"title": "Juego A", "price": "10,50 €", "category": "familiar"},
+        {"title": "Juego B", "price": "20.50", "category": "estrategia"},
+        {"title": "Juego C", "price": 30.0, "category": "familiar"},
+        {"title": "Juego D", "price": 40, "category": "estrategia"},
+    ]
+    inp = runtime.NodeResult("ok", data=items)
+
+    # Media global
+    res_avg = runtime.aggregate(None, [inp], field="price", operation="avg")
+    assert res_avg.ok
+    assert res_avg.data == round((10.5 + 20.5 + 30.0 + 40.0) / 4, 4)
+
+    # Suma
+    res_sum = runtime.aggregate(None, [inp], field="price", operation="sum")
+    assert res_sum.ok
+    assert res_sum.data == 101.0
+
+    # Summary
+    res_sumry = runtime.aggregate(None, [inp], field="price", operation="summary")
+    assert res_sumry.ok
+    assert res_sumry.data["count"] == 4
+    assert res_sumry.data["min"] == 10.5
+    assert res_sumry.data["max"] == 40.0
+
+    # Group by
+    res_grp = runtime.aggregate(None, [inp], field="price", operation="sum", group_by="category")
+    assert res_grp.ok
+    assert res_grp.data["familiar"] == 40.5
+    assert res_grp.data["estrategia"] == 60.5
+
+
+def test_format_table():
+    items = [
+        {"juego": "Catan", "precio": "35€", "tienda": "Mathom"},
+        {"juego": "Dixit", "precio": "28€", "tienda": "Outlet-PC"},
+    ]
+    inp = runtime.NodeResult("ok", data=items)
+
+    # Markdown
+    res_md = runtime.format_table(None, [inp], format="markdown", columns="juego,precio,tienda", headers="Juego,Precio,Tienda")
+    assert res_md.ok
+    assert "| Juego | Precio | Tienda |" in res_md.data
+    assert "| Catan | 35€ | Mathom |" in res_md.data
+
+    # HTML
+    res_html = runtime.format_table(None, [inp], format="html", columns="juego,precio", headers="Nombre,Precio")
+    assert res_html.ok
+    assert "<table" in res_html.data
+    assert ">Nombre</th>" in res_html.data
+    assert ">Catan</td>" in res_html.data
+
+
+def test_keywords_rake():
+    text = (
+        "El telescopio espacial James Webb descubrió galaxias lejanas en el universo primitivo. "
+        "Las observaciones infrarrojas del James Webb proporcionan imágenes astronómicas detalladas. "
+        "Los astrónomos estudian la formación estelar mediante este observatorio espacial."
+    )
+    inp = runtime.NodeResult("ok", data=text)
+
+    res_list = runtime.keywords_rake(None, [inp], max_keywords=3, max_words=3, output_format="list")
+    assert res_list.ok
+    assert isinstance(res_list.data, list)
+    assert len(res_list.data) > 0
+    # Comprobar que detecta james webb o observatorio espacial
+    all_kws = " ".join(res_list.data).lower()
+    assert "james webb" in all_kws or "espacial" in all_kws or "universo" in all_kws
+
+    res_str = runtime.keywords_rake(None, [inp], max_keywords=2, output_format="text")
+    assert res_str.ok
+    assert isinstance(res_str.data, str)
+    assert ", " in res_str.data
+
+
+def test_ssl_cert_mocked(monkeypatch):
+    class FakeSSLSocket:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def getpeercert(self):
+            return {
+                "notAfter": "May 20 12:00:00 2030 GMT",
+                "issuer": ((("organizationName", "Let's Encrypt"),),),
+                "subject": ((("commonName", "example.com"),),),
+                "serialNumber": "1234567890",
+            }
+
+    class FakeSSLContext:
+        def wrap_socket(self, sock, server_hostname=None):
+            return FakeSSLSocket()
+
+    monkeypatch.setattr(runtime.ssl, "create_default_context", lambda: FakeSSLContext())
+    monkeypatch.setattr(runtime.socket, "create_connection", lambda addr, timeout=None: FakeSSLSocket())
+
+    res = runtime.ssl_cert(None, [], host="https://example.com:443")
+    assert res.ok
+    assert res.data["host"] == "example.com"
+    assert res.data["days_left"] > 365
+    assert res.data["is_valid"] is True
+    assert res.data["issuer"] == "Let's Encrypt"
+    assert res.data["subject"] == "example.com"
+
+
+def test_dns_check_and_ping_mocked(monkeypatch):
+    # DNS Check
+    monkeypatch.setattr(runtime.socket, "gethostbyname_ex", lambda host: ("example.com", [], ["93.184.216.34"]))
+    res_dns = runtime.dns_check(None, [], host="example.com")
+    assert res_dns.ok
+    assert res_dns.data["canonical_name"] == "example.com"
+    assert "93.184.216.34" in res_dns.data["ips"]
+    assert res_dns.data["response_time_ms"] >= 0
+
+    # Ping Host TCP
+    class FakeSocket:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+
+    monkeypatch.setattr(runtime.socket, "create_connection", lambda addr, timeout=None: FakeSocket())
+    res_ping = runtime.ping_host(None, [], host="example.com", port=80, mode="tcp")
+    assert res_ping.ok
+    assert res_ping.data["alive"] is True
+    assert res_ping.data["mode"] == "tcp"
+    assert res_ping.data["latency_ms"] >= 0
+
+
+def test_mqtt_publish_and_read_mocked(monkeypatch):
+    sent_buffers = []
+
+    class FakeMQTTSocket:
+        def __init__(self, mode="pub"):
+            self._mode = mode
+            self.recv_calls = 0
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def settimeout(self, t): pass
+        def sendall(self, data): sent_buffers.append(data)
+        def recv(self, n):
+            self.recv_calls += 1
+            if self._mode == "pub":
+                return b"\x20\x02\x00\x00"
+            else:
+                if self.recv_calls == 1:
+                    return b"\x20\x02\x00\x00"
+                elif self.recv_calls == 2:
+                    return b"\x90\x03\x00\x01\x00"
+                else:
+                    top_b = b"sensores/temp"
+                    pay_b = b"23.5"
+                    body = len(top_b).to_bytes(2, "big") + top_b + pay_b
+                    return b"\x30" + bytes([len(body)]) + body
+
+    current_mode = ["pub"]
+    monkeypatch.setattr(runtime.socket, "create_connection", lambda addr, timeout=None: FakeMQTTSocket(current_mode[0]))
+
+    # 1. Publish
+    res_pub = runtime.mqtt_publish(None, [], broker="127.0.0.1", topic="sensores/temp", payload="24.1")
+    assert res_pub.ok
+    assert "Publicado en sensores/temp" in res_pub.data
+    assert len(sent_buffers) == 3  # CONNECT, PUBLISH, DISCONNECT
+
+    # 2. Read
+    sent_buffers.clear()
+    current_mode[0] = "sub"
+    res_read = runtime.mqtt_read(None, [], broker="127.0.0.1", topic="sensores/temp")
+    assert res_read.ok
+    assert res_read.data == "23.5"
+
+
+def test_imap_read_mocked(monkeypatch):
+    class FakeIMAP:
+        def __init__(self, host, port, timeout=None): pass
+        def login(self, u, p): return ("OK", [b"Logged in"])
+        def select(self, f): return ("OK", [b"1"])
+        def search(self, charset, crit): return ("OK", [b"101"])
+        def fetch(self, mid, cmd):
+            raw = (
+                b"Subject: =?utf-8?q?Prueba_de_asunto?=\r\n"
+                b"From: remitente@example.com\r\n"
+                b"Date: Sun, 13 Sep 2026 12:00:00 +0200\r\n"
+                b"Content-Type: text/plain; charset=utf-8\r\n\r\n"
+                b"Cuerpo del mensaje de prueba."
+            )
+            return ("OK", [(b"101 (RFC822 {150}", raw)])
+        def logout(self): return ("BYE", [b"Logged out"])
+
+    from dedalo import secrets
+    monkeypatch.setattr(secrets, "get", lambda name: "fake_pwd" if name == "mi_correo" else "")
+    monkeypatch.setattr(runtime.imaplib, "IMAP4_SSL", FakeIMAP)
+
+    res = runtime.imap_read(None, [], host="imap.example.com", username="user@example.com", secret="mi_correo")
+    assert res.ok
+    assert len(res.data) == 1
+    assert res.data[0]["subject"] == "Prueba de asunto"
+    assert res.data[0]["from"] == "remitente@example.com"
+    assert "Cuerpo del mensaje" in res.data[0]["body"]
+
+
+
 
 
 

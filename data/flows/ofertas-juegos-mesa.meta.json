@@ -1,7 +1,7 @@
 {
-  "name": "Ofertas y Novedades de Juegos de Mesa",
-  "description": "Monitorea las últimas novedades de Mathom, Outlet-PC y Zacatrus, agrupa ofertas por juego y genera un informe comparativo diario.",
-  "schedule": "30 12 * * *",
+  "name": "ofertas-juegos-mesa",
+  "description": "",
+  "schedule": "",
   "enabled": true,
-  "updated_at": 1789312500
+  "updated_at": 1789313835
 }

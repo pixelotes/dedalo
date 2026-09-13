@@ -133,3 +133,46 @@ def test_web_search_node_compiles():
     exec(src, ns)
     assert callable(ns["run"])
 
+
+def test_deterministic_nodes_compile():
+    g = compiler.Graph(
+        name="test_det_nodes",
+        nodes=[
+            _node("ssl", "input.ssl_cert", {"host": "example.com"}),
+            _node("dns", "input.dns_check", {"host": "example.com"}),
+            _node("ping", "input.ping", {"host": "example.com"}),
+            _node("imap", "input.imap", {"host": "imap.example.com", "username": "me@example.com"}),
+            _node("diff", "transform.diff", {"key_field": "url", "mode": "added"}),
+            _node("dedup", "transform.fuzzy_dedup", {"field": "title", "threshold": 0.8}),
+            _node("agg", "transform.aggregate", {"field": "price", "operation": "avg"}),
+            _node("table", "transform.table", {"format": "markdown", "columns": "a,b"}),
+            _node("rake", "transform.keywords_rake", {"max_keywords": 3}),
+            _node("pub_mqtt", "output.mqtt", {"topic": "home/alert"}),
+        ],
+        edges=[
+            _edge("ssl", "diff", "ok"),
+            _edge("diff", "dedup", "ok"),
+            _edge("dedup", "agg", "ok"),
+            _edge("agg", "table", "ok"),
+            _edge("table", "rake", "ok"),
+            _edge("rake", "pub_mqtt", "ok"),
+        ],
+    )
+    src = compiler.compile(g)
+    assert "def run(ctx):" in src
+    assert "runtime.ssl_cert" in src
+    assert "runtime.dns_check" in src
+    assert "runtime.ping_host" in src
+    assert "runtime.imap_read" in src
+    assert "runtime.diff_data" in src
+    assert "runtime.fuzzy_dedup" in src
+    assert "runtime.aggregate" in src
+    assert "runtime.format_table" in src
+    assert "runtime.keywords_rake" in src
+    assert "runtime.mqtt_publish" in src
+
+    ns = {}
+    exec(src, ns)
+    assert callable(ns["run"])
+
+

@@ -394,6 +394,96 @@ NODE_TYPES: dict[str, NodeSpec] = {
         label="Uso de CPU",
         output="número (% de carga)",
     ),
+    "input.ssl_cert": NodeSpec(
+        category="input",
+        runtime_fn="ssl_cert",
+        required=frozenset({"host"}),
+        optional={"port": 443, "timeout": 5.0},
+        label="Certificado SSL/TLS",
+        output="dict con days_left, expires_at, is_valid, issuer",
+        help={
+            "host": "Dominio o host a verificar (ej. google.com o mi-servidor.org).",
+            "port": "Puerto TLS (por defecto 443).",
+            "timeout": "Tiempo máximo en segundos.",
+        },
+    ),
+    "input.dns_check": NodeSpec(
+        category="input",
+        runtime_fn="dns_check",
+        required=frozenset({"host"}),
+        optional={"record_type": "A", "timeout": 5.0},
+        label="Comprobación DNS",
+        output="dict con ips, canonical_name, response_time_ms",
+        help={
+            "host": "Dominio a resolver (ej. example.com).",
+            "timeout": "Tiempo límite en segundos.",
+        },
+    ),
+    "input.ping": NodeSpec(
+        category="input",
+        runtime_fn="ping_host",
+        required=frozenset({"host"}),
+        optional={"port": 80, "mode": "tcp", "timeout": 3.0},
+        label="Ping y Latencia",
+        output="dict con alive, latency_ms, host",
+        choices={
+            "mode": [
+                {"value": "tcp", "label": "TCP Connect (sin root)"},
+                {"value": "icmp", "label": "ICMP Ping (sistema)"},
+            ],
+        },
+        help={
+            "host": "Host o IP a comprobar.",
+            "port": "Puerto para ping TCP (por defecto 80).",
+            "mode": "Modo de comprobación: TCP o ICMP.",
+        },
+    ),
+    "input.mqtt": NodeSpec(
+        category="input",
+        runtime_fn="mqtt_read",
+        required=frozenset({"topic"}),
+        optional={"broker": "localhost", "port": 1883, "username": "", "secret": "", "timeout": 5.0},
+        label="MQTT Suscribir",
+        output="mensaje recibido en el topic",
+        choices_from={"secret": "secrets"},
+        help={
+            "topic": "Topic MQTT a escuchar.",
+            "broker": "Dirección del broker (ej. localhost o 192.168.1.50).",
+            "secret": "Secreto con la contraseña si el broker requiere auth.",
+        },
+    ),
+    "input.imap": NodeSpec(
+        category="input",
+        runtime_fn="imap_read",
+        required=frozenset({"host", "username"}),
+        optional={
+            "port": 993,
+            "secret": "",
+            "folder": "INBOX",
+            "filter": "UNSEEN",
+            "limit": 5,
+            "mark_as_read": False,
+            "timeout": 15.0,
+        },
+        label="Lector Correo (IMAP)",
+        output="lista de correos entrantes con asunto, emisor y cuerpo",
+        choices_from={"secret": "secrets"},
+        choices={
+            "filter": [
+                {"value": "UNSEEN", "label": "Solo no leídos (UNSEEN)"},
+                {"value": "ALL", "label": "Todos los recientes (ALL)"},
+                {"value": "FLAGGED", "label": "Destacados (FLAGGED)"},
+            ],
+        },
+        help={
+            "host": "Servidor IMAP (ej. imap.gmail.com).",
+            "username": "Usuario o email de acceso.",
+            "secret": "Secreto con la contraseña o App Password.",
+            "folder": "Buzón a consultar (por defecto INBOX).",
+            "limit": "Número máximo de correos a recuperar.",
+            "mark_as_read": "Si es verdadero, marca los mensajes como leídos.",
+        },
+    ),
     # -- Transformaciones ---------------------------------------------------
     "transform.template": NodeSpec(
         category="transform",
@@ -424,6 +514,108 @@ NODE_TYPES: dict[str, NodeSpec] = {
         help={
             "field": "Campo sobre el que ordenar o desduplicar (si son diccionarios).",
             "join_sep": "Separador para la operación join (por defecto salto de línea).",
+        },
+    ),
+    "transform.diff": NodeSpec(
+        category="transform",
+        runtime_fn="diff_data",
+        optional={"key_field": "", "mode": "added", "state_key": ""},
+        label="Detección de Cambios (Diff)",
+        output="elementos nuevos o cambiados respecto a la corrida previa",
+        choices={
+            "mode": [
+                {"value": "added", "label": "Solo elementos nuevos (added)"},
+                {"value": "modified", "label": "Solo modificados (modified)"},
+                {"value": "removed", "label": "Solo eliminados (removed)"},
+                {"value": "all", "label": "Todos los cambios (dict con added/modified/removed)"},
+            ],
+        },
+        help={
+            "key_field": "Campo identificador único (ej: url, id, title). Si está vacío se detecta automáticamente.",
+            "mode": "Qué conjunto emitir: nuevos, modificados, eliminados o resumen completo.",
+            "state_key": "Identificador opcional de la memoria de estado.",
+        },
+    ),
+    "transform.fuzzy_dedup": NodeSpec(
+        category="transform",
+        runtime_fn="fuzzy_dedup",
+        optional={"field": "title", "threshold": 0.80, "merge_strategy": "keep_first"},
+        label="Deduplicación Difusa",
+        output="lista de elementos deduplicados por similitud léxica",
+        choices={
+            "merge_strategy": [
+                {"value": "keep_first", "label": "Conservar el primero y descartar duplicados"},
+                {"value": "merge_list", "label": "Conservar el primero y adjuntar lista de duplicados"},
+                {"value": "group", "label": "Agrupar en clusters de duplicados"},
+            ],
+        },
+        help={
+            "field": "Campo a comparar para medir la similitud (ej: title, nombre).",
+            "threshold": "Umbral de similitud entre 0.0 y 1.0 (0.80 es recomendado).",
+            "merge_strategy": "Estrategia al encontrar duplicados.",
+        },
+    ),
+    "transform.aggregate": NodeSpec(
+        category="transform",
+        runtime_fn="aggregate",
+        optional={"field": "", "operation": "avg", "group_by": ""},
+        label="Agregador Estadístico",
+        output="cálculo numérico o resumen estadístico",
+        choices={
+            "operation": [
+                {"value": "avg", "label": "Media aritmética (promedio)"},
+                {"value": "sum", "label": "Suma total"},
+                {"value": "min", "label": "Valor mínimo"},
+                {"value": "max", "label": "Valor máximo"},
+                {"value": "count", "label": "Conteo de elementos"},
+                {"value": "median", "label": "Mediana"},
+                {"value": "summary", "label": "Resumen completo (todas las métricas)"},
+            ],
+        },
+        help={
+            "field": "Campo numérico a evaluar en cada objeto (dejar vacío si los elementos son números directos).",
+            "operation": "Métrica estadística a calcular.",
+            "group_by": "Campo opcional para agrupar las estadísticas.",
+        },
+    ),
+    "transform.table": NodeSpec(
+        category="transform",
+        runtime_fn="format_table",
+        optional={"format": "markdown", "columns": "", "headers": "", "max_rows": 100},
+        label="Formateador de Tablas",
+        output="tabla formateada en Markdown o HTML",
+        choices={
+            "format": [
+                {"value": "markdown", "label": "Tabla Markdown"},
+                {"value": "html", "label": "Tabla HTML (estilos inline)"},
+            ],
+        },
+        help={
+            "columns": "Campos a incluir en la tabla separados por comas (ej. title,price,store).",
+            "headers": "Encabezados personalizados separados por comas (ej. Título,Precio,Tienda).",
+            "max_rows": "Número máximo de filas a renderizar.",
+        },
+    ),
+    "transform.keywords_rake": NodeSpec(
+        category="transform",
+        runtime_fn="keywords_rake",
+        optional={"max_keywords": 5, "min_freq": 1, "max_words": 3, "language": "es", "output_format": "list"},
+        label="Palabras Clave (RAKE)",
+        output="frases y conceptos clave extraídos del texto",
+        choices={
+            "language": [
+                {"value": "es", "label": "Español"},
+                {"value": "en", "label": "Inglés"},
+            ],
+            "output_format": [
+                {"value": "list", "label": "Lista estructurada"},
+                {"value": "text", "label": "Texto separado por comas"},
+            ],
+        },
+        help={
+            "max_keywords": "Cantidad máxima de frases clave a devolver.",
+            "max_words": "Longitud máxima en palabras de cada frase clave.",
+            "min_freq": "Frecuencia mínima de aparición.",
         },
     ),
     "transform.regex": NodeSpec(
@@ -759,6 +951,30 @@ NODE_TYPES: dict[str, NodeSpec] = {
             "webhook_url": "URL del Incoming Webhook de Slack.",
             "secret": "O selecciona un secreto con la URL.",
             "text": "Mensaje a enviar (admite {entrada}).",
+        },
+    ),
+    "output.mqtt": NodeSpec(
+        category="output",
+        runtime_fn="mqtt_publish",
+        required=frozenset({"topic"}),
+        optional={
+            "broker": "localhost",
+            "port": 1883,
+            "payload": "{entrada}",
+            "retain": False,
+            "qos": 0,
+            "username": "",
+            "secret": "",
+            "timeout": 5.0,
+        },
+        label="MQTT Publicar",
+        output="confirmación de publicación",
+        choices_from={"secret": "secrets"},
+        help={
+            "topic": "Topic MQTT donde publicar.",
+            "payload": "Contenido del mensaje (admite {entrada}).",
+            "broker": "Dirección del broker (ej. localhost o 192.168.1.50).",
+            "secret": "Secreto con la contraseña si el broker requiere auth.",
         },
     ),
     "output.command": NodeSpec(

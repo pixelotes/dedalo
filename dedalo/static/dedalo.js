@@ -328,6 +328,10 @@ function setupEvents() {
   $('btnSaveSecret').onclick = addSecret;
   $('btnSaveConfig').onclick = saveConfig;
 
+  if ($('paletteSearch')) {
+    $('paletteSearch').addEventListener('input', () => renderPalette());
+  }
+
   // Eventos globales de arrastre y clic en el canvas
   const canvas = $('canvasWrap');
   canvas.onmousedown = onCanvasMouseDown;
@@ -652,14 +656,30 @@ function renderPalette() {
   const p = $('palette');
   p.innerHTML = '';
   const categories = { input: 'Entrada', transform: 'Transformación', output: 'Salida' };
+  const query = ($('paletteSearch') && $('paletteSearch').value || '').trim().toLowerCase();
+  let totalMatched = 0;
 
   Object.entries(categories).forEach(([catKey, catTitle]) => {
     const block = document.createElement('div');
     block.className = `category-block cat-${catKey}`;
     block.innerHTML = `<h4>${catTitle}</h4>`;
+    let catMatched = 0;
 
     Object.entries(state.catalog.node_types || {}).forEach(([typeKey, spec]) => {
       if (spec.category !== catKey) return;
+      if (query) {
+        const sub = typeKey.split('.')[1] || '';
+        const label = (spec.label || '').toLowerCase();
+        const out = (spec.output || '').toLowerCase();
+        const matches = label.includes(query) ||
+                        typeKey.toLowerCase().includes(query) ||
+                        sub.toLowerCase().includes(query) ||
+                        out.includes(query);
+        if (!matches) return;
+      }
+      catMatched++;
+      totalMatched++;
+
       const pill = document.createElement('div');
       pill.className = `node-pill cat-${catKey}`;
       pill.draggable = true;
@@ -676,8 +696,15 @@ function renderPalette() {
       };
       block.appendChild(pill);
     });
-    p.appendChild(block);
+
+    if (catMatched > 0 || !query) {
+      p.appendChild(block);
+    }
   });
+
+  if (query && totalMatched === 0) {
+    p.innerHTML = `<p class="hint" style="text-align: center; padding: 1.5rem 0.5rem;">No hay nodos que coincidan con «${escapeHtml(query)}»</p>`;
+  }
 }
 
 function renderSecretsList() {
