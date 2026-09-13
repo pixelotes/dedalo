@@ -29,6 +29,14 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # ==============================================================================
 FROM python:3.12-slim-bookworm AS runner
 
+# Instalar binarios necesarios del sistema (git para nodos de control de versiones)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git \
+        ca-certificates \
+        openssh-client \
+    && rm -rf /var/lib/apt/lists/* \
+    && git config --system --add safe.directory '*'
+
 # Argumentos de usuario (por defecto UID/GID 1000, estándar en Raspberry Pi / Ubuntu)
 ARG UID=1000
 ARG GID=1000
