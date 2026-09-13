@@ -20,7 +20,7 @@ Este documento resume el estado técnico actual de **Dédalo Standalone**, su or
 - **Control de cambios**: Detección de modificaciones no guardadas con modal de confirmación antes de cambiar de flujo.
 - **Optimización de Memoria Activa**: Compactación periódica de heap con recolección de basura forzada y devolución de páginas al OS vía `malloc_trim(0)`.
 - **Evasión Antibot sin Navegador Pesado**: Motor HTTP dual con `curl_cffi` (suplantación de TLS/HTTP/2 de Chrome/Safari/Firefox y User-Agents) y fallback transparente a `httpx`.
-- **Suite de pruebas**: 75 pruebas automatizadas pasando al 100% en `pytest`.
+- **Suite de pruebas**: 81 pruebas automatizadas pasando al 100% en `pytest`.
 
 ---
 
@@ -237,6 +237,22 @@ Para facilitar la portabilidad, el despliegue entre diferentes máquinas (ej. es
   - **Protección contra DoS**: Límite de descompresión de 25 MB.
   - **Recompilación Automática**: Guarda el grafo e invoca `save_flow()`, compilándolo de inmediato a Python ejecutable (`<flow_id>.py`).
 
+### K. Depuración Paso a Paso, Inspección Completa y Transformaciones en Tiempo Real
+Para diagnosticar flujos de datos complejos y experimentar con transformaciones interactivamente sin sobrecargar servicios remotos:
+- **Depuración Paso a Paso en Canvas**:
+  - Barra de herramientas flotante (`#debugToolbar`) con control de estado (nodo actual, siguiente paso, continuar, reiniciar y detener).
+  - Resaltado visual en el lienzo con animación de pulso cian (`.node-debug-active`) sobre el nodo en depuración.
+  - Ejecución dirigida: botón "▶ Ejecutar hasta este nodo" en el inspector de propiedades para evaluar el subgrafo DAG necesario hasta un nodo arbitrario.
+  - Endpoints dedicados: `POST /api/flow/step` (con modos `step` y `run_to`) y función backend `runtime.execute_single_node()`.
+- **Inspección de Datos No Truncados**:
+  - En modo depuración e inspección, se desactiva la truncación de datos (`truncate=False`), preservando entradas y salidas al 100% de fidelidad.
+  - El inspector de nodos incluye pestañas `[Salida]` y `[Entrada]`, visualización conmutada Formateado / Raw y botón de copia rápida al portapapeles.
+  - Modal `#dataViewerModal` a pantalla completa para inspección profunda de datos JSON/HTML/Texto con buscador por líneas, contador de filas y cálculo de tamaño en KB/MB.
+- **Transformaciones en Tiempo Real (Live Preview Playground)**:
+  - Panel interactivo en el inspector para nodos de transformación (`transform.*`).
+  - Al modificar parámetros (expresiones regulares, selectores CSS, formatos de fecha, scripts Python, etc.), el resultado se recalcula en tiempo real (~2-4 ms) con debounce de 250ms.
+  - Toma automáticamente como entrada los datos reales producidos por el nodo padre en la última ejecución/paso o permite alternar a una muestra personalizada de prueba.
+
 ---
 
 ## 5. Estructura del Repositorio
@@ -264,10 +280,11 @@ dedalo/
 │   │   └── index.html
 │   ├── store.py            # Persistencia de flujos en JSON/PY y empaquetado ZIP
 │   └── templates.py        # Plantillas de inicio rápido
-├── tests/                  # Pruebas automatizadas (pytest - 75 tests)
+├── tests/                  # Pruebas automatizadas (pytest - 81 tests)
 │   ├── test_api.py
 │   ├── test_compiler.py
 │   ├── test_cron.py        # Pruebas del evaluador cron e intervalos nativo
+│   ├── test_debug.py       # Pruebas de ejecución aislada, paso a paso y preview en vivo
 │   ├── test_history.py
 │   ├── test_runtime.py
 │   ├── test_secrets.py
@@ -302,6 +319,6 @@ cd dedalo
 
 ### Ideas y Posibles Siguientes Pasos (Roadmap)
 1. **Librería de Componentes / Subflujos**: Capacidad de reutilizar un flujo dentro de otro como un único nodo compuesto.
-2. **Depuración Paso a Paso**: Posibilidad de ejecutar un flujo hasta un nodo específico e inspeccionar el estado intermedio en vivo.
-3. **Métricas en Vivo en Canvas**: Indicador numérico de elementos procesados o tiempo transcurrido superpuesto en cada conector de salida.
-4. **Historial de Versiones Git Local**: Registro de revisiones locales automáticas para cada modificación de flujo guardada.
+2. **Métricas en Vivo en Canvas**: Indicador numérico de elementos procesados o tiempo transcurrido superpuesto en cada conector de salida.
+3. **Historial de Versiones Git Local**: Registro de revisiones locales automáticas para cada modificación de flujo guardada.
+4. **Puntos de Interrupción Condicionales**: Pausar la ejecución en el lienzo solo cuando los datos cumplan una condición (ej. lista vacía o error).

@@ -1197,6 +1197,34 @@ def _topological_order(graph: Graph) -> list[Node] | None:
     return ordered
 
 
+def get_upstream_nodes(graph: Graph, target_node_id: str) -> list[Node]:
+    """Devuelve los nodos necesarios para ejecutar target_node_id en orden topológico."""
+    full_order = _topological_order(graph)
+    if not full_order:
+        return []
+
+    needed: set[str] = {target_node_id}
+    queue = [target_node_id]
+    while queue:
+        curr = queue.pop(0)
+        for e in graph.incoming(curr):
+            if e.source not in needed:
+                needed.add(e.source)
+                queue.append(e.source)
+
+    return [n for n in full_order if n.id in needed]
+
+
+def get_node_inputs_from_results(graph: Graph, node_id: str, results: dict[str, Any]) -> list[Any]:
+    """Obtiene las entradas de un nodo a partir de los resultados previos de sus fuentes."""
+    incoming = graph.incoming(node_id)
+    inputs_list = []
+    for edge in incoming:
+        if edge.source in results:
+            inputs_list.append(results[edge.source])
+    return inputs_list
+
+
 def validate(graph: Graph) -> list[str]:
     """Comprueba todos los problemas del grafo antes de compilarlo."""
     errors: list[str] = []

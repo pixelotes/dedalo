@@ -30,6 +30,14 @@ const state = {
   selectedRunId: null,
   runHighlights: {},
   activeInspector: null,
+  debug: {
+    active: false,
+    currentStepIndex: 0,
+    stepsOrder: [],
+    cachedResults: {},
+    running: false,
+  },
+  lastRunResults: {},
 };
 
 // ---------------------------------------------------------------------------
@@ -294,6 +302,19 @@ function setupEvents() {
   $('btnSchedule').onclick = () => openScheduleModal(state.graph.name);
   $('btnCompile').onclick = compileGraph;
   $('btnRun').onclick = runPreview;
+  if ($('btnDebugFlow')) $('btnDebugFlow').onclick = startDebugFlow;
+  if ($('btnDebugReset')) $('btnDebugReset').onclick = resetDebugFlow;
+  if ($('btnDebugNext')) $('btnDebugNext').onclick = stepDebugNext;
+  if ($('btnDebugContinue')) $('btnDebugContinue').onclick = continueDebugFlow;
+  if ($('btnDebugStop')) $('btnDebugStop').onclick = stopDebugFlow;
+
+  if ($('btnCloseDataViewer')) $('btnCloseDataViewer').onclick = () => $('dataViewerModal').hidden = true;
+  if ($('btnCloseDataViewerFoot')) $('btnCloseDataViewerFoot').onclick = () => $('dataViewerModal').hidden = true;
+  if ($('btnCopyDataViewer')) $('btnCopyDataViewer').onclick = copyDataViewerContent;
+  if ($('btnDataViewFormatted')) $('btnDataViewFormatted').onclick = () => switchDataViewerMode('formatted');
+  if ($('btnDataViewRaw')) $('btnDataViewRaw').onclick = () => switchDataViewerMode('raw');
+  if ($('dataViewerSearch')) $('dataViewerSearch').oninput = filterDataViewerContent;
+
   $('btnSave').onclick = saveFlow;
   $('templatePicker').onchange = (e) => {
     const val = e.target.value;
@@ -895,12 +916,29 @@ async function openRunDetail(runId) {
         const badgeClass = s.status === 'ok' ? 'ok' : s.status === 'skipped' ? 'skipped' : 'error';
         const statusLabel = s.status === 'ok' ? 'Éxito' : s.status === 'skipped' ? 'Omitido' : 'Error';
 
+        let inputHtml = '';
+        if (s.inputs != null) {
+          inputHtml = `
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; margin-top: 6px;">
+              <span class="hint" style="font-size:0.7rem; text-transform:uppercase; font-weight:600;">Entrada Recibida:</span>
+              <div style="display: flex; gap: 4px;">
+                <button class="icon-btn view-full-in-btn" style="font-size:0.72rem; padding: 2px 6px;" title="Ver entrada completa">🔍 Ver completo</button>
+                <button class="icon-btn copy-in-btn" style="font-size:0.72rem; padding: 2px 6px;" title="Copiar entrada">Copiar</button>
+              </div>
+            </div>
+            <pre class="step-data" style="max-height: 100px;">${escapeHtml(s.inputs)}</pre>
+          `;
+        }
+
         let dataHtml = '';
         if (s.data != null) {
           dataHtml = `
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
               <span class="hint" style="font-size:0.7rem; text-transform:uppercase; font-weight:600;">Resultado / Salida:</span>
-              <button class="icon-btn copy-step-btn" style="font-size:0.72rem; padding: 2px 6px;" title="Copiar datos">Copiar</button>
+              <div style="display: flex; gap: 4px;">
+                <button class="icon-btn view-full-step-btn" style="font-size:0.72rem; padding: 2px 6px;" title="Ver datos completos sin truncar">🔍 Ver completo</button>
+                <button class="icon-btn copy-step-btn" style="font-size:0.72rem; padding: 2px 6px;" title="Copiar datos">Copiar</button>
+              </div>
             </div>
             <pre class="step-data">${escapeHtml(s.data)}</pre>
           `;
@@ -911,6 +949,8 @@ async function openRunDetail(runId) {
           errHtml = `<div class="step-error"><b>Error de nodo:</b> ${escapeHtml(s.error)}</div>`;
         }
 
+        const durLabel = s.duration ? `<span class="hint" style="font-size:0.7rem;">${s.duration} ms</span>` : '';
+
         stepCard.innerHTML = `
           <div class="step-head">
             <div class="step-title">
@@ -918,6 +958,7 @@ async function openRunDetail(runId) {
               <span>${escapeHtml(s.node_id)}</span>
             </div>
             <div style="display: flex; align-items: center; gap: 8px;">
+              ${durLabel}
               <span class="step-badge ${badgeClass}">${statusLabel}</span>
               <button class="btn sm secondary locate-node-btn" title="Localizar y centrar este nodo en el lienzo visual">
                 <svg class="ic" width="12" height="12"><use href="#i-center"/></svg> Ver nodo
@@ -925,10 +966,41 @@ async function openRunDetail(runId) {
             </div>
           </div>
           <div class="step-body">
+            ${inputHtml}
             ${dataHtml}
             ${errHtml}
           </div>
         `;
+
+        const viewStepBtn = stepCard.querySelector('.view-full-step-btn');
+        if (viewStepBtn) {
+          viewStepBtn.onclick = () => {
+            openDataViewer(
+              `Ejecución ${run.id} — Salida de «${s.node_id}»`,
+              `Estado: ${statusLabel} | Duración: ${s.duration || 0} ms`,
+              s.data
+            );
+          };
+        }
+
+        const viewInBtn = stepCard.querySelector('.view-full-in-btn');
+        if (viewInBtn) {
+          viewInBtn.onclick = () => {
+            openDataViewer(
+              `Ejecución ${run.id} — Entrada de «${s.node_id}»`,
+              `Paso #${idx + 1}`,
+              s.inputs
+            );
+          };
+        }
+
+        const copyInBtn = stepCard.querySelector('.copy-in-btn');
+        if (copyInBtn) {
+          copyInBtn.onclick = () => {
+            navigator.clipboard.writeText(s.inputs);
+            toast('Entrada copiada al portapapeles.');
+          };
+        }
 
         const copyBtn = stepCard.querySelector('.copy-step-btn');
         if (copyBtn) {
@@ -1158,20 +1230,44 @@ async function runPreview() {
       alert('Error al ejecutar:\n' + (Array.isArray(data.detail) ? data.detail.join('\n') : data.detail));
       return;
     }
+    state.lastRunResults = data.results || {};
     $('sheetTitle').textContent = 'Traza de ejecución en vivo';
     $('sheetBody').textContent = data.code;
 
     const traceDiv = $('sheetTrace');
-    traceDiv.innerHTML = '<strong>Resultados por nodo:</strong><br/>';
+    traceDiv.innerHTML = '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;"><strong>Resultados por nodo:</strong><span class="hint" style="font-size:0.72rem;">Haz clic en «Ver completo» para inspeccionar datos no truncados</span></div>';
     Object.entries(data.results || {}).forEach(([nid, r]) => {
       const cls = r.status === 'ok' ? 'trace-ok' : r.status === 'skipped' ? 'trace-skip' : 'trace-err';
-      const detail = r.status === 'ok' ? JSON.stringify(r.data).slice(0, 120) : r.error || 'Omitido';
-      traceDiv.innerHTML += `<div class="trace-item ${cls}">▸ <b>${nid}</b> [${r.status}]: ${escapeHtml(detail)}</div>`;
+      const detail = r.status === 'ok' ? JSON.stringify(r.data).slice(0, 100) : r.error || 'Omitido';
+      const dur = r.duration_ms ? `[${r.duration_ms} ms]` : '';
+      const item = document.createElement('div');
+      item.className = `trace-item ${cls}`;
+      item.style.display = 'flex';
+      item.style.justifyContent = 'space-between';
+      item.style.alignItems = 'center';
+      item.innerHTML = `
+        <div style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+          ▸ <b>${escapeHtml(nid)}</b> [${r.status}] ${dur}: ${escapeHtml(detail)}
+        </div>
+        <button class="btn sm secondary view-full-trace-btn" style="padding:2px 6px; font-size:0.7rem; margin-left:8px;">🔍 Ver completo</button>
+      `;
+      item.querySelector('.view-full-trace-btn').onclick = (e) => {
+        e.stopPropagation();
+        openDataViewer(
+          `Nodo «${nid}» — Resultado`,
+          `Estado: ${r.status} | Duración: ${r.duration_ms || 0} ms`,
+          r.status === 'ok' ? r.data : r.error
+        );
+      };
+      traceDiv.appendChild(item);
     });
     traceDiv.hidden = false;
     $('sheet').hidden = false;
 
     highlightRunOnCanvas(data.results || {});
+    if (state.selectedNodeId) {
+      renderInspector();
+    }
     if (state.activeTab === 'history') {
       loadHistory();
     }
@@ -1291,6 +1387,9 @@ function renderNodes() {
     let cls = 'node' + (node.id === state.selectedNodeId ? ' selected' : '');
     if (state.runHighlights && state.runHighlights[node.id]) {
       cls += ` node-run-${state.runHighlights[node.id]}`;
+    }
+    if (state.debug && state.debug.active && state.debug.stepsOrder && state.debug.stepsOrder[state.debug.currentStepIndex]?.id === node.id) {
+      cls += ' node-debug-active';
     }
     el.className = cls;
     el.dataset.id = node.id;
@@ -1586,6 +1685,542 @@ function finishWire(targetNodeId) {
 }
 
 // ---------------------------------------------------------------------------
+// Visor de Datos Completos e Inspección (No truncado)
+// ---------------------------------------------------------------------------
+
+let dataViewerCurrentData = null;
+let dataViewerMode = 'formatted'; // 'formatted' | 'raw'
+
+function openDataViewer(title, subtitle, data) {
+  dataViewerCurrentData = data;
+  dataViewerMode = 'formatted';
+  if ($('dataViewerTitle')) $('dataViewerTitle').textContent = title || 'Inspección de Datos';
+  if ($('dataViewerSubtitle')) $('dataViewerSubtitle').textContent = subtitle || '';
+  if ($('dataViewerSearch')) $('dataViewerSearch').value = '';
+
+  if ($('btnDataViewFormatted')) $('btnDataViewFormatted').classList.add('active');
+  if ($('btnDataViewRaw')) $('btnDataViewRaw').classList.remove('active');
+
+  renderDataViewerContent();
+  if ($('dataViewerModal')) $('dataViewerModal').hidden = false;
+}
+
+function renderDataViewerContent() {
+  const pre = $('dataViewerContent');
+  if (!pre) return;
+  const raw = dataViewerCurrentData;
+  let text = '';
+
+  if (raw === null || raw === undefined) {
+    text = '(Vacío / Sin datos)';
+  } else if (typeof raw === 'string') {
+    text = raw;
+    if (dataViewerMode === 'formatted') {
+      try {
+        const parsed = JSON.parse(raw);
+        text = JSON.stringify(parsed, null, 2);
+      } catch (e) {
+        text = raw;
+      }
+    }
+  } else {
+    text = dataViewerMode === 'formatted' ? JSON.stringify(raw, null, 2) : JSON.stringify(raw);
+  }
+
+  const bytes = new Blob([text]).size;
+  const sizeStr = bytes > 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(2)} MB` : `${(bytes / 1024).toFixed(2)} KB`;
+  if ($('dataViewerSize')) $('dataViewerSize').textContent = `${sizeStr} (${text.length} caracteres)`;
+
+  pre.textContent = text;
+}
+
+function switchDataViewerMode(mode) {
+  dataViewerMode = mode;
+  if (mode === 'formatted') {
+    if ($('btnDataViewFormatted')) $('btnDataViewFormatted').classList.add('active');
+    if ($('btnDataViewRaw')) $('btnDataViewRaw').classList.remove('active');
+  } else {
+    if ($('btnDataViewFormatted')) $('btnDataViewFormatted').classList.remove('active');
+    if ($('btnDataViewRaw')) $('btnDataViewRaw').classList.add('active');
+  }
+  renderDataViewerContent();
+}
+
+function copyDataViewerContent() {
+  const pre = $('dataViewerContent');
+  if (pre && pre.textContent) {
+    navigator.clipboard.writeText(pre.textContent);
+    toast('Contenido completo copiado al portapapeles.');
+  }
+}
+
+function filterDataViewerContent(e) {
+  const query = e.target.value.toLowerCase();
+  const pre = $('dataViewerContent');
+  if (!pre) return;
+  if (!query) {
+    renderDataViewerContent();
+    return;
+  }
+  const text = pre.textContent;
+  const lines = text.split('\n');
+  const matched = lines.filter((l) => l.toLowerCase().includes(query));
+  pre.textContent = matched.join('\n') || `(No se encontraron líneas que contengan «${query}»)`;
+}
+
+// ---------------------------------------------------------------------------
+// Controlador de Depuración Paso a Paso
+// ---------------------------------------------------------------------------
+
+function getTopologicalOrder() {
+  const remaining = new Map(state.graph.nodes.map((n) => [n.id, n]));
+  const indegree = new Map(state.graph.nodes.map((n) => [n.id, 0]));
+  for (const e of state.graph.edges) {
+    if (indegree.has(e.target)) {
+      indegree.set(e.target, indegree.get(e.target) + 1);
+    }
+  }
+  const ordered = [];
+  while (remaining.size > 0) {
+    const ready = Array.from(remaining.values()).find((n) => indegree.get(n.id) === 0);
+    if (!ready) return null; // Ciclo detectado
+    ordered.push(ready);
+    remaining.delete(ready.id);
+    for (const e of state.graph.edges) {
+      if (e.source === ready.id && indegree.has(e.target)) {
+        indegree.set(e.target, indegree.get(e.target) - 1);
+      }
+    }
+  }
+  return ordered;
+}
+
+function startDebugFlow() {
+  if (!state.graph.nodes.length) {
+    toast('El flujo no tiene nodos para depurar.');
+    return;
+  }
+  const order = getTopologicalOrder();
+  if (!order) {
+    toast('El flujo contiene ciclos o conexiones inválidas.');
+    return;
+  }
+
+  state.debug = {
+    active: true,
+    currentStepIndex: 0,
+    stepsOrder: order,
+    cachedResults: {},
+    running: false,
+  };
+
+  $('debugToolbar').hidden = false;
+  updateDebugToolbar();
+  highlightActiveDebugNode();
+  toast('Modo depuración activo. Pulsa «Siguiente paso» para comenzar.');
+}
+
+function updateDebugToolbar() {
+  const tb = $('debugToolbar');
+  if (!tb || !state.debug.active) return;
+
+  const total = state.debug.stepsOrder.length;
+  const idx = state.debug.currentStepIndex;
+
+  $('debugStepTotal').textContent = total;
+  if (idx < total) {
+    const node = state.debug.stepsOrder[idx];
+    $('debugStepNum').textContent = idx + 1;
+    $('debugStepNodeName').textContent = `${node.label || node.id} (${node.type})`;
+    $('btnDebugNext').disabled = false;
+  } else {
+    $('debugStepNum').textContent = total;
+    $('debugStepNodeName').textContent = 'Completado';
+    $('btnDebugNext').disabled = true;
+  }
+}
+
+function highlightActiveDebugNode() {
+  renderNodes();
+  if (state.debug.active && state.debug.currentStepIndex < state.debug.stepsOrder.length) {
+    const node = state.debug.stepsOrder[state.debug.currentStepIndex];
+    selectNode(node);
+  }
+}
+
+async function stepDebugNext() {
+  if (!state.debug.active || state.debug.running) return;
+  const idx = state.debug.currentStepIndex;
+  if (idx >= state.debug.stepsOrder.length) {
+    toast('Depuración completada.');
+    return;
+  }
+
+  const node = state.debug.stepsOrder[idx];
+  state.debug.running = true;
+  $('btnDebugNext').disabled = true;
+  toast(`Ejecutando paso ${idx + 1}: «${node.label || node.id}»...`);
+
+  try {
+    const res = await fetch('/api/flow/step', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        graph: state.graph,
+        target_node_id: node.id,
+        mode: 'step',
+        cached_results: state.debug.cachedResults,
+      }),
+    });
+    const data = await res.json();
+    state.debug.running = false;
+
+    if (!res.ok || data.status !== 'ok') {
+      alert('Error en el paso:\n' + (data.detail || data.error || 'Error desconocido'));
+      return;
+    }
+
+    state.debug.cachedResults = data.all_results || {};
+    state.lastRunResults = data.all_results || {};
+
+    const st = data.step.status;
+    state.runHighlights[node.id] = st === 'ok' ? 'ok' : 'err';
+
+    state.debug.currentStepIndex++;
+    updateDebugToolbar();
+    highlightActiveDebugNode();
+    renderInspector();
+  } catch (e) {
+    state.debug.running = false;
+    $('btnDebugNext').disabled = false;
+    toast('Fallo al ejecutar paso de depuración.');
+  }
+}
+
+async function runToNode(targetNodeId) {
+  toast(`Ejecutando hasta nodo «${targetNodeId}»...`);
+  try {
+    const res = await fetch('/api/flow/step', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        graph: state.graph,
+        target_node_id: targetNodeId,
+        mode: 'run_to',
+        cached_results: (state.debug && state.debug.cachedResults) || {},
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.status !== 'ok') {
+      alert('Error ejecutando hasta el nodo:\n' + (data.detail || data.error || 'Error'));
+      return;
+    }
+
+    if (!state.debug.active) {
+      const order = getTopologicalOrder();
+      if (order) {
+        state.debug.active = true;
+        state.debug.stepsOrder = order;
+        $('debugToolbar').hidden = false;
+      }
+    }
+
+    state.debug.cachedResults = data.all_results || {};
+    state.lastRunResults = data.all_results || {};
+
+    Object.entries(data.all_results || {}).forEach(([nid, r]) => {
+      state.runHighlights[nid] = r.status === 'ok' ? 'ok' : 'err';
+    });
+
+    const targetIdx = state.debug.stepsOrder.findIndex((n) => n.id === targetNodeId);
+    if (targetIdx !== -1) {
+      state.debug.currentStepIndex = targetIdx + 1;
+    }
+
+    updateDebugToolbar();
+    highlightActiveDebugNode();
+
+    const targetNode = state.graph.nodes.find((n) => n.id === targetNodeId);
+    if (targetNode) {
+      selectNode(targetNode);
+    }
+    toast(`Ejecutado hasta «${targetNodeId}» con éxito.`);
+  } catch (e) {
+    toast('Error en ejecución hasta el nodo.');
+  }
+}
+
+async function continueDebugFlow() {
+  if (!state.debug.active) return;
+  while (state.debug.currentStepIndex < state.debug.stepsOrder.length) {
+    await stepDebugNext();
+    const lastNode = state.debug.stepsOrder[state.debug.currentStepIndex - 1];
+    if (lastNode && state.debug.cachedResults[lastNode.id]?.status === 'error') {
+      toast('Depuración detenida por error en el nodo.');
+      break;
+    }
+  }
+}
+
+function resetDebugFlow() {
+  if (!state.debug.active) return;
+  state.debug.currentStepIndex = 0;
+  state.debug.cachedResults = {};
+  state.runHighlights = {};
+  updateDebugToolbar();
+  highlightActiveDebugNode();
+  renderInspector();
+  toast('Depuración reiniciada.');
+}
+
+function stopDebugFlow() {
+  state.debug.active = false;
+  $('debugToolbar').hidden = true;
+  renderNodes();
+  toast('Depuración finalizada.');
+}
+
+// ---------------------------------------------------------------------------
+// Sección de Ejecución & Debug e Inspector de Transformación en Vivo
+// ---------------------------------------------------------------------------
+
+function renderNodeExecutionSection(node, container) {
+  const execData =
+    (state.debug && state.debug.cachedResults && state.debug.cachedResults[node.id]) ||
+    (state.lastRunResults && state.lastRunResults[node.id]);
+  if (!execData) return;
+
+  const box = document.createElement('div');
+  box.className = 'node-exec-box';
+
+  const isOk = execData.status === 'ok';
+  const badgeClass = isOk ? 'step-ok' : execData.status === 'skipped' ? 'step-skip' : 'step-err';
+  const badgeText = isOk ? 'OK' : execData.status === 'skipped' ? 'OMITIDO' : 'ERROR';
+  const durationText = execData.duration_ms ? `${execData.duration_ms} ms` : '';
+
+  box.innerHTML = `
+    <div class="node-exec-head">
+      <span class="node-exec-title">
+        <svg class="ic" width="13" height="13"><use href="#i-play"/></svg>
+        Datos de Ejecución
+      </span>
+      <div style="display: flex; gap: 6px; align-items: center;">
+        <span class="hint" style="font-size: 0.72rem;">${durationText}</span>
+        <span class="step-badge ${badgeClass}">${badgeText}</span>
+      </div>
+    </div>
+    <div class="tab-pill-group" style="margin-bottom: 6px;">
+      <button class="tab-pill active" id="pillOutput_${node.id}">Salida (Output)</button>
+      <button class="tab-pill" id="pillInput_${node.id}">Entrada (Input)</button>
+    </div>
+    <pre class="node-exec-pre" id="nodeExecPre_${node.id}"></pre>
+    <div class="node-exec-actions">
+      <button class="btn sm secondary" id="btnViewFullData_${node.id}" title="Ver contenido completo no truncado en ventana ampliada">
+        🔍 Ver completo (no truncado)
+      </button>
+      <button class="btn sm secondary" id="btnCopyExecData_${node.id}" title="Copiar al portapapeles">
+        📋 Copiar
+      </button>
+    </div>
+  `;
+
+  let activeTab = 'output';
+  const pre = box.querySelector(`#nodeExecPre_${node.id}`);
+  const pillOut = box.querySelector(`#pillOutput_${node.id}`);
+  const pillIn = box.querySelector(`#pillInput_${node.id}`);
+  const btnFull = box.querySelector(`#btnViewFullData_${node.id}`);
+  const btnCopy = box.querySelector(`#btnCopyExecData_${node.id}`);
+
+  function updateExecDisplay() {
+    const rawData = activeTab === 'output' ? (isOk ? execData.data : execData.error) : execData.inputs;
+    let displayText = '';
+    if (rawData === null || rawData === undefined) {
+      displayText = activeTab === 'input' ? '(Sin entradas precedentes o nodo inicial)' : '(Salida vacía)';
+    } else if (typeof rawData === 'object') {
+      displayText = JSON.stringify(rawData, null, 2);
+    } else {
+      displayText = String(rawData);
+    }
+    pre.textContent = displayText;
+  }
+
+  pillOut.onclick = () => {
+    activeTab = 'output';
+    pillOut.classList.add('active');
+    pillIn.classList.remove('active');
+    updateExecDisplay();
+  };
+
+  pillIn.onclick = () => {
+    activeTab = 'input';
+    pillIn.classList.add('active');
+    pillOut.classList.remove('active');
+    updateExecDisplay();
+  };
+
+  btnFull.onclick = () => {
+    const rawData = activeTab === 'output' ? (isOk ? execData.data : execData.error) : execData.inputs;
+    openDataViewer(
+      `Nodo «${node.label || node.id}» — ${activeTab === 'output' ? 'Salida' : 'Entrada'}`,
+      `Tipo: ${node.type} | Estado: ${badgeText} ${durationText ? `| Duración: ${durationText}` : ''}`,
+      rawData
+    );
+  };
+
+  btnCopy.onclick = () => {
+    const rawData = activeTab === 'output' ? (isOk ? execData.data : execData.error) : execData.inputs;
+    const textToCopy = typeof rawData === 'object' ? JSON.stringify(rawData, null, 2) : String(rawData || '');
+    navigator.clipboard.writeText(textToCopy);
+    toast('Datos copiados al portapapeles.');
+  };
+
+  updateExecDisplay();
+  container.appendChild(box);
+}
+
+let livePreviewDebounceTimer = null;
+
+function renderLivePreviewSection(node, spec, container) {
+  const box = document.createElement('div');
+  box.className = 'live-preview-box';
+  box.id = `livePreview_${node.id}`;
+
+  const incoming = state.graph.edges.filter((e) => e.target === node.id);
+  let parentData = null;
+  let parentId = null;
+  for (const edge of incoming) {
+    const cached =
+      (state.debug && state.debug.cachedResults && state.debug.cachedResults[edge.source]) ||
+      (state.lastRunResults && state.lastRunResults[edge.source]);
+    if (cached && cached.data !== undefined && cached.data !== null) {
+      parentData = cached.data;
+      parentId = edge.source;
+      break;
+    }
+  }
+
+  let sourceLabel = '';
+  if (parentData !== null) {
+    const size = typeof parentData === 'string' ? parentData.length : JSON.stringify(parentData).length;
+    const sizeKb = (size / 1024).toFixed(1);
+    sourceLabel = `Usando salida de <b>${escapeHtml(parentId)}</b> (${sizeKb} KB)`;
+  } else {
+    sourceLabel = 'Sin salida previa conectada. Puedes probar con muestra:';
+  }
+
+  box.innerHTML = `
+    <div class="live-preview-head">
+      <div class="live-preview-title">
+        <span class="live-pulse-dot"></span>
+        <span>Vista Previa en Vivo</span>
+      </div>
+      <span class="hint" id="livePreviewStatus_${node.id}" style="font-size: 0.72rem;">Listo</span>
+    </div>
+    <div class="live-preview-source" id="livePreviewSource_${node.id}">
+      <span>${sourceLabel}</span>
+    </div>
+    <pre class="live-preview-pre" id="livePreviewOutput_${node.id}">(Calculando vista previa…)</pre>
+    <a class="live-sample-toggle" id="toggleSampleInput_${node.id}">
+      ${parentData === null ? '▼ Editar entrada de prueba' : '▶ Usar entrada de prueba personalizada'}
+    </a>
+    <div class="live-sample-area" id="sampleInputArea_${node.id}" ${parentData !== null ? 'hidden' : ''}>
+      <textarea id="sampleInputText_${node.id}" rows="3" style="font-family: var(--mono); font-size: 0.72rem;" placeholder="Pega aquí HTML, JSON o texto de prueba...">${parentData ? (typeof parentData === 'string' ? parentData : JSON.stringify(parentData, null, 2)) : ''}</textarea>
+    </div>
+  `;
+
+  const toggleBtn = box.querySelector(`#toggleSampleInput_${node.id}`);
+  const area = box.querySelector(`#sampleInputArea_${node.id}`);
+  toggleBtn.onclick = () => {
+    area.hidden = !area.hidden;
+    toggleBtn.textContent = area.hidden ? '▶ Usar entrada de prueba personalizada' : '▼ Ocultar entrada personalizada';
+  };
+
+  const sampleText = box.querySelector(`#sampleInputText_${node.id}`);
+  sampleText.oninput = () => {
+    triggerLivePreview(node);
+  };
+
+  container.appendChild(box);
+  triggerLivePreview(node);
+}
+
+function triggerLivePreview(node) {
+  clearTimeout(livePreviewDebounceTimer);
+  livePreviewDebounceTimer = setTimeout(() => {
+    runLivePreview(node);
+  }, 250);
+}
+
+async function runLivePreview(node) {
+  const box = $(`livePreview_${node.id}`);
+  const outEl = $(`livePreviewOutput_${node.id}`);
+  const statEl = $(`livePreviewStatus_${node.id}`);
+  if (!outEl) return;
+
+  if (box) box.classList.add('is-updating');
+  if (statEl) statEl.textContent = 'Calculando…';
+
+  let inputData = null;
+  const sampleArea = $(`sampleInputArea_${node.id}`);
+  const sampleText = $(`sampleInputText_${node.id}`);
+  if (sampleArea && !sampleArea.hidden && sampleText && sampleText.value.trim()) {
+    inputData = sampleText.value.trim();
+  } else {
+    const incoming = state.graph.edges.filter((e) => e.target === node.id);
+    for (const edge of incoming) {
+      const cached =
+        (state.debug && state.debug.cachedResults && state.debug.cachedResults[edge.source]) ||
+        (state.lastRunResults && state.lastRunResults[edge.source]);
+      if (cached && cached.data !== undefined && cached.data !== null) {
+        inputData = cached.data;
+        break;
+      }
+    }
+  }
+
+  try {
+    const res = await fetch('/api/node/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: node.type,
+        config: node.config,
+        input_data: inputData,
+        code: node.config.code || '',
+        flow_id: state.graph.name || 'preview',
+      }),
+    });
+    const data = await res.json();
+    if (box) box.classList.remove('is-updating');
+
+    if (data.status === 'ok') {
+      let count = '';
+      if (Array.isArray(data.data)) {
+        count = `(${data.data.length} elementos)`;
+      }
+      if (statEl) statEl.innerHTML = `<span style="color:var(--port-ok)">OK ${count} · ${data.duration_ms} ms</span>`;
+
+      let display = '';
+      if (typeof data.data === 'object' && data.data !== null) {
+        display = JSON.stringify(data.data, null, 2);
+      } else {
+        display = String(data.data !== null && data.data !== undefined ? data.data : '(Salida vacía)');
+      }
+      outEl.style.color = 'var(--text)';
+      outEl.textContent = display;
+    } else {
+      if (statEl) statEl.innerHTML = `<span style="color:var(--port-err)">Error</span>`;
+      outEl.style.color = 'var(--port-err)';
+      outEl.textContent = data.error || 'Error desconocido';
+    }
+  } catch (e) {
+    if (box) box.classList.remove('is-updating');
+    if (statEl) statEl.textContent = 'Error de red';
+    outEl.textContent = String(e);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Inspector de Propiedades del Nodo Seleccionado
 // ---------------------------------------------------------------------------
 
@@ -1645,6 +2280,19 @@ function renderNodeInspector(node, body) {
     markDirty();
     renderNodes();
   }));
+
+  // Botón para ejecutar la cadena hasta este nodo
+  const runToBtn = document.createElement('button');
+  runToBtn.className = 'btn sm secondary';
+  runToBtn.style.marginBottom = '14px';
+  runToBtn.style.width = '100%';
+  runToBtn.style.display = 'flex';
+  runToBtn.style.alignItems = 'center';
+  runToBtn.style.justifyContent = 'center';
+  runToBtn.style.gap = '6px';
+  runToBtn.innerHTML = `<svg class="ic" width="13" height="13"><use href="#i-play"/></svg> <span>Ejecutar hasta este nodo</span>`;
+  runToBtn.onclick = () => runToNode(node.id);
+  body.appendChild(runToBtn);
 
   // Botón para editar código si es script
   const codeField = spec.code_field || (node.type === 'transform.script' ? 'code' : null);
@@ -1751,6 +2399,7 @@ function renderNodeInspector(node, body) {
       inputEl.onchange = (e) => {
         node.config[key] = e.target.value;
         markDirty();
+        if (node.type.startsWith('transform.')) triggerLivePreview(node);
       };
     } else if (typeof defaultVal === 'boolean') {
       inputEl = document.createElement('input');
@@ -1759,6 +2408,7 @@ function renderNodeInspector(node, body) {
       inputEl.onchange = (e) => {
         node.config[key] = e.target.checked;
         markDirty();
+        if (node.type.startsWith('transform.')) triggerLivePreview(node);
       };
     } else {
       const multilineKeys = ['template', 'query', 'cmd', 'prompt', 'system_prompt', 'body', 'headers', 'message'];
@@ -1773,6 +2423,7 @@ function renderNodeInspector(node, body) {
       inputEl.oninput = (e) => {
         node.config[key] = e.target.value;
         markDirty();
+        if (node.type.startsWith('transform.')) triggerLivePreview(node);
       };
     }
 
@@ -1791,6 +2442,14 @@ function renderNodeInspector(node, body) {
     }
     body.appendChild(grp);
   });
+
+  // Si es un nodo de transformación, añadir el panel de Vista Previa en Vivo
+  if (node.type.startsWith('transform.')) {
+    renderLivePreviewSection(node, spec, body);
+  }
+
+  // Sección de datos de ejecución (Entrada y Salida completas sin truncar)
+  renderNodeExecutionSection(node, body);
 
   // Botón para eliminar nodo
   const btnDel = document.createElement('button');

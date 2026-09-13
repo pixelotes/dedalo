@@ -68,6 +68,7 @@ class NodeResult:
     status: str  # "ok" | "error" | "skipped"
     data: Any = None
     error: str = ""
+    duration: float = 0.0
 
     @property
     def ok(self) -> bool:
@@ -3356,5 +3357,101 @@ def summarize(results_dict: dict[str, NodeResult], ctx: Any) -> dict[str, Any]:
             "status": res.status,
             "data": res.data if res.ok else None,
             "error": res.error if res.failed else None,
+            "duration_ms": getattr(res, "duration", 0.0),
         }
     return summary
+
+
+@dataclass
+class _PreviewContext:
+    flow_name: str = "preview"
+    started_at: float = field(default_factory=time.time)
+    payload: Any = None
+    headers: dict[str, str] = field(default_factory=dict)
+
+
+def execute_single_node(
+    node_type: str,
+    config: dict[str, Any] | None = None,
+    inputs: list[Any] | Any = None,
+    code: str = "",
+    flow_name: str = "preview",
+    ctx: Any = None,
+) -> NodeResult:
+    """Ejecuta un nodo aislado en memoria con sus entradas y configuración.
+
+    Ideal para pruebas rápidas de nodos individuales, depuración paso a paso
+    y vista previa en tiempo real de transformaciones (selectores CSS, regex, templates, etc.).
+    """
+    import sys
+    import textwrap
+    from dedalo import compiler
+
+    if node_type not in compiler.NODE_TYPES:
+        return NodeResult("error", error=f"Tipo de nodo desconocido: «{node_type}»")
+
+    spec = compiler.NODE_TYPES[node_type]
+
+    # Normalizar inputs a lista de NodeResult
+    items: list[NodeResult] = []
+    if inputs is None:
+        items = []
+    elif isinstance(inputs, list):
+        for it in inputs:
+            if isinstance(it, NodeResult):
+                items.append(it)
+            elif isinstance(it, dict) and "status" in it:
+                items.append(NodeResult(
+                    status=str(it.get("status", "ok")),
+                    data=it.get("data"),
+                    error=str(it.get("error", "")),
+                ))
+            else:
+                items.append(NodeResult("ok", data=it))
+    elif isinstance(inputs, NodeResult):
+        items = [inputs]
+    elif isinstance(inputs, dict) and "status" in inputs:
+        items = [NodeResult(
+            status=str(inputs.get("status", "ok")),
+            data=inputs.get("data"),
+            error=str(inputs.get("error", "")),
+        )]
+    else:
+        items = [NodeResult("ok", data=inputs)]
+
+    # Crear contexto si no se facilitó uno
+    if ctx is None:
+        ctx = _PreviewContext(flow_name=flow_name)
+
+    cfg = {**spec.optional, **(config or {})}
+    cfg.pop("fan_in", None)
+    code_field = spec.code_field or ("code" if node_type == "transform.script" else "")
+    if code_field:
+        script_code = code or cfg.pop(code_field, "")
+    else:
+        script_code = ""
+
+    t0 = time.time()
+    try:
+        if code_field:
+            body = textwrap.dedent(script_code or "").strip("\n")
+            lines = ["def _cuerpo(entrada, ctx):"]
+            lines += [f"    {line}" if line.strip() else "" for line in body.splitlines()] or [
+                "    return None"
+            ]
+            ns: dict[str, Any] = {}
+            exec("\n".join(lines), ns)
+            fn = ns["_cuerpo"]
+            res = script(ctx, items, fn)
+        else:
+            runtime_fn = getattr(sys.modules[__name__], spec.runtime_fn, None)
+            if not runtime_fn or not callable(runtime_fn):
+                return NodeResult("error", error=f"Función runtime no encontrada para «{node_type}»")
+            res = runtime_fn(ctx, items, **cfg)
+    except Exception as exc:
+        res = NodeResult("error", error=f"Excepción al ejecutar nodo: {exc}")
+
+    elapsed_ms = round((time.time() - t0) * 1000, 2)
+    res.duration = elapsed_ms
+    return res
+

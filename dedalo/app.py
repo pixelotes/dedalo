@@ -91,6 +91,21 @@ class RunRequest(BaseModel):
     graph: dict[str, Any]
 
 
+class NodePreviewRequest(BaseModel):
+    type: str
+    config: dict[str, Any] = Field(default_factory=dict)
+    input_data: Any = None
+    code: str = ""
+    flow_id: str = "preview"
+
+
+class FlowStepRequest(BaseModel):
+    graph: dict[str, Any]
+    target_node_id: str
+    cached_results: dict[str, Any] = Field(default_factory=dict)
+    mode: str = "step"  # "step" | "run_to"
+
+
 class SecretSaveRequest(BaseModel):
     name: str
     value: str
@@ -438,19 +453,37 @@ def run_preview_endpoint(req: RunRequest) -> dict[str, Any]:
         run_fn = ns.get("run")
         if not callable(run_fn):
             raise RuntimeError("El flujo compilado no contiene función run()")
-        results = run_fn(ctx)
+        raw_results = run_fn(ctx)
         duration = time.time() - t0
+
+        # Enriquecer resultados con las entradas recibidas por cada nodo
+        enriched_results = {}
+        for node_id, r in raw_results.items():
+            incoming_sources = [e.source for e in graph.incoming(node_id)]
+            inputs_map = {}
+            for s in incoming_sources:
+                if s in raw_results and raw_results[s].get("status") == "ok":
+                    inputs_map[s] = raw_results[s].get("data")
+            node_inputs = inputs_map if len(incoming_sources) > 1 else (
+                inputs_map.get(incoming_sources[0]) if incoming_sources else None
+            )
+            enriched_results[node_id] = {
+                **r,
+                "inputs": node_inputs,
+            }
+
         history.record_run_finish(
             run_id=run_id,
             status="ok",
             duration=duration,
-            results=results,
+            results=enriched_results,
+            truncate=False,  # Datos completos no truncados para depuración interactiva
         )
         return {
             "status": "ok",
             "run_id": run_id,
             "duration": round(duration, 3),
-            "results": results,
+            "results": enriched_results,
             "code": source,
         }
     except Exception as exc:
@@ -460,8 +493,163 @@ def run_preview_endpoint(req: RunRequest) -> dict[str, Any]:
             status="error",
             duration=duration,
             error=str(exc),
+            truncate=False,
         )
         raise HTTPException(status_code=500, detail=f"Error durante la ejecución: {exc}")
+    finally:
+        runtime.compact_memory()
+
+
+@app.post("/api/node/preview")
+def node_preview_endpoint(req: NodePreviewRequest) -> dict[str, Any]:
+    """Ejecuta un único nodo en memoria con los datos de entrada y configuración recibidos."""
+    try:
+        res = runtime.execute_single_node(
+            node_type=req.type,
+            config=req.config,
+            inputs=req.input_data,
+            code=req.code,
+            flow_name=req.flow_id,
+        )
+        return {
+            "status": res.status,
+            "data": res.data,
+            "error": res.error,
+            "duration_ms": res.duration,
+        }
+    except Exception as exc:
+        return {
+            "status": "error",
+            "data": None,
+            "error": f"Error ejecutando nodo: {exc}",
+            "duration_ms": 0.0,
+        }
+    finally:
+        runtime.compact_memory()
+
+
+@app.post("/api/flow/step")
+def flow_step_endpoint(req: FlowStepRequest) -> dict[str, Any]:
+    """Ejecuta un solo paso de depuración o corre la cadena de dependencias hasta un nodo específico."""
+    try:
+        graph = compiler.Graph.from_dict(req.graph)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Grafo no válido: {exc}")
+
+    target_node = graph.node(req.target_node_id)
+    if not target_node:
+        raise HTTPException(status_code=404, detail=f"Nodo «{req.target_node_id}» no encontrado en el grafo.")
+
+    flow_id = store.slug(graph.name) if graph.name else "debug"
+    ctx = scheduler.FlowContext(flow_name=flow_id)
+
+    try:
+        if req.mode == "step":
+            incoming_edges = graph.incoming(req.target_node_id)
+            parent_results = []
+            inputs_map = {}
+            for edge in incoming_edges:
+                cached = req.cached_results.get(edge.source)
+                if cached:
+                    parent_results.append(cached)
+                    inputs_map[edge.source] = cached.get("data")
+                else:
+                    parent_results.append({"status": "ok", "data": None})
+
+            node_inputs = inputs_map if len(incoming_edges) > 1 else (
+                inputs_map.get(incoming_edges[0].source) if incoming_edges else None
+            )
+
+            spec = compiler.NODE_TYPES.get(target_node.type)
+            code_field = spec.code_field if spec else ""
+            code = target_node.config.get(code_field, "") if code_field else ""
+
+            res = runtime.execute_single_node(
+                node_type=target_node.type,
+                config=target_node.config,
+                inputs=parent_results,
+                code=code,
+                flow_name=flow_id,
+                ctx=ctx,
+            )
+
+            step_res = {
+                "node_id": req.target_node_id,
+                "status": res.status,
+                "data": res.data,
+                "error": res.error,
+                "inputs": node_inputs,
+                "duration_ms": res.duration,
+            }
+            all_results = dict(req.cached_results)
+            all_results[req.target_node_id] = step_res
+
+            return {
+                "status": "ok",
+                "node_id": req.target_node_id,
+                "step": step_res,
+                "all_results": all_results,
+            }
+
+        elif req.mode == "run_to":
+            nodes_to_run = compiler.get_upstream_nodes(graph, req.target_node_id)
+            if not nodes_to_run:
+                raise HTTPException(status_code=400, detail="No se pudo determinar el orden de ejecución.")
+
+            all_results = dict(req.cached_results)
+            last_step = None
+
+            for node in nodes_to_run:
+                incoming_edges = graph.incoming(node.id)
+                parent_results = []
+                inputs_map = {}
+                for edge in incoming_edges:
+                    cached = all_results.get(edge.source)
+                    if cached:
+                        parent_results.append(cached)
+                        inputs_map[edge.source] = cached.get("data")
+                    else:
+                        parent_results.append({"status": "ok", "data": None})
+
+                node_inputs = inputs_map if len(incoming_edges) > 1 else (
+                    inputs_map.get(incoming_edges[0].source) if incoming_edges else None
+                )
+
+                spec = compiler.NODE_TYPES.get(node.type)
+                code_field = spec.code_field if spec else ""
+                code = node.config.get(code_field, "") if code_field else ""
+
+                res = runtime.execute_single_node(
+                    node_type=node.type,
+                    config=node.config,
+                    inputs=parent_results,
+                    code=code,
+                    flow_name=flow_id,
+                    ctx=ctx,
+                )
+
+                step_res = {
+                    "node_id": node.id,
+                    "status": res.status,
+                    "data": res.data,
+                    "error": res.error,
+                    "inputs": node_inputs,
+                    "duration_ms": res.duration,
+                }
+                all_results[node.id] = step_res
+                last_step = step_res
+
+                if res.status == "error":
+                    break
+
+            return {
+                "status": "ok",
+                "target_node_id": req.target_node_id,
+                "step": last_step,
+                "all_results": all_results,
+            }
+        else:
+            raise HTTPException(status_code=400, detail=f"Modo desconocido: «{req.mode}»")
     finally:
         runtime.compact_memory()
 

@@ -36,7 +36,7 @@ def get_db(db_path: Path | str | None = None) -> sqlite3.Connection:
 
 
 def init_db(db_path: Path | str | None = None) -> None:
-    """Inicializa las tablas e índices si no existen."""
+    """Inicializa las tablas e índices si no existen y migra columnas nuevas."""
     with get_db(db_path) as conn:
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS runs (
@@ -44,7 +44,7 @@ def init_db(db_path: Path | str | None = None) -> None:
             flow_id TEXT NOT NULL,
             flow_name TEXT,
             status TEXT NOT NULL,          -- 'ok', 'error', 'running'
-            trigger_type TEXT NOT NULL,    -- 'manual', 'schedule', 'preview'
+            trigger_type TEXT NOT NULL,    -- 'manual', 'schedule', 'preview', 'debug'
             started_at REAL NOT NULL,
             finished_at REAL,
             duration REAL,
@@ -60,14 +60,23 @@ def init_db(db_path: Path | str | None = None) -> None:
             status TEXT NOT NULL,          -- 'ok', 'skipped', 'error'
             data TEXT,
             error TEXT,
+            inputs TEXT,
+            duration REAL,
             FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE
         );
         CREATE INDEX IF NOT EXISTS idx_run_steps_run_id ON run_steps(run_id);
         """)
 
+        # Migración no destructiva de columnas añadidas posteriormente
+        for col_name, col_type in [("inputs", "TEXT"), ("duration", "REAL")]:
+            try:
+                conn.execute(f"ALTER TABLE run_steps ADD COLUMN {col_name} {col_type};")
+            except sqlite3.OperationalError:
+                pass
 
-def _serialize_data(val: Any) -> str | None:
-    """Convierte de forma segura y compacta el resultado del nodo a texto para almacenamiento."""
+
+def _serialize_data(val: Any, truncate: bool = True, max_len: int = 200_000) -> str | None:
+    """Convierte de forma segura y estructurada los datos a texto para almacenamiento."""
     if val is None:
         return None
     if isinstance(val, str):
@@ -78,8 +87,8 @@ def _serialize_data(val: Any) -> str | None:
         except Exception:
             text = str(val)
 
-    if len(text) > MAX_DATA_PREVIEW_LEN:
-        return text[:MAX_DATA_PREVIEW_LEN] + " ...[truncado]"
+    if truncate and len(text) > max_len:
+        return text[:max_len] + f" ...[truncado a {max_len} caracteres]"
     return text
 
 
@@ -112,8 +121,9 @@ def record_run_finish(
     error: str | None = None,
     results: dict[str, Any] | None = None,
     db_path: Path | str | None = None,
+    truncate: bool = True,
 ) -> None:
-    """Actualiza el estado final del run e inserta los pasos de ejecución de cada nodo."""
+    """Actualiza el estado final del run e inserta los pasos de ejecución con entradas y salidas."""
     init_db(db_path)
     now = time.time()
     with get_db(db_path) as conn:
@@ -133,27 +143,35 @@ def record_run_finish(
                     st = res.status
                     d = getattr(res, "data", None) if st == "ok" else None
                     err = getattr(res, "error", "") if st == "error" else None
+                    inp = getattr(res, "inputs", None)
+                    dur = getattr(res, "duration", 0.0)
                 elif isinstance(res, dict):
                     st = res.get("status", "ok")
                     d = res.get("data")
                     err = res.get("error")
+                    inp = res.get("inputs")
+                    dur = res.get("duration_ms", 0.0)
                 else:
                     st = "ok"
                     d = res
                     err = None
+                    inp = None
+                    dur = 0.0
 
                 steps_data.append((
                     run_id,
                     node_id,
                     st,
-                    _serialize_data(d),
+                    _serialize_data(d, truncate=truncate),
                     err,
+                    _serialize_data(inp, truncate=truncate),
+                    dur,
                 ))
 
             conn.executemany(
                 """
-                INSERT INTO run_steps (run_id, node_id, status, data, error)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO run_steps (run_id, node_id, status, data, error, inputs, duration)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 steps_data,
             )
@@ -220,7 +238,7 @@ def get_run(run_id: str, db_path: Path | str | None = None) -> dict[str, Any] | 
 
         steps = conn.execute(
             """
-            SELECT id, node_id, status, data, error
+            SELECT id, node_id, status, data, error, inputs, duration
             FROM run_steps
             WHERE run_id = ?
             ORDER BY id ASC
