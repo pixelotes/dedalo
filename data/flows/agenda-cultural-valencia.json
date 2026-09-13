@@ -1,0 +1,112 @@
+{
+  "version": 1,
+  "name": "agenda-cultural-valencia",
+  "nodes": [
+    {
+      "id": "descargar_valenciabonita",
+      "type": "input.http_call",
+      "label": "Descargar Valencia Bonita",
+      "config": {
+        "url": "https://www.valenciabonita.es/",
+        "method": "GET",
+        "engine": "auto",
+        "impersonate": "chrome",
+        "timeout": 15.0
+      },
+      "x": 80.0,
+      "y": 100.0
+    },
+    {
+      "id": "extraer_valenciabonita",
+      "type": "transform.html_extract",
+      "label": "Extraer artículos (CSS)",
+      "config": {
+        "selector": "article.jeg_post",
+        "fields": "{\"title\": \"h3 a\", \"url\": \"h3 a@href\", \"date\": \".jeg_meta_date a\", \"excerpt\": \".jeg_post_excerpt p\"}",
+        "output_format": "json",
+        "limit": 40,
+        "base_url": "https://www.valenciabonita.es"
+      },
+      "x": 380.0,
+      "y": 100.0
+    },
+    {
+      "id": "descargar_valenciasecreta",
+      "type": "input.http_call",
+      "label": "Descargar Valencia Secreta",
+      "config": {
+        "url": "https://valenciasecreta.com/",
+        "method": "GET",
+        "engine": "auto",
+        "impersonate": "chrome",
+        "timeout": 15.0
+      },
+      "x": 80.0,
+      "y": 320.0
+    },
+    {
+      "id": "extraer_valenciasecreta",
+      "type": "transform.html_extract",
+      "label": "Extraer artículos (CSS)",
+      "config": {
+        "selector": "article.smn-home-card",
+        "fields": "{\"title\": \".smn-home-card__title\", \"url\": \"a@href\"}",
+        "output_format": "json",
+        "limit": 30,
+        "base_url": "https://valenciasecreta.com"
+      },
+      "x": 380.0,
+      "y": 320.0
+    },
+    {
+      "id": "combinar_y_deduplicar",
+      "type": "transform.script",
+      "label": "Filtrar 24h, deduplicar e informe",
+      "config": {
+        "fan_in": "all",
+        "code": "import datetime, re\n\nvb_items = entrada.get('extraer_valenciabonita') or []\nvs_items = entrada.get('extraer_valenciasecreta') or []\n\nnow = datetime.datetime.now()\ntoday_day = str(now.day)\nyesterday = now - datetime.timedelta(days=1)\nyesterday_day = str(yesterday.day)\n\n# Filtrar Valencia Bonita (últimas 24h)\nvb_filtered = []\nfor it in vb_items:\n    u = it.get('url', '')\n    d = it.get('date', '')\n    t = it.get('title', '').strip()\n    if not t:\n        continue\n    is_recent = False\n    if f'{now.year}/{now.month:02d}/{now.day:02d}' in u or f'{yesterday.year}/{yesterday.month:02d}/{yesterday.day:02d}' in u:\n        is_recent = True\n    elif d and (d.startswith(today_day + ' ') or d.startswith(yesterday_day + ' ')):\n        is_recent = True\n    if is_recent:\n        it['source'] = 'Valencia Bonita'\n        vb_filtered.append(it)\n\nif not vb_filtered:\n    vb_filtered = vb_items[:6]\n    for it in vb_filtered:\n        it['source'] = 'Valencia Bonita'\n\n# Filtrar Valencia Secreta\nvs_filtered = []\nfor it in vs_items:\n    t = it.get('title', '').strip()\n    if t and len(t) > 5:\n        it['source'] = 'Valencia Secreta'\n        vs_filtered.append(it)\n\n# Normalizar y deduplicar\ndef normalize_title(text):\n    t = text.lower().strip()\n    replacements = (('á', 'a'), ('é', 'e'), ('í', 'i'), ('ó', 'o'), ('ú', 'u'), ('ñ', 'n'))\n    for a, b in replacements:\n        t = t.replace(a, b)\n    t = re.sub(r'[^\\w\\s]', '', t)\n    return re.sub(r'\\s+', ' ', t).strip()\n\ndef are_duplicates(t1, t2):\n    n1, n2 = normalize_title(t1), normalize_title(t2)\n    if n1 == n2:\n        return True\n    w1, w2 = set(n1.split()), set(n2.split())\n    stopwords = {'de', 'la', 'el', 'en', 'y', 'a', 'los', 'las', 'un', 'una', 'con', 'para', 'por', 'del'}\n    w1_sig = w1 - stopwords\n    w2_sig = w2 - stopwords\n    if not w1_sig or not w2_sig:\n        return False\n    return (len(w1_sig & w2_sig) / min(len(w1_sig), len(w2_sig))) >= 0.8\n\ndeduped_all = []\nseen = []\nfor it in vb_filtered + vs_filtered:\n    t, u = it.get('title', ''), it.get('url', '')\n    if any(u == p.get('url') or are_duplicates(t, p.get('title', '')) for p in seen):\n        continue\n    seen.append(it)\n    deduped_all.append(it)\n\nfecha_str = now.strftime('%Y-%m-%d %H:%M')\ntotal_vb = len([x for x in deduped_all if x['source'] == 'Valencia Bonita'])\ntotal_vs = len([x for x in deduped_all if x['source'] == 'Valencia Secreta'])\n\nlines = [\n    f'# Agenda Cultural de Valencia ({fecha_str})',\n    '',\n    'Informe generado automáticamente combinando **Valencia Bonita** y **Valencia Secreta**.',\n    f'- **Total eventos y artículos extraídos:** {len(deduped_all)}',\n    f'- **Artículos Valencia Bonita (últimas 24h):** {total_vb}',\n    f'- **Artículos Valencia Secreta:** {total_vs}',\n    '',\n    '---',\n    '',\n    '## 🏛️ Valencia Bonita (Últimas 24 Horas)',\n    ''\n]\n\nvb_deduped = [x for x in deduped_all if x['source'] == 'Valencia Bonita']\nif vb_deduped:\n    for x in vb_deduped:\n        d = x.get('date', 'Reciente')\n        lines.append(f'### [{x[\"title\"]}]({x[\"url\"]})')\n        lines.append(f'- **Fecha:** {d}')\n        if x.get('excerpt'):\n            lines.append(f'- **Resumen:** {x[\"excerpt\"]}')\n        lines.append('')\nelse:\n    lines.append('_No se encontraron nuevos artículos en las últimas 24 horas._')\n    lines.append('')\n\nlines.append('---')\nlines.append('')\nlines.append('## ✨ Planes y Eventos Destacados (Valencia Secreta)')\nlines.append('')\n\nvs_deduped = [x for x in deduped_all if x['source'] == 'Valencia Secreta']\nfor x in vs_deduped:\n    lines.append(f'- [{x[\"title\"]}]({x[\"url\"]})')\n\nlines.append('')\nreturn '\\n'.join(lines)\n"
+      },
+      "x": 680.0,
+      "y": 210.0
+    },
+    {
+      "id": "guardar_agenda",
+      "type": "output.file",
+      "label": "Guardar agenda-cultural-valencia.md",
+      "config": {
+        "filename": "agenda-cultural-valencia.md",
+        "directory": "",
+        "mode": "sobrescribir"
+      },
+      "x": 980.0,
+      "y": 210.0
+    }
+  ],
+  "edges": [
+    {
+      "source": "descargar_valenciabonita",
+      "target": "extraer_valenciabonita",
+      "port": "ok"
+    },
+    {
+      "source": "descargar_valenciasecreta",
+      "target": "extraer_valenciasecreta",
+      "port": "ok"
+    },
+    {
+      "source": "extraer_valenciabonita",
+      "target": "combinar_y_deduplicar",
+      "port": "ok"
+    },
+    {
+      "source": "extraer_valenciasecreta",
+      "target": "combinar_y_deduplicar",
+      "port": "ok"
+    },
+    {
+      "source": "combinar_y_deduplicar",
+      "target": "guardar_agenda",
+      "port": "ok"
+    }
+  ]
+}
