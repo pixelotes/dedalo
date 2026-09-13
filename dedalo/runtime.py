@@ -11,6 +11,7 @@ import ctypes
 import datetime
 import gc
 import glob
+import html
 import json
 import math
 import os
@@ -1280,6 +1281,172 @@ def web_read(
     if len(txt) > max_c:
         txt = txt[:max_c] + "..."
     return NodeResult("ok", data=txt)
+
+
+def web_search(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    query: str,
+    engine: str = "duckduckgo",
+    limit: int = 5,
+    secret: str = "",
+    output_format: str = "json",
+    timeout: float = DEFAULT_TIMEOUT,
+) -> NodeResult:
+    """Busca en internet usando DuckDuckGo (gratuito), Tavily Search API o Exa Search API."""
+    inp = Inputs(inputs)
+    rendered_query = (query or "").strip()
+    if "{entrada}" in rendered_query:
+        rendered_query = rendered_query.replace("{entrada}", inp.text()).strip()
+    elif not rendered_query and inp.text():
+        rendered_query = inp.text().strip()
+
+    if not rendered_query:
+        return NodeResult("error", error="Se requiere un término de búsqueda en 'query'.")
+
+    eng = (engine or "duckduckgo").lower().strip()
+    max_items = max(1, int(limit or 5))
+    results: list[dict[str, Any]] = []
+
+    if eng in ("duckduckgo", "ddg"):
+        q_encoded = urllib.parse.quote_plus(rendered_query)
+        url = f"https://html.duckduckgo.com/html/?q={q_encoded}"
+        resp_text = ""
+        use_curl = _has_curl_cffi()
+        if use_curl:
+            try:
+                from curl_cffi import requests as curl
+                r = curl.get(url, impersonate="chrome", timeout=float(timeout))
+                if r.status_code == 200:
+                    resp_text = r.text
+            except Exception:
+                pass
+
+        if not resp_text:
+            try:
+                headers = {"User-Agent": USER_AGENT_PRESETS["chrome"]}
+                with httpx.Client(timeout=float(timeout), follow_redirects=True) as client:
+                    r = client.get(url, headers=headers)
+                    if r.status_code == 200:
+                        resp_text = r.text
+                    elif r.status_code == 202:
+                        r_post = client.post("https://html.duckduckgo.com/html/", data={"q": rendered_query}, headers=headers)
+                        if r_post.status_code == 200:
+                            resp_text = r_post.text
+            except Exception as exc:
+                return NodeResult("error", error=f"Fallo en búsqueda DuckDuckGo: {exc}")
+
+        if not resp_text:
+            return NodeResult("error", error="No se pudo obtener respuesta de DuckDuckGo.")
+
+        blocks = re.split(r"<div[^>]+class=[\"\'][^\"\']*web-result", resp_text)[1:]
+        for b in blocks[:max_items]:
+            title_m = re.search(r'<a[^>]*class=[\"\'][^\"\']*result__a[^\"\']*[\"\'][^>]*>(.*?)</a>', b, re.DOTALL)
+            url_m = re.search(r'<a[^>]*class=[\"\'][^\"\']*result__a[^\"\']*[\"\'][^>]*href=[\"\']([^\"\']+)[\"\']', b)
+            snippet_m = re.search(r'<a[^>]*class=[\"\'][^\"\']*result__snippet[^\"\']*[\"\'][^>]*>(.*?)</a>', b, re.DOTALL)
+
+            title = re.sub(r"<[^>]+>", "", title_m.group(1)).strip() if title_m else ""
+            raw_url = url_m.group(1) if url_m else ""
+            actual_url = raw_url
+            if "uddg=" in raw_url:
+                parsed = urllib.parse.urlparse(raw_url if raw_url.startswith("http") else "https:" + raw_url)
+                qs = urllib.parse.parse_qs(parsed.query)
+                if "uddg" in qs:
+                    actual_url = qs["uddg"][0]
+
+            snippet = re.sub(r"<[^>]+>", "", snippet_m.group(1)).strip() if snippet_m else ""
+            snippet = html.unescape(" ".join(snippet.split()))
+            title = html.unescape(" ".join(title.split()))
+            if actual_url:
+                results.append({
+                    "title": title or actual_url,
+                    "url": actual_url,
+                    "snippet": snippet,
+                })
+
+    elif eng == "tavily":
+        token = secrets.get(secret) if secret else ""
+        if not token:
+            return NodeResult("error", error="El motor 'tavily' requiere configurar un secreto con la API Key.")
+
+        url = "https://api.tavily.com/search"
+        payload = {
+            "api_key": token,
+            "query": rendered_query,
+            "max_results": max_items,
+            "include_answer": False,
+        }
+        try:
+            with httpx.Client(timeout=float(timeout)) as client:
+                r = client.post(url, json=payload)
+                if r.status_code >= 400:
+                    return NodeResult("error", error=f"Tavily API HTTP {r.status_code}: {r.text[:150]}")
+                data_json = r.json()
+                for item in data_json.get("results", [])[:max_items]:
+                    results.append({
+                        "title": str(item.get("title") or ""),
+                        "url": str(item.get("url") or ""),
+                        "snippet": str(item.get("content") or ""),
+                        "score": item.get("score"),
+                    })
+        except Exception as exc:
+            return NodeResult("error", error=f"Fallo en búsqueda Tavily: {exc}")
+
+    elif eng in ("exa", "metaphor"):
+        token = secrets.get(secret) if secret else ""
+        if not token:
+            return NodeResult("error", error="El motor 'exa' requiere configurar un secreto con la API Key.")
+
+        url = "https://api.exa.ai/search"
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": token,
+        }
+        payload = {
+            "query": rendered_query,
+            "numResults": max_items,
+            "contents": {"text": {"maxCharacters": 350}},
+        }
+        try:
+            with httpx.Client(timeout=float(timeout)) as client:
+                r = client.post(url, json=payload, headers=headers)
+                if r.status_code >= 400:
+                    return NodeResult("error", error=f"Exa API HTTP {r.status_code}: {r.text[:150]}")
+                data_json = r.json()
+                for item in data_json.get("results", [])[:max_items]:
+                    snippet = ""
+                    if isinstance(item.get("text"), str):
+                        snippet = item["text"]
+                    elif isinstance(item.get("highlights"), list) and item["highlights"]:
+                        snippet = " ".join(item["highlights"])
+                    results.append({
+                        "title": str(item.get("title") or ""),
+                        "url": str(item.get("url") or ""),
+                        "snippet": snippet,
+                        "score": item.get("score"),
+                        "published_date": item.get("publishedDate"),
+                    })
+        except Exception as exc:
+            return NodeResult("error", error=f"Fallo en búsqueda Exa: {exc}")
+
+    else:
+        return NodeResult("error", error=f"Motor de búsqueda desconocido: '{engine}'. Use 'duckduckgo', 'tavily' o 'exa'.")
+
+    fmt = (output_format or "json").lower().strip()
+    if fmt in ("markdown", "text", "texto"):
+        lines = []
+        for r in results:
+            t = r.get("title") or r.get("url")
+            u = r.get("url")
+            s = r.get("snippet")
+            if s:
+                lines.append(f"- [{t}]({u}): {s}")
+            else:
+                lines.append(f"- [{t}]({u})")
+        return NodeResult("ok", data="\n".join(lines))
+
+    return NodeResult("ok", data=results)
 
 
 _SUMMARIZE_STOPWORDS: frozenset[str] = frozenset({

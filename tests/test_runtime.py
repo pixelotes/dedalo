@@ -502,5 +502,164 @@ def test_summarize_textrank():
     assert "Python" in res_tr_para.data
 
 
+def test_web_search_duckduckgo_mocked(monkeypatch):
+    sample_html = """
+    <div class="result results_links results_links_deep web-result ">
+        <h2 class="result__title">
+            <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.python.org%2F">Welcome to <b>Python.org</b></a>
+        </h2>
+        <div class="result__extras"></div>
+        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.python.org%2F">Python &amp; &quot;batteries included&quot; language.</a>
+    </div>
+    <div class="result results_links results_links_deep web-result ">
+        <h2 class="result__title">
+            <a class="result__a" href="https://es.wikipedia.org/wiki/Python">Python en Wikipedia</a>
+        </h2>
+        <div class="result__extras"></div>
+        <a class="result__snippet">Lenguaje de programaci&oacute;n interpretado.</a>
+    </div>
+    """
+
+    class FakeResponse:
+        status_code = 200
+        text = sample_html
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def get(self, url, headers=None):
+            return FakeResponse()
+
+    monkeypatch.setattr(runtime, "_has_curl_cffi", lambda: False)
+    monkeypatch.setattr(runtime.httpx, "Client", FakeClient)
+
+    # 1. Salida JSON
+    res_json = runtime.web_search(None, [], query="python programming", engine="duckduckgo", limit=2, output_format="json")
+    assert res_json.ok
+    assert len(res_json.data) == 2
+    assert res_json.data[0]["title"] == "Welcome to Python.org"
+    assert res_json.data[0]["url"] == "https://www.python.org/"
+    assert res_json.data[0]["snippet"] == 'Python & "batteries included" language.'
+    assert res_json.data[1]["title"] == "Python en Wikipedia"
+    assert res_json.data[1]["url"] == "https://es.wikipedia.org/wiki/Python"
+
+    # 2. Salida Markdown
+    res_md = runtime.web_search(None, [], query="python programming", engine="duckduckgo", limit=1, output_format="markdown")
+    assert res_md.ok
+    assert res_md.data == '- [Welcome to Python.org](https://www.python.org/): Python & "batteries included" language.'
+
+    # 3. Interpolar {entrada}
+    inp = runtime.NodeResult("ok", data="noticias hoy")
+    res_interpolated = runtime.web_search(None, [inp], query="{entrada} tecnología", engine="duckduckgo")
+    assert res_interpolated.ok
+
+
+def test_web_search_validation():
+    # Consulta vacía sin entradas
+    r_err = runtime.web_search(None, [], query="")
+    assert not r_err.ok
+    assert "Se requiere un término de búsqueda" in r_err.error
+
+    # Motor desconocido
+    r_eng = runtime.web_search(None, [], query="algo", engine="altavista")
+    assert not r_eng.ok
+    assert "Motor de búsqueda desconocido" in r_eng.error
+
+
+def test_web_search_tavily(monkeypatch):
+    # Sin secreto
+    r_no_sec = runtime.web_search(None, [], query="ia news", engine="tavily", secret="")
+    assert not r_no_sec.ok
+    assert "requiere configurar un secreto" in r_no_sec.error
+
+    # Con secreto mockeado
+    from dedalo import secrets
+    monkeypatch.setattr(secrets, "get", lambda name: "fake-tavily-key" if name == "mi_tavily" else "")
+
+    recorded = {}
+    class FakeTavilyResponse:
+        status_code = 200
+        def json(self):
+            return {
+                "results": [
+                    {"title": "Tavily Title", "url": "https://tavily.com/1", "content": "Tavily content", "score": 0.95}
+                ]
+            }
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def post(self, url, json=None, headers=None):
+            recorded["url"] = url
+            recorded["json"] = json
+            return FakeTavilyResponse()
+
+    monkeypatch.setattr(runtime.httpx, "Client", FakeClient)
+
+    res = runtime.web_search(None, [], query="ia news", engine="tavily", secret="mi_tavily", limit=3)
+    assert res.ok
+    assert recorded["url"] == "https://api.tavily.com/search"
+    assert recorded["json"]["api_key"] == "fake-tavily-key"
+    assert recorded["json"]["query"] == "ia news"
+    assert len(res.data) == 1
+    assert res.data[0]["title"] == "Tavily Title"
+    assert res.data[0]["snippet"] == "Tavily content"
+    assert res.data[0]["score"] == 0.95
+
+
+def test_web_search_exa(monkeypatch):
+    # Sin secreto
+    r_no_sec = runtime.web_search(None, [], query="papers", engine="exa", secret="")
+    assert not r_no_sec.ok
+    assert "requiere configurar un secreto" in r_no_sec.error
+
+    # Con secreto mockeado
+    from dedalo import secrets
+    monkeypatch.setattr(secrets, "get", lambda name: "fake-exa-key" if name == "mi_exa" else "")
+
+    recorded = {}
+    class FakeExaResponse:
+        status_code = 200
+        def json(self):
+            return {
+                "results": [
+                    {"title": "Exa Paper", "url": "https://arxiv.org/abs/123", "highlights": ["Highlight summary"], "score": 0.88, "publishedDate": "2026-01-01"}
+                ]
+            }
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def post(self, url, json=None, headers=None):
+            recorded["url"] = url
+            recorded["headers"] = headers
+            recorded["json"] = json
+            return FakeExaResponse()
+
+    monkeypatch.setattr(runtime.httpx, "Client", FakeClient)
+
+    res = runtime.web_search(None, [], query="papers", engine="exa", secret="mi_exa", limit=1)
+    assert res.ok
+    assert recorded["url"] == "https://api.exa.ai/search"
+    assert recorded["headers"]["x-api-key"] == "fake-exa-key"
+    assert len(res.data) == 1
+    assert res.data[0]["title"] == "Exa Paper"
+    assert res.data[0]["snippet"] == "Highlight summary"
+    assert res.data[0]["published_date"] == "2026-01-01"
+
+
+
 
 

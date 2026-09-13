@@ -261,6 +261,41 @@ NODE_TYPES: dict[str, NodeSpec] = {
             "user_agent": "User-Agent opcional (dejar vacío para usar el nativo del navegador suplantado).",
         },
     ),
+    "input.web_search": NodeSpec(
+        category="input",
+        runtime_fn="web_search",
+        required=frozenset({"query"}),
+        optional={
+            "engine": "duckduckgo",
+            "limit": 5,
+            "secret": "",
+            "output_format": "json",
+            "timeout": 15.0,
+        },
+        label="Búsqueda web",
+        output="resultados de búsqueda (lista JSON o texto markdown)",
+        choices={
+            "engine": [
+                {"value": "duckduckgo", "label": "DuckDuckGo (gratuito, sin clave)"},
+                {"value": "tavily", "label": "Tavily Search API (requiere API key)"},
+                {"value": "exa", "label": "Exa / Metaphor API (requiere API key)"},
+            ],
+            "output_format": [
+                {"value": "json", "label": "Estructurado (JSON / lista de dicts)"},
+                {"value": "markdown", "label": "Lista Markdown formateada"},
+            ],
+        },
+        choices_from={"secret": "secrets"},
+        show_when={"secret": {"engine": ["tavily", "exa"]}},
+        help={
+            "query": "Término o consulta de búsqueda (soporta {entrada}).",
+            "engine": "Motor de búsqueda: DuckDuckGo (sin API key), Tavily o Exa.",
+            "limit": "Número máximo de resultados a obtener.",
+            "secret": "Nombre del secreto con la API Key (requerido para Tavily y Exa).",
+            "output_format": "Formato de salida: 'json' (lista estructurada) o 'markdown' (enlaces con viñetas).",
+            "timeout": "Tiempo máximo en segundos para la petición.",
+        },
+    ),
     "input.csv_file": NodeSpec(
         category="input",
         runtime_fn="csv_file",

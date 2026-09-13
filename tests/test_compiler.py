@@ -110,3 +110,26 @@ def test_new_nodes_compile_and_execute(tmp_path):
     ns = {}
     exec(src, ns)
     assert callable(ns["run"])
+
+
+def test_web_search_node_compiles():
+    g = compiler.Graph(
+        name="test_search",
+        nodes=[
+            _node("buscar", "input.web_search", {"query": "noticias python", "engine": "duckduckgo", "limit": 3}),
+            _node("guardar", "output.file", {"filename": "noticias.txt", "mode": "sobrescribir"}),
+        ],
+        edges=[
+            _edge("buscar", "guardar", "ok"),
+        ],
+    )
+    src = compiler.compile(g)
+    assert "def run(ctx):" in src
+    assert "runtime.web_search" in src
+    assert "query='noticias python'" in src
+    assert "engine='duckduckgo'" in src
+
+    ns = {}
+    exec(src, ns)
+    assert callable(ns["run"])
+

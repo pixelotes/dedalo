@@ -20,7 +20,7 @@ Este documento resume el estado técnico actual de **Dédalo Standalone**, su or
 - **Control de cambios**: Detección de modificaciones no guardadas con modal de confirmación antes de cambiar de flujo.
 - **Optimización de Memoria Activa**: Compactación periódica de heap con recolección de basura forzada y devolución de páginas al OS vía `malloc_trim(0)`.
 - **Evasión Antibot sin Navegador Pesado**: Motor HTTP dual con `curl_cffi` (suplantación de TLS/HTTP/2 de Chrome/Safari/Firefox y User-Agents) y fallback transparente a `httpx`.
-- **Suite de pruebas**: 44 pruebas automatizadas pasando al 100% en `pytest`.
+- **Suite de pruebas**: 54 pruebas automatizadas pasando al 100% en `pytest`.
 
 ---
 
@@ -170,6 +170,21 @@ Se ha potenciado el nodo de resumen determinista sin LLM (`transform.summarize`)
 - **Acceso a Estructuras Anidadas Complejas**:
   - Tanto `transform.summarize` como `transform.template` admiten ahora navegación dot-notation con índices de listas (ej: `query.pages.0.extract`).
   - Búsqueda recursiva automática como mecanismo de respaldo si una clave no se encuentra en el nivel raíz.
+
+### G. Búsqueda Web Multifuncional (`input.web_search`)
+Se ha incorporado un nodo de búsqueda web nativo que permite alimentar cualquier flujo con información en vivo de internet sin dependencias pesadas:
+- **Tres Motores Integrados**:
+  - **`duckduckgo`** (por defecto): Cero configuración, gratuito y sin necesidad de claves de API. Realiza scraping limpio con evasión TLS (`curl_cffi`/`httpx`), extrayendo títulos, snippets descriptivos y decodificando las URLs reales de destino (desempaquetando el parámetro `uddg`). Desescapa entidades HTML automáticamente.
+  - **`tavily`**: Diseñado específicamente para agentes e IA (`https://api.tavily.com/search`). Requiere conectar un secreto seguro con la API Key. Devuelve snippets contextuales enriquecidos y puntuaciones de relevancia (`score`).
+  - **`exa`** (Metaphor): Búsqueda neuronal y semántica (`https://api.exa.ai/search`). Requiere conectar un secreto seguro con la API Key (`x-api-key`). Devuelve snippets, destacados textuales (`highlights`) y fecha de publicación.
+- **Interpolar Consultas Dinámicas**:
+  - Soporta plantillas con `{entrada}` para buscar términos generados dinámicamente por nodos previos (RSS, transformaciones, LLM, etc.). Si `query` está vacío, utiliza el texto del nodo conectado automáticamente.
+- **Formatos de Salida Flexibles (`output_format`)**:
+  - `json`: Lista estructurada de objetos Python/JSON con `title`, `url`, `snippet` (y metadatos como `score` o `published_date`).
+  - `markdown`: Lista formateada con viñetas y enlaces Markdown (`- [Título](URL): Snippet`), lista para encadenar a `transform.summarize`, `output.file` o nodos de mensajería (Telegram, Discord, Slack, Email).
+- **Integración con la UI y Secretos de Dédalo**:
+  - El campo `secret` se vincula dinámicamente al almacén de secretos (`choices_from={"secret": "secrets"}`) y se muestra condicionalmente solo cuando se selecciona un motor comercial que lo requiere (`show_when={"secret": {"engine": ["tavily", "exa"]}}`).
+
 
 ---
 
