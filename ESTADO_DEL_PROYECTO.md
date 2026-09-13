@@ -262,8 +262,9 @@ Para automatizar la lectura y análisis de emails de forma robusta frente a vect
 - **Nodo Autónomo `transform.clean_email` y Mejoras en `input.imap`**:
   - `input.imap` ahora soporta `clean_body`, `strip_signatures` y `max_body_chars` configurables, limpiando tanto texto plano como HTML y sanitizando remitente y asunto.
   - Nuevo nodo en catálogo `transform.clean_email` para limpiar correspondencia proveniente de webhooks, archivos o fuentes externas.
-- **Enriquecimiento por Elementos (`as_field`) en `transform.agent`**:
+- **Enriquecimiento por Elementos (`as_field`) y Límite Manual de Contexto (`max_context`) en `transform.agent`**:
   - Cuando se ejecuta una LLM sobre listas (`per_item: true`), el parámetro `as_field` permite inyectar la respuesta del modelo en un campo determinado (ej. `resumen` o `categoria`) preservando intactos los metadatos originales del correo (`id`, `subject`, `from`, `date`, `attachments`).
+  - Parámetro configurable `max_context`: permite fijar manualmente el tamaño de la ventana de contexto. Si la entrada más los prompts superan el 90% del presupuesto disponible tras reservar los tokens de salida, se compacta automáticamente con el algoritmo extractivo Luhn+ antes de emitir la petición HTTP, previniendo errores de desbordamiento en el servidor.
 - **Plantilla Oficial "Resumen Diario de Correos" (`resumen-correos-diario`)**:
   - Flujo preconfigurado IMAP $\rightarrow$ LLM Asistente Ejecutivo (con system prompt defensivo que trata los correos como datos externos no confiables y formatea prioridades en Urgentes / Informativos / Boletines) $\rightarrow$ Telegram.
 

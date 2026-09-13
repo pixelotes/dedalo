@@ -235,3 +235,63 @@ def test_template_resumen_correos_diario_compiles():
     compiled_obj = compile(code, "<test_email_digest_flow>", "exec")
     assert compiled_obj is not None
 
+
+@patch("dedalo.runtime.call_llm")
+def test_agent_manual_context_compaction(mock_call_llm):
+    class DummyCtx:
+        flow_name = "test_ctx"
+
+    mock_call_llm.return_value = "Resumen ok"
+
+    long_text = "\n".join([
+        f"Esta es la frase importante de prueba número {i} con información relevante sobre el sistema."
+        for i in range(1, 60)
+    ])
+    inp = [NodeResult("ok", data=long_text)]
+
+    # 1. Con max_context=0, la entrada debe pasar entera sin compactar
+    res_no_limit = agent(
+        DummyCtx(),
+        inp,
+        prompt="Resume:",
+        max_context=0,
+    )
+    assert res_no_limit.status == "ok"
+    passed_prompt_no_limit = mock_call_llm.call_args[0][0]
+    assert "frase importante de prueba número 59" in passed_prompt_no_limit
+    assert "Contenido compactado con Luhn+" not in passed_prompt_no_limit
+
+    # 2. Con max_context=300, supera el 90% (270 tokens) y debe compactarse con Luhn+
+    res_compacted = agent(
+        DummyCtx(),
+        inp,
+        prompt="Resume:",
+        max_context=300,
+        tokens=50,
+    )
+    assert res_compacted.status == "ok"
+    passed_prompt_compacted = mock_call_llm.call_args[0][0]
+    assert "Contenido compactado con Luhn+ por límite de contexto" in passed_prompt_compacted
+    assert len(passed_prompt_compacted) < len(passed_prompt_no_limit)
+
+
+def test_agent_with_max_context_compiles():
+    g = compiler.Graph(
+        name="test_agent_ctx",
+        nodes=[
+            compiler.Node(id="disco", type="input.disk_free"),
+            compiler.Node(
+                id="agente",
+                type="transform.agent",
+                config={"prompt": "Analiza esto", "max_context": 4096},
+            ),
+        ],
+        edges=[compiler.Edge(source="disco", target="agente")],
+    )
+    code = compiler.compile(g)
+    assert "runtime.agent" in code
+    assert "max_context=4096" in code
+    compiled_obj = compile(code, "<test_agent_ctx>", "exec")
+    assert compiled_obj is not None
+
+

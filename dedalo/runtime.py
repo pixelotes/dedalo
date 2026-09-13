@@ -1214,6 +1214,7 @@ def agent(
     per_item: bool = False,
     as_field: str = "",
     tokens: int = DEFAULT_AGENT_TOKENS,
+    max_context: int = 0,
     model: str = "",
     url: str = "",
     secret: str = "",
@@ -1224,6 +1225,23 @@ def agent(
     """Invoca al LLM con un prompt y los datos de entrada."""
     inp = Inputs(inputs)
 
+    def _compact_if_needed(content_text: str) -> str:
+        ctx_limit = int(max_context) if max_context else 0
+        if ctx_limit <= 0 or not content_text:
+            return content_text
+        threshold = int(ctx_limit * 0.90)
+        overhead_tokens = int((len(system_prompt or "") + len(prompt or "")) / 3.5) + int(tokens or DEFAULT_AGENT_TOKENS)
+        avail_content_tokens = max(30, threshold - overhead_tokens)
+        current_content_tokens = int(len(content_text) / 3.5)
+        if current_content_tokens > avail_content_tokens:
+            target_chars = int(avail_content_tokens * 3.5)
+            target_sentences = max(2, int(target_chars / 100))
+            compacted = _run_luhn_plus(content_text, target_count=target_sentences, output_format="paragraph")
+            if len(compacted) > target_chars:
+                compacted = compacted[:target_chars] + "..."
+            return f"[Contenido compactado con Luhn+ por límite de contexto ({current_content_tokens} -> {int(len(compacted) / 3.5)} tokens)]:\n{compacted}"
+        return content_text
+
     if per_item:
         first = inp.first_data()
         if not isinstance(first, list):
@@ -1232,6 +1250,8 @@ def agent(
         field_name = as_field.strip()
         for item in first[:MAX_ITEMS]:
             item_str = json.dumps(item, ensure_ascii=False) if isinstance(item, (dict, list)) else str(item)
+            if max_context and int(max_context) > 0:
+                item_str = _compact_if_needed(item_str)
             user_msg = f"{prompt}\n\nElemento:\n{item_str}"
             try:
                 ans = call_llm(
@@ -1258,6 +1278,8 @@ def agent(
         return NodeResult("ok", data=results)
 
     input_text = inp.text()
+    if input_text and max_context and int(max_context) > 0:
+        input_text = _compact_if_needed(input_text)
     user_msg = f"{prompt}\n\nEntrada:\n{input_text}" if input_text else prompt
     try:
         ans = call_llm(
