@@ -60,6 +60,12 @@
   <symbol id="i-sidebar-right" viewBox="0 0 24 24">
     <rect x="3" y="3" width="18" height="18" rx="2"/><line x1="15" y1="3" x2="15" y2="21"/>
   </symbol>
+  <symbol id="i-download" viewBox="0 0 24 24">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+  </symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+  </symbol>
   <symbol id="i-theme" viewBox="0 0 24 24">
     <circle cx="12" cy="12" r="9"/>
     <path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none"/>
@@ -115,10 +121,19 @@
     <div class="tab-pane active" id="paneFlows">
       <div class="pane-head">
         <h3>Mis Flujos</h3>
-        <button id="btnSidebarNewFlow" class="btn sm primary" title="Crear nuevo flujo">
-          <svg class="ic" width="12" height="12"><use href="#i-plus"/></svg> Nuevo
-        </button>
+        <div class="pane-head-actions">
+          <button id="btnImportZip" class="btn sm secondary icon-btn" title="Importar flujos (.zip o .json)">
+            <svg class="ic" width="13" height="13"><use href="#i-upload"/></svg>
+          </button>
+          <button id="btnExportAllZip" class="btn sm secondary icon-btn" title="Exportar todos los flujos (Backup .zip)">
+            <svg class="ic" width="13" height="13"><use href="#i-download"/></svg>
+          </button>
+          <button id="btnSidebarNewFlow" class="btn sm primary" title="Crear nuevo flujo">
+            <svg class="ic" width="12" height="12"><use href="#i-plus"/></svg> Nuevo
+          </button>
+        </div>
       </div>
+      <input type="file" id="importZipInput" accept=".zip,.json" style="display:none" />
       <div class="flows-list" id="flowsList">
         <p class="hint">Cargando flujos...</p>
       </div>

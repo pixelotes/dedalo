@@ -120,3 +120,48 @@ def test_health_api():
     assert "service" in data and data["service"] == "dedalo"
 
 
+def test_export_and_import_api():
+    # 1. Crear un flujo
+    flow_id = "test-api-export-flow"
+    graph = {
+        "version": 1,
+        "name": flow_id,
+        "nodes": [
+            {"id": "disk", "type": "input.disk_free", "config": {}},
+        ],
+        "edges": [],
+    }
+    client.post("/api/flow", json={"id": flow_id, "graph": graph, "meta": {"name": "Test API Export"}})
+
+    # 2. Exportar flujo individual
+    exp_res = client.get(f"/api/flow/export?id={flow_id}")
+    assert exp_res.status_code == 200
+    assert exp_res.headers["content-type"] == "application/zip"
+    assert f"{flow_id}.zip" in exp_res.headers["content-disposition"]
+    zip_content = exp_res.content
+    assert len(zip_content) > 50
+
+    # 3. Exportar backup de todos los flujos
+    all_res = client.get("/api/flows/export-all")
+    assert all_res.status_code == 200
+    assert all_res.headers["content-type"] == "application/zip"
+    assert "dedalo_backup_" in all_res.headers["content-disposition"]
+
+    # 4. Eliminar el flujo y volver a importarlo vía API multipart
+    client.delete(f"/api/flow?id={flow_id}")
+
+    import_res = client.post(
+        "/api/flows/import",
+        files={"file": (f"{flow_id}.zip", zip_content, "application/zip")},
+    )
+    assert import_res.status_code == 200
+    data = import_res.json()
+    assert data["status"] == "ok"
+    assert data["imported_count"] == 1
+    assert data["imported"][0]["id"] == flow_id
+
+    # Limpiar
+    client.delete(f"/api/flow?id={flow_id}")
+
+
+

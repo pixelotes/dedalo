@@ -20,7 +20,7 @@ Este documento resume el estado técnico actual de **Dédalo Standalone**, su or
 - **Control de cambios**: Detección de modificaciones no guardadas con modal de confirmación antes de cambiar de flujo.
 - **Optimización de Memoria Activa**: Compactación periódica de heap con recolección de basura forzada y devolución de páginas al OS vía `malloc_trim(0)`.
 - **Evasión Antibot sin Navegador Pesado**: Motor HTTP dual con `curl_cffi` (suplantación de TLS/HTTP/2 de Chrome/Safari/Firefox y User-Agents) y fallback transparente a `httpx`.
-- **Suite de pruebas**: 70 pruebas automatizadas pasando al 100% en `pytest`.
+- **Suite de pruebas**: 75 pruebas automatizadas pasando al 100% en `pytest`.
 
 ---
 
@@ -223,6 +223,20 @@ Para garantizar la máxima autonomía, predictibilidad y rendimiento en Raspberr
 - **Meteorología Abierta (`input.weather`)**:
   - Consulta en tiempo real a Open-Meteo (100% libre, sin registro ni claves API) con geocodificación automática por nombre de ciudad, previsión a varios días y códigos WMO traducidos al español con emojis.
 
+### J. Exportación e Importación de Flujos en ZIP y Backup Completo
+Para facilitar la portabilidad, el despliegue entre diferentes máquinas (ej. estación de desarrollo a Raspberry Pi) y copias de seguridad sin dependencias de compilación:
+- **Exportación Individual en ZIP**:
+  - Genera al vuelo un archivo ZIP en memoria conteniendo el grafo visual canónico (`<flow_id>.json`), su metadata cron (`<flow_id>.meta.json`) y un manifiesto (`manifest.json`).
+  - **Detección de Secretos Requeridos**: Inspecciona los nodos del flujo y añade al manifiesto los nombres de los secretos requeridos para funcionar (ej. `TAVILY_API_KEY`, `TELEGRAM_BOT_TOKEN`), sin incluir en ningún caso sus valores confidenciales.
+- **Copia de Seguridad Completa (Backup All)**:
+  - Endpoint `GET /api/flows/export-all` y botón en cabecera de la UI que empaqueta todos los flujos del sistema en `dedalo_flows_backup_<timestamp>.zip`.
+- **Importación Inteligente y Segura**:
+  - Endpoint `POST /api/flows/import` y selector de archivos en la barra lateral con soporte para archivos `.zip` y `.json`.
+  - **Cero Dependencias**: Implementado con módulos estándar de Python (`zipfile`, `io`) y analizador multipart nativo para evitar la dependencia de `python-multipart`.
+  - **Seguridad Zip-Slip**: Sanitización exhaustiva de rutas relativas con rechazo estricto de secuencias de escape de directorio (`..`).
+  - **Protección contra DoS**: Límite de descompresión de 25 MB.
+  - **Recompilación Automática**: Guarda el grafo e invoca `save_flow()`, compilándolo de inmediato a Python ejecutable (`<flow_id>.py`).
+
 ---
 
 ## 5. Estructura del Repositorio
@@ -248,15 +262,16 @@ dedalo/
 │   │   ├── dedalo.css
 │   │   ├── dedalo.js
 │   │   └── index.html
-│   ├── store.py            # Persistencia de flujos en ficheros JSON/PY
+│   ├── store.py            # Persistencia de flujos en JSON/PY y empaquetado ZIP
 │   └── templates.py        # Plantillas de inicio rápido
-├── tests/                  # Pruebas automatizadas (pytest - 36 tests)
+├── tests/                  # Pruebas automatizadas (pytest - 75 tests)
 │   ├── test_api.py
 │   ├── test_compiler.py
 │   ├── test_cron.py        # Pruebas del evaluador cron e intervalos nativo
 │   ├── test_history.py
 │   ├── test_runtime.py
-│   └── test_secrets.py
+│   ├── test_secrets.py
+│   └── test_store.py       # Pruebas de exportación/importación ZIP y Zip-Slip
 ├── .dockerignore           # Exclusión estricta de secretos, caches y venv
 ├── Dockerfile              # Construcción multi-stage segura con usuario no-root
 ├── docker-compose.yml      # Despliegue con límites de memoria y endurecimiento
@@ -289,4 +304,4 @@ cd dedalo
 1. **Librería de Componentes / Subflujos**: Capacidad de reutilizar un flujo dentro de otro como un único nodo compuesto.
 2. **Depuración Paso a Paso**: Posibilidad de ejecutar un flujo hasta un nodo específico e inspeccionar el estado intermedio en vivo.
 3. **Métricas en Vivo en Canvas**: Indicador numérico de elementos procesados o tiempo transcurrido superpuesto en cada conector de salida.
-4. **Exportación / Importación ZIP**: Empaquetado de flujos junto con sus secretos requeridos (sin valores) para compartir entre instancias de Dédalo.
+4. **Historial de Versiones Git Local**: Registro de revisiones locales automáticas para cada modificación de flujo guardada.

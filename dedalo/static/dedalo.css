@@ -192,6 +192,7 @@ select {
 .tab-pane.active { display: flex; flex-direction: column; gap: 14px; }
 .pane-head { display: flex; justify-content: space-between; align-items: center; }
 .pane-head h3 { font-size: 0.95rem; font-weight: 600; }
+.pane-head-actions { display: flex; align-items: center; gap: 6px; }
 .hint { font-size: 0.8rem; color: var(--text-muted); line-height: 1.4; }
 .hint-inline { font-size: 0.75rem; color: var(--text-muted); }
 

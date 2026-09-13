@@ -6,10 +6,12 @@ import contextlib
 import json
 import os
 import time
+import io
+import zipfile
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -325,6 +327,77 @@ async def run_flow_now_endpoint(id: str = Query(...)) -> dict[str, Any]:
 def delete_flow_endpoint(id: str = Query(...)) -> dict[str, Any]:
     deleted = store.delete_flow(id)
     return {"status": "ok", "deleted": deleted}
+
+
+@app.get("/api/flow/export")
+@app.get("/api/flows/{flow_id}/export")
+def export_flow_endpoint(flow_id: str = "", id: str = "") -> Response:
+    target_id = flow_id or id
+    if not target_id:
+        raise HTTPException(status_code=400, detail="Falta el identificador del flujo a exportar.")
+    try:
+        zip_bytes = store.export_flow_zip(target_id)
+        filename = f"{store.slug(target_id)}.zip"
+        return Response(
+            content=zip_bytes,
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Flujo «{target_id}» no encontrado.")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error exportando flujo: {exc}")
+
+
+@app.get("/api/flows/export-all")
+def export_all_flows_endpoint() -> Response:
+    try:
+        zip_bytes = store.export_all_flows_zip()
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        filename = f"dedalo_backup_{timestamp}.zip"
+        return Response(
+            content=zip_bytes,
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error exportando backup de flujos: {exc}")
+
+
+@app.post("/api/flows/import")
+async def import_flows_endpoint(request: Request) -> dict[str, Any]:
+    try:
+        content_type = request.headers.get("content-type", "")
+        body = await request.body()
+        if not body:
+            raise HTTPException(status_code=400, detail="No se recibieron datos para importar.")
+
+        zip_bytes = body
+        if "multipart/form-data" in content_type:
+            boundary = None
+            for part in content_type.split(";"):
+                part = part.strip()
+                if part.startswith("boundary="):
+                    boundary = part.split("boundary=")[-1].strip().strip('"').encode()
+            if boundary:
+                delimiter = b"--" + boundary
+                chunks = body.split(delimiter)
+                for chunk in chunks:
+                    if b"\r\n\r\n" in chunk:
+                        hdr, payload = chunk.split(b"\r\n\r\n", 1)
+                        payload = payload.rstrip(b"\r\n").rstrip(b"--")
+                        if b"filename=" in hdr or zipfile.is_zipfile(io.BytesIO(payload)):
+                            zip_bytes = payload
+                            break
+
+        res = store.import_flows_from_zip(zip_bytes, overwrite=True)
+        if res.get("status") == "error":
+            raise HTTPException(status_code=400, detail=res.get("error", "Error importando flujos."))
+        return res
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error al importar flujos: {exc}")
 
 
 # ---------------------------------------------------------------------------

@@ -283,6 +283,14 @@ function setupEvents() {
 
   $('btnNew').onclick = () => withUnsavedCheck(() => resetGraph('nuevo-flujo'));
   $('btnSidebarNewFlow').onclick = () => withUnsavedCheck(() => resetGraph('nuevo-flujo'));
+  if ($('btnImportZip')) $('btnImportZip').onclick = () => $('importZipInput').click();
+  if ($('importZipInput')) $('importZipInput').onchange = (e) => {
+    if (e.target.files && e.target.files.length) {
+      handleImportZip(e.target.files[0]);
+      e.target.value = '';
+    }
+  };
+  if ($('btnExportAllZip')) $('btnExportAllZip').onclick = exportAllFlowsZip;
   $('btnSchedule').onclick = () => openScheduleModal(state.graph.name);
   $('btnCompile').onclick = compileGraph;
   $('btnRun').onclick = runPreview;
@@ -1973,6 +1981,11 @@ function renderFlowInspector(body) {
   btnAdvSched.innerHTML = '<svg class="ic" width="13" height="13"><use href="#i-clock"/></svg> Programación avanzada...';
   btnAdvSched.onclick = () => openScheduleModal(state.graph.name);
 
+  const btnExportZip = document.createElement('button');
+  btnExportZip.className = 'btn secondary sm';
+  btnExportZip.innerHTML = '<svg class="ic" width="13" height="13"><use href="#i-download"/></svg> Exportar este flujo (.zip)';
+  btnExportZip.onclick = () => exportFlowZip(state.graph.name);
+
   const btnDelFlow = document.createElement('button');
   btnDelFlow.className = 'btn secondary sm';
   btnDelFlow.style.color = 'var(--port-err)';
@@ -1984,6 +1997,7 @@ function renderFlowInspector(body) {
   actBox.appendChild(btnSave);
   actBox.appendChild(btnRun);
   actBox.appendChild(btnAdvSched);
+  actBox.appendChild(btnExportZip);
   actBox.appendChild(btnDelFlow);
   body.appendChild(actBox);
 }
@@ -2159,6 +2173,62 @@ function escapeHtml(str) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+function exportFlowZip(flowId) {
+  const fid = (flowId || state.graph.name || '').trim();
+  if (!fid) {
+    toast('Guarda el flujo antes de exportarlo', 'err');
+    return;
+  }
+  const link = document.createElement('a');
+  link.href = `/api/flow/export?id=${encodeURIComponent(fid)}`;
+  link.download = `${fid}.zip`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  toast(`Descargando ${fid}.zip`, 'ok');
+}
+
+function exportAllFlowsZip() {
+  const link = document.createElement('a');
+  link.href = '/api/flows/export-all';
+  link.download = 'dedalo_flows_backup.zip';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  toast('Descargando backup completo de flujos (.zip)', 'ok');
+}
+
+async function handleImportZip(file) {
+  if (!file) return;
+  const formData = new FormData();
+  formData.append('file', file);
+  toast('Importando flujos...', 'info');
+  try {
+    const res = await fetch('/api/flows/import', {
+      method: 'POST',
+      body: formData,
+    });
+    const data = await res.json();
+    if (!res.ok || data.status === 'error') {
+      toast(data.detail || data.error || 'Error al importar', 'err');
+      return;
+    }
+    const count = data.imported_count || (data.imported ? data.imported.length : 0);
+    toast(`¡Importados ${count} flujo(s) con éxito!`, 'ok');
+    if (data.required_secrets && data.required_secrets.length > 0) {
+      setTimeout(() => {
+        toast(`Aviso: Flujos importados requieren secretos: ${data.required_secrets.join(', ')}`, 'info');
+      }, 2500);
+    }
+    await loadFlows();
+    if (count === 1 && data.imported && data.imported[0]) {
+      loadFlow(data.imported[0].id);
+    }
+  } catch (err) {
+    toast(`Error de conexión: ${err.message}`, 'err');
+  }
 }
 
 window.onload = init;
