@@ -3673,3 +3673,220 @@ def execute_single_node(
     res.duration = elapsed_ms
     return res
 
+
+# ==============================================================================
+# Integración con Git (Nativa vía CLI)
+# ==============================================================================
+
+def _run_git(args: list[str], cwd: str | Path | None = None, timeout: float = 30.0) -> tuple[int, str, str]:
+    """Ejecuta un comando git y devuelve (returncode, stdout, stderr)."""
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=str(cwd) if cwd else None,
+            capture_output=True,
+            text=True,
+            timeout=float(timeout),
+        )
+        return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
+    except FileNotFoundError:
+        return 127, "", "El ejecutable 'git' no está instalado o disponible en el PATH del sistema."
+    except subprocess.TimeoutExpired:
+        return 124, "", f"Tiempo de espera agotado al ejecutar git ({timeout}s)."
+    except Exception as exc:
+        return 1, "", f"Error inesperado al ejecutar git: {exc}"
+
+
+def git_read(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    action: str = "log",
+    repo_path: str = ".",
+    url: str = "",
+    revision: str = "HEAD~1..HEAD",
+    since: str = "",
+    limit: int = 5,
+    path_filter: str = "",
+    max_chars: int = 8000,
+    timeout: float = 30.0,
+) -> NodeResult:
+    """Lee información de un repositorio Git: historial de commits, diffs, clonado ligero o estado."""
+    act = (action or "log").strip().lower()
+    path_obj = Path(repo_path or ".").expanduser().resolve()
+
+    if act == "clone_or_pull":
+        target_url = url.strip()
+        if not target_url and not (path_obj / ".git").exists():
+            return NodeResult("error", error="Se requiere 'url' para clonar un repositorio remoto inexistente.")
+
+        if (path_obj / ".git").exists():
+            code, out, err = _run_git(["pull", "--ff-only"], cwd=path_obj, timeout=timeout)
+            if code != 0:
+                return NodeResult("error", error=f"Fallo en git pull: {err or out}")
+            return NodeResult("ok", data={"action": "pull", "path": str(path_obj), "output": out or "Already up to date."})
+
+        # Clonar shallow con limite de profundidad 1
+        path_obj.parent.mkdir(parents=True, exist_ok=True)
+        code, out, err = _run_git(["clone", "--depth", "1", "--no-tags", target_url, str(path_obj)], timeout=timeout)
+        if code != 0:
+            return NodeResult("error", error=f"Fallo en git clone: {err or out}")
+        return NodeResult("ok", data={"action": "clone", "path": str(path_obj), "output": out or "Cloned successfully."})
+
+    # Para el resto de acciones, el repositorio local debe existir
+    if not (path_obj / ".git").exists() and not (path_obj.is_dir() and (path_obj / "HEAD").exists()):
+        return NodeResult("error", error=f"La ruta '{repo_path}' no es un repositorio Git válido.")
+
+    if act == "log":
+        max_commits = max(1, int(limit or 5))
+        # Formato delimitado por centinela: \x1e al inicio del commit, \x1f entre campos del header
+        format_str = "%x1e%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s"
+        cmd = ["log", f"-n{max_commits}", f"--format={format_str}", "--name-only"]
+        if since.strip():
+            cmd.append(f"--since={since.strip()}")
+        if path_filter.strip():
+            cmd.append("--")
+            cmd.extend([p.strip() for p in path_filter.split(",") if p.strip()])
+
+        code, out, err = _run_git(cmd, cwd=path_obj, timeout=timeout)
+        if code != 0:
+            return NodeResult("error", error=f"Fallo en git log: {err or out}")
+
+        if not out:
+            return NodeResult("ok", data=[])
+
+        commits = []
+        entries = [e.strip() for e in out.split("\x1e") if e.strip()]
+        for entry in entries:
+            lines = entry.splitlines()
+            if not lines:
+                continue
+            header = lines[0].strip()
+            files = [f.strip() for f in lines[1:] if f.strip()]
+            parts = header.split("\x1f")
+            if len(parts) >= 6:
+                commits.append({
+                    "hash": parts[0],
+                    "short_hash": parts[1],
+                    "author": parts[2],
+                    "email": parts[3],
+                    "date": parts[4],
+                    "message": parts[5],
+                    "files": files,
+                })
+        return NodeResult("ok", data=commits)
+
+    elif act == "diff":
+        rev = revision.strip() or "HEAD~1..HEAD"
+        cmd_diff = ["diff", rev]
+        cmd_stat = ["diff", "--stat", rev]
+
+        if path_filter.strip():
+            filter_args = ["--", *[p.strip() for p in path_filter.split(",") if p.strip()]]
+            cmd_diff.extend(filter_args)
+            cmd_stat.extend(filter_args)
+
+        code_stat, out_stat, err_stat = _run_git(cmd_stat, cwd=path_obj, timeout=timeout)
+        if code_stat != 0:
+            return NodeResult("error", error=f"Fallo en git diff --stat: {err_stat or out_stat}")
+
+        code_diff, out_diff, err_diff = _run_git(cmd_diff, cwd=path_obj, timeout=timeout)
+        if code_diff != 0:
+            return NodeResult("error", error=f"Fallo en git diff: {err_diff or out_diff}")
+
+        code_files, out_files, _ = _run_git(["diff", "--name-only", rev], cwd=path_obj, timeout=timeout)
+        files_list = [f.strip() for f in out_files.splitlines() if f.strip()] if code_files == 0 else []
+
+        max_len = int(max_chars or 8000)
+        diff_text = out_diff[:max_len]
+        truncated = len(out_diff) > max_len
+
+        return NodeResult("ok", data={
+            "revision": rev,
+            "stat": out_stat,
+            "files": files_list,
+            "diff": diff_text,
+            "truncated": truncated,
+            "total_chars": len(out_diff),
+        })
+
+    elif act == "status":
+        code, out, err = _run_git(["status", "--porcelain"], cwd=path_obj, timeout=timeout)
+        if code != 0:
+            return NodeResult("error", error=f"Fallo en git status: {err or out}")
+
+        changes = []
+        for line in out.splitlines():
+            line = line.strip()
+            if len(line) >= 3:
+                status_code = line[:2].strip()
+                file_path = line[3:].strip()
+                changes.append({"status": status_code, "file": file_path})
+
+        return NodeResult("ok", data={
+            "clean": len(changes) == 0,
+            "total_changes": len(changes),
+            "changes": changes,
+        })
+
+    return NodeResult("error", error=f"Acción de git no reconocida: «{action}». Usa log, diff, clone_or_pull o status.")
+
+
+def git_commit_push(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    repo_path: str = ".",
+    message: str = "update: automated commit from dedalo",
+    push: bool = False,
+    branch: str = "main",
+    remote: str = "origin",
+    files: str = ".",
+    author_name: str = "Dedalo Bot",
+    author_email: str = "dedalo@local",
+    timeout: float = 30.0,
+) -> NodeResult:
+    """Añade cambios, realiza un commit y opcionalmente ejecuta push en un repositorio Git."""
+    path_obj = Path(repo_path or ".").expanduser().resolve()
+    if not (path_obj / ".git").exists():
+        return NodeResult("error", error=f"La ruta '{repo_path}' no es un repositorio Git válido.")
+
+    file_patterns = [f.strip() for f in (files or ".").split(",") if f.strip()] or ["."]
+    code, _, err = _run_git(["add", *file_patterns], cwd=path_obj, timeout=timeout)
+    if code != 0:
+        return NodeResult("error", error=f"Fallo en git add: {err}")
+
+    code_diff, out_diff, _ = _run_git(["diff", "--cached", "--name-only"], cwd=path_obj, timeout=timeout)
+    if not out_diff.strip():
+        return NodeResult("ok", data={"committed": False, "pushed": False, "message": "No hay cambios pendientes para commitear."})
+
+    author_str = f"{author_name.strip()} <{author_email.strip()}>" if author_name and author_email else ""
+    cmd_commit = ["commit", "-m", message.strip() or "update"]
+    if author_str:
+        cmd_commit.extend(["--author", author_str])
+
+    code, out_commit, err = _run_git(cmd_commit, cwd=path_obj, timeout=timeout)
+    if code != 0:
+        return NodeResult("error", error=f"Fallo en git commit: {err or out_commit}")
+
+    _, commit_hash, _ = _run_git(["rev-parse", "HEAD"], cwd=path_obj, timeout=timeout)
+
+    pushed = False
+    push_out = ""
+    if push:
+        cmd_push = ["push", remote.strip() or "origin", branch.strip() or "main"]
+        code_p, push_out, push_err = _run_git(cmd_push, cwd=path_obj, timeout=timeout)
+        if code_p != 0:
+            return NodeResult("error", error=f"Commit realizado ({commit_hash[:7]}), pero fallo en git push: {push_err or push_out}")
+        pushed = True
+
+    return NodeResult("ok", data={
+        "committed": True,
+        "commit_hash": commit_hash,
+        "short_hash": commit_hash[:7],
+        "message": message.strip(),
+        "pushed": pushed,
+        "push_output": push_out,
+    })
+
+

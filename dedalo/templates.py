@@ -216,6 +216,65 @@ TEMPLATES: tuple[Template, ...] = (
             [_edge("buzon", "resumidor"), _edge("resumidor", "telegram")],
         ),
     ),
+    Template(
+        name="auditoria-commits-git",
+        title="Auditoría de código y commits con IA",
+        description="Extrae el diff de los commits recientes en un repositorio local y genera un informe de seguridad y changelog antes de enviar la alerta.",
+        teaches="Automatización de code review y seguridad continua con nodos nativos de Git.",
+        graph=_graph(
+            "auditoria-commits-git",
+            [
+                _node(
+                    "lector_git",
+                    "input.git",
+                    {
+                        "action": "diff",
+                        "repo_path": ".",
+                        "revision": "HEAD~1..HEAD",
+                        "path_filter": "*.py, *.js, *.ts, *.json, *.html, *.css",
+                        "max_chars": 6000,
+                    },
+                    x=60,
+                    y=140,
+                    label="Git Diff Reciente",
+                ),
+                _node(
+                    "auditor_ia",
+                    "transform.agent",
+                    {
+                        "prompt": (
+                            "A continuación tienes el parche de cambios (diff) de los últimos commits. "
+                            "Realiza una auditoría técnica concisa en Markdown:\n\n"
+                            "1. **Resumen del Cambio**: Qué añade o modifica en dos frases.\n"
+                            "2. **Seguridad y Secretos**: Comprueba si se exponen contraseñas, claves API, tokens o patrones vulnerables.\n"
+                            "3. **Riesgos Potenciales**: Señala posibles regresiones, falta de validación o fallos evidentes.\n\n"
+                            "Si el cambio es seguro y correcto, concluye con un veredicto 'Aprobado sin objeciones'."
+                        ),
+                        "system_prompt": (
+                            "Eres un revisor de código senior y auditor de seguridad de software. "
+                            "Sé riguroso, objetivo y directo. Señala únicamente problemas reales y críticos sin florituras."
+                        ),
+                        "temperature": 0.2,
+                    },
+                    x=380,
+                    y=140,
+                    label="Auditoría de Seguridad (IA)",
+                ),
+                _node(
+                    "telegram",
+                    "output.telegram",
+                    {
+                        "chat_id": "TU_CHAT_ID",
+                        "secret": "TELEGRAM_BOT_TOKEN",
+                    },
+                    x=700,
+                    y=140,
+                    label="Enviar a Telegram",
+                ),
+            ],
+            [_edge("lector_git", "auditor_ia"), _edge("auditor_ia", "telegram")],
+        ),
+    ),
 )
 
 

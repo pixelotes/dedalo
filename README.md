@@ -22,9 +22,10 @@ El sistema incluye una amplia bateria de nodos de transformacion deterministicos
 
 ## Nodos principales
 
-El catalogo incluye mas de 50 nodos modulares. Entre los mas utilizados destacan:
+El catalogo incluye mas de 50 nodos modulares (55 en total). Entre los mas utilizados destacan:
 
 ### Nodos de entrada
+- `input.git`: Lectura de repositorios Git locales o remotos (historial de commits, diff de cambios entre revisiones con filtro de rutas, clonado ligero shallow o estado del arbol).
 - `input.rss`: Lector de canales RSS y Atom con memoria persistente de elementos ya procesados.
 - `input.http_call` / `input.web_read`: Peticiones HTTP con suplantacion de huella de navegador y extraccion de contenido web.
 - `input.imap`: Lector de correo electronico via IMAP con soporte TLS y sanitizacion automatica de inyecciones y firmas.
@@ -48,6 +49,7 @@ El catalogo incluye mas de 50 nodos modulares. Entre los mas utilizados destacan
 - `transform.agent`: Invocacion opcional a endpoints compatibles con la API de OpenAI (modelos locales como Ollama o servicios remotos), con soporte para modo JSON y enriquecimiento de campos (`as_field`) sobre listas.
 
 ### Nodos de salida
+- `output.git`: Creacion de commits y ejecucion de push opcional con autoria y mensaje configurables hacia repositorios remotos.
 - `output.telegram` / `output.discord`: Envio de mensajes y alertas formateadas a canales y chats privados.
 - `output.sqlite`: Insercion y actualizacion directa de registros en bases de datos SQLite locales.
 - `output.file`: Escritura y concatenacion de ficheros en disco (Markdown, JSON, texto plano).
@@ -69,6 +71,9 @@ El catalogo incluye mas de 50 nodos modulares. Entre los mas utilizados destacan
 
 4. **Procesamiento y archivo estructurado de facturas o notificaciones**:
    Recepcion de eventos via webhook o IMAP, extraccion de datos clave mediante expresiones regulares o agente en modo JSON, e insercion automatica en una base de datos SQLite local para consulta posterior.
+
+5. **Auditoria continua de commits y seguridad en Git**:
+   Extraccion automatica del parche de cambios reciente mediante `input.git` (modo diff con limite maximo de caracteres para proteger el contexto), analisis de vulnerabilidades y credenciales con `transform.agent` y envio de alertas preventivas a Telegram ante fallos criticos.
 
 ---
 

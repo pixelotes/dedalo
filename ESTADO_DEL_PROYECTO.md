@@ -20,7 +20,7 @@ Este documento resume el estado técnico actual de **Dédalo Standalone**, su or
 - **Control de cambios**: Detección de modificaciones no guardadas con modal de confirmación antes de cambiar de flujo.
 - **Optimización de Memoria Activa**: Compactación periódica de heap con recolección de basura forzada y devolución de páginas al OS vía `malloc_trim(0)`.
 - **Evasión Antibot sin Navegador Pesado**: Motor HTTP dual con `curl_cffi` (suplantación de TLS/HTTP/2 de Chrome/Safari/Firefox y User-Agents) y fallback transparente a `httpx`.
-- **Suite de pruebas**: 87 pruebas automatizadas pasando al 100% en `pytest`.
+- **Suite de pruebas**: 94 pruebas automatizadas pasando al 100% en `pytest`.
 
 ---
 
@@ -267,6 +267,19 @@ Para automatizar la lectura y análisis de emails de forma robusta frente a vect
 - **Plantilla Oficial "Resumen Diario de Correos" (`resumen-correos-diario`)**:
   - Flujo preconfigurado IMAP $\rightarrow$ LLM Asistente Ejecutivo (con system prompt defensivo que trata los correos como datos externos no confiables y formatea prioridades en Urgentes / Informativos / Boletines) $\rightarrow$ Telegram.
 
+### M. Integración Nativa con Git y Auditoría Continua de Código (55 Nodos en Total)
+Para transformar Dédalo en un orquestador de CI/CD ligero, GitOps y revisión de seguridad en servidores de bajo consumo:
+- **Cero Dependencias en Python**: Implementado directamente sobre el ejecutable `git` del sistema operativo mediante `subprocess.run()`, sin utilizar librerías de alto consumo o fugas de memoria (`GitPython`, `pygit2`).
+- **Nodo de Entrada `input.git`**:
+  - `log`: Historial estructurado con autor, email, fecha, hash y archivos afectados, con soporte para ventanas temporales (`since="24 hours ago"`) y delimitadores ASCII que previenen colisiones de formato.
+  - `diff`: Extracción del parche unificado entre revisiones o ramas con filtro de extensiones (`path_filter`) y límite de seguridad (`max_chars`, por defecto 8000 caracteres) para prevenir desbordamientos de contexto en LLMs.
+  - `clone_or_pull`: Descarga inicial optimizada con clones shallow (`--depth 1 --no-tags`) que cuidan el almacenamiento de la tarjeta MicroSD, y actualización mediante `pull --ff-only`.
+  - `status`: Inspección del árbol de trabajo para detectar archivos modificados o sin seguimiento.
+- **Nodo de Salida `output.git`**:
+  - Staging selectivo, generación de commits con mensaje y autor configurable (`author_name`, `author_email`) y push remoto opcional para usar Git como base de datos o almacenamiento versionado (Obsidian, notas, reportes).
+- **Plantilla Oficial "Auditoría de Commits con IA" (`auditoria-commits-git`)**:
+  - Conecta `input.git` (modo diff) $\rightarrow$ `transform.agent` (auditoría defensiva buscando credenciales expuestas, regresiones de seguridad y resumen de cambios) $\rightarrow$ `output.telegram`.
+
 ---
 
 ## 5. Estructura del Repositorio
@@ -294,12 +307,13 @@ dedalo/
 │   │   └── index.html
 │   ├── store.py            # Persistencia de flujos en JSON/PY y empaquetado ZIP
 │   └── templates.py        # Plantillas de inicio rápido
-├── tests/                  # Pruebas automatizadas (pytest - 87 tests)
+├── tests/                  # Pruebas automatizadas (pytest - 94 tests)
 │   ├── test_api.py
 │   ├── test_compiler.py
 │   ├── test_cron.py        # Pruebas del evaluador cron e intervalos nativo
 │   ├── test_debug.py       # Pruebas de ejecución aislada, paso a paso y preview en vivo
 │   ├── test_email_digest.py # Pruebas de sanitización anti prompt-injection y digest
+│   ├── test_git.py         # Pruebas de integración nativa con Git (log, diff, commit, push)
 │   ├── test_history.py
 │   ├── test_runtime.py
 │   ├── test_secrets.py
