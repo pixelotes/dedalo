@@ -1213,6 +1213,7 @@ def agent(
     *,
     prompt: str,
     per_item: bool = False,
+    as_field: str = "",
     tokens: int = DEFAULT_AGENT_TOKENS,
     model: str = "",
     url: str = "",
@@ -1229,6 +1230,7 @@ def agent(
         if not isinstance(first, list):
             return NodeResult("error", error="El modo per_item requiere una lista de entrada")
         results = []
+        field_name = as_field.strip()
         for item in first[:MAX_ITEMS]:
             item_str = json.dumps(item, ensure_ascii=False) if isinstance(item, (dict, list)) else str(item)
             user_msg = f"{prompt}\n\nElemento:\n{item_str}"
@@ -1243,7 +1245,15 @@ def agent(
                     temperature=float(temperature),
                     json_mode=bool(json_mode),
                 )
-                results.append(ans)
+                if field_name:
+                    if isinstance(item, dict):
+                        enriched = dict(item)
+                        enriched[field_name] = ans
+                    else:
+                        enriched = {"item": item, field_name: ans}
+                    results.append(enriched)
+                else:
+                    results.append(ans)
             except Exception as exc:
                 return NodeResult("error", error=f"Error en llamada LLM per_item: {exc}")
         return NodeResult("ok", data=results)
@@ -1702,44 +1712,6 @@ def summarize_text(
         return NodeResult("ok", data=summary)
     except Exception as exc:
         return NodeResult("error", error=f"Fallo en resumen con LLM: {exc}")
-
-
-def agent(
-    ctx: Any,
-    inputs: list[NodeResult],
-    *,
-    prompt: str,
-    per_item: bool = False,
-    tokens: int = DEFAULT_AGENT_TOKENS,
-    model: str = "",
-    url: str = "",
-    secret: str = "",
-) -> NodeResult:
-    """Invoca al LLM con un prompt y los datos de entrada."""
-    inp = Inputs(inputs)
-
-    if per_item:
-        first = inp.first_data()
-        if not isinstance(first, list):
-            return NodeResult("error", error="El modo per_item requiere una lista de entrada")
-        results = []
-        for item in first[:MAX_ITEMS]:
-            item_str = json.dumps(item, ensure_ascii=False) if isinstance(item, (dict, list)) else str(item)
-            user_msg = f"{prompt}\n\nElemento:\n{item_str}"
-            try:
-                ans = call_llm(user_msg, model=model, url=url, secret_name=secret, tokens=tokens)
-                results.append(ans)
-            except Exception as exc:
-                return NodeResult("error", error=f"Error en llamada LLM per_item: {exc}")
-        return NodeResult("ok", data=results)
-
-    input_text = inp.text()
-    user_msg = f"{prompt}\n\nEntrada:\n{input_text}" if input_text else prompt
-    try:
-        ans = call_llm(user_msg, model=model, url=url, secret_name=secret, tokens=tokens)
-        return NodeResult("ok", data=ans)
-    except Exception as exc:
-        return NodeResult("error", error=f"Error en llamada LLM: {exc}")
 
 
 def merge(ctx: Any, inputs: list[NodeResult]) -> NodeResult:
@@ -2798,6 +2770,224 @@ def mqtt_read(
         return NodeResult("error", error=f"Error en MQTT read: {exc}")
 
 
+# ==============================================================================
+# Sanitización de Correos Electrónicos y Protección Anti Prompt-Injection
+# ==============================================================================
+
+_INVISIBLE_CHARS_RE = re.compile(
+    r"[\u200b\u200c\u200d\u2060\ufeff\u00ad"  # Zero-width spaces, joiners, soft hyphens, BOM
+    r"\u202a-\u202e\u2066-\u2069"              # Bidi overrides & isolates
+    r"\U000e0000-\U000e007f"                    # Unicode Tag plane (smuggled ASCII)
+    r"]"
+)
+
+_HIDDEN_CSS_RE = re.compile(
+    r"(?:"
+    r"display\s*:\s*none|"
+    r"visibility\s*:\s*hidden|"
+    r"opacity\s*:\s*0(?:\.0+)?(?:\s|;|$)|"
+    r"font-size\s*:\s*0(?:px|pt|em|rem|%)?(?:\s|;|$)|"
+    r"color\s*:\s*(?:transparent|white|#fff(?:fff)?|rgba\([^)]*,\s*0(?:\.0+)?\))|"
+    r"text-indent\s*:\s*-\d{3,}(?:px|em)?|"
+    r"(?:left|top)\s*:\s*-\d{3,}(?:px|em)?|"
+    r"height\s*:\s*0(?:px)?;\s*overflow\s*:\s*hidden|"
+    r"overflow\s*:\s*hidden;\s*height\s*:\s*0(?:px)?"
+    r")",
+    re.IGNORECASE,
+)
+
+_SIGNATURE_PATTERNS = [
+    r"^--\s*$",                             # Delimitador estándar RFC 3676 (-- )
+    r"^_{3,}\s*$",                          # Separador de subrayados
+    r"enviado\s+desde\s+mi\s+(?:iphone|ipad|galaxy|móvil|dispositivo|teléfono)",
+    r"sent\s+from\s+my\s+(?:iphone|ipad|galaxy|phone|mobile|device)",
+    r"obtener\s+outlook\s+para\s+(?:ios|android)",
+    r"get\s+outlook\s+for\s+(?:ios|android)",
+    r"enviado\s+desde\s+correo\s+para\s+windows",
+    r"sent\s+from\s+mail\s+for\s+windows",
+    r"descarga\s+la\s+aplicaci[oó]n\s+de\s+(?:gmail|outlook)",
+]
+_SIGNATURE_RE = re.compile(r"|".join(f"(?:{p})" for p in _SIGNATURE_PATTERNS), re.IGNORECASE | re.MULTILINE)
+
+_DISCLAIMER_PATTERNS = [
+    r"(?:este\s+mensaje|este\s+correo|la\s+informaci[oó]n\s+contenida\s+en\s+este\s+mensaje)[^\n.]{0,100}(?:confidencial|privilegiada|secreta)",
+    r"(?:aviso\s+legal|cl[aá]usula\s+de\s+confidencialidad|pol[ií]tica\s+de\s+privacidad|protecci[oó]n\s+de\s+datos)",
+    r"(?:this\s+email\s+and\s+any\s+files\s+transmitted|the\s+information\s+contained\s+in\s+this\s+email|this\s+message\s+is\s+confidential)",
+    r"(?:confidentiality\s+notice|disclaimer\s*:|if\s+you\s+are\s+not\s+the\s+intended\s+recipient)",
+]
+_DISCLAIMER_RE = re.compile(r"|".join(f"(?:{p})" for p in _DISCLAIMER_PATTERNS), re.IGNORECASE | re.MULTILINE)
+
+_VOID_HTML_TAGS = frozenset({
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"
+})
+
+
+class EmailSanitizerParser(HTMLParser):
+    """Convierte HTML de correo a texto limpio suprimiendo scripts, estilos,
+    comentarios HTML y elementos ocultos vía CSS/atributos (anti prompt injection)."""
+
+    def __init__(self):
+        super().__init__()
+        self.output_chunks: list[str] = []
+        self.hidden_depth = 0
+        self.ignored_tags = {"script", "style", "head", "title", "meta", "link", "template", "noscript", "iframe", "object", "embed"}
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]):
+        tag_lower = tag.lower()
+        attr_dict = {k.lower(): (v or "") for k, v in attrs}
+
+        is_hidden = False
+        if tag_lower in self.ignored_tags:
+            is_hidden = True
+        elif "hidden" in attr_dict:
+            is_hidden = True
+        elif attr_dict.get("aria-hidden", "").lower() == "true":
+            is_hidden = True
+        else:
+            style = attr_dict.get("style", "")
+            if style and _HIDDEN_CSS_RE.search(style):
+                is_hidden = True
+
+        if is_hidden:
+            if tag_lower not in _VOID_HTML_TAGS:
+                self.hidden_depth += 1
+            return
+        if self.hidden_depth > 0:
+            if tag_lower not in _VOID_HTML_TAGS:
+                self.hidden_depth += 1
+            return
+
+        if tag_lower in ("p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "tr", "section", "article"):
+            self.output_chunks.append("\n")
+        elif tag_lower == "br":
+            self.output_chunks.append("\n")
+        elif tag_lower == "li":
+            self.output_chunks.append("\n• ")
+        elif tag_lower in ("td", "th"):
+            self.output_chunks.append(" | ")
+
+    def handle_endtag(self, tag: str):
+        tag_lower = tag.lower()
+        if self.hidden_depth > 0:
+            self.hidden_depth -= 1
+            return
+
+        if tag_lower in ("p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "tr", "ul", "ol", "table"):
+            self.output_chunks.append("\n")
+
+    def handle_data(self, data: str):
+        if self.hidden_depth > 0:
+            return
+        self.output_chunks.append(data)
+
+    def handle_comment(self, data: str):
+        # Descartar comentarios HTML por completo (vector común de prompt injection)
+        pass
+
+    def get_text(self) -> str:
+        return "".join(self.output_chunks)
+
+
+def clean_email_content(
+    content: str,
+    *,
+    is_html: bool = False,
+    strip_signatures: bool = True,
+    strip_disclaimers: bool = True,
+    max_chars: int = 3000,
+) -> str:
+    """Limpia el contenido de un correo: procesa HTML si aplica, suprime
+    inyecciones ocultas, caracteres invisibles, firmas mecánicas y disclaimers."""
+    if not content:
+        return ""
+
+    if is_html or ("<html" in content.lower() or "<body" in content.lower() or "<div" in content.lower() or "<p" in content.lower() or "<br" in content.lower()):
+        try:
+            parser = EmailSanitizerParser()
+            parser.feed(content)
+            parser.close()
+            text = parser.get_text()
+        except Exception:
+            text = re.sub(r"<[^>]+>", " ", content)
+    else:
+        text = content
+
+    # Descartar caracteres Unicode invisibles / tag plane (anti jailbreak smuggling)
+    text = _INVISIBLE_CHARS_RE.sub("", text)
+
+    lines = [line.strip() for line in text.splitlines()]
+    clean_lines = []
+    for line in lines:
+        if strip_signatures and _SIGNATURE_RE.search(line):
+            break
+        clean_lines.append(line)
+
+    result_text = "\n".join(clean_lines)
+
+    if strip_disclaimers and _DISCLAIMER_RE.search(result_text):
+        paragraphs = result_text.split("\n\n")
+        retained = []
+        for p in paragraphs:
+            if not _DISCLAIMER_RE.search(p):
+                retained.append(p)
+        result_text = "\n\n".join(retained)
+
+    result_text = re.sub(r"\n{3,}", "\n\n", result_text).strip()
+
+    if max_chars and max_chars > 0:
+        result_text = result_text[:max_chars]
+
+    return result_text
+
+
+def clean_email_node(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    strip_signatures: bool = True,
+    strip_disclaimers: bool = True,
+    max_chars: int = 3000,
+) -> NodeResult:
+    """Nodo de transformación para limpiar textos o listas de correos eliminando
+    inyecciones ocultas, firmas y avisos legales."""
+    inp = Inputs(inputs)
+    first = inp.first_data()
+
+    if isinstance(first, list):
+        cleaned_list = []
+        for item in first:
+            if isinstance(item, dict):
+                new_item = dict(item)
+                body = new_item.get("body", "")
+                if body:
+                    new_item["body"] = clean_email_content(
+                        str(body),
+                        strip_signatures=bool(strip_signatures),
+                        strip_disclaimers=bool(strip_disclaimers),
+                        max_chars=int(max_chars or 3000),
+                    )
+                if "subject" in new_item:
+                    new_item["subject"] = _INVISIBLE_CHARS_RE.sub("", str(new_item["subject"])).strip()
+                cleaned_list.append(new_item)
+            else:
+                cleaned_list.append(clean_email_content(
+                    str(item),
+                    strip_signatures=bool(strip_signatures),
+                    strip_disclaimers=bool(strip_disclaimers),
+                    max_chars=int(max_chars or 3000),
+                ))
+        return NodeResult("ok", data=cleaned_list)
+
+    text = inp.text()
+    cleaned = clean_email_content(
+        text,
+        strip_signatures=bool(strip_signatures),
+        strip_disclaimers=bool(strip_disclaimers),
+        max_chars=int(max_chars or 3000),
+    )
+    return NodeResult("ok", data=cleaned)
+
+
 def imap_read(
     ctx: Any,
     inputs: list[NodeResult],
@@ -2811,8 +3001,11 @@ def imap_read(
     limit: int = 5,
     mark_as_read: bool = False,
     timeout: float = 15.0,
+    clean_body: bool = True,
+    strip_signatures: bool = True,
+    max_body_chars: int = 3000,
 ) -> NodeResult:
-    """Lee correos electrónicos vía IMAP sobre TLS con imaplib nativo."""
+    """Lee correos electrónicos vía IMAP sobre TLS con imaplib nativo y sanitización anti prompt-injection."""
     h = host.strip()
     u = username.strip()
     if not h or not u:
@@ -2870,6 +3063,7 @@ def imap_read(
             date_str = msg.get("Date", "")
 
             body_text = ""
+            html_text = ""
             attachment_names = []
             if msg.is_multipart():
                 for part in msg.walk():
@@ -2883,17 +3077,42 @@ def imap_read(
                         payload = part.get_payload(decode=True)
                         if payload:
                             body_text = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+                    elif content_type == "text/html" and not html_text:
+                        payload = part.get_payload(decode=True)
+                        if payload:
+                            html_text = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
             else:
+                content_type = msg.get_content_type()
                 payload = msg.get_payload(decode=True)
                 if payload:
-                    body_text = payload.decode(msg.get_content_charset() or "utf-8", errors="replace")
+                    decoded = payload.decode(msg.get_content_charset() or "utf-8", errors="replace")
+                    if content_type == "text/html":
+                        html_text = decoded
+                    else:
+                        body_text = decoded
+
+            raw_content = body_text if body_text else html_text
+            is_html = not bool(body_text) and bool(html_text)
+
+            if clean_body:
+                final_body = clean_email_content(
+                    raw_content,
+                    is_html=is_html,
+                    strip_signatures=strip_signatures,
+                    max_chars=int(max_body_chars or 3000),
+                )
+            else:
+                final_body = raw_content[:int(max_body_chars or 3000)]
+
+            clean_subject = _INVISIBLE_CHARS_RE.sub("", subject).strip()
+            clean_sender = _INVISIBLE_CHARS_RE.sub("", sender).strip()
 
             emails_res.append({
                 "id": mid.decode() if isinstance(mid, bytes) else str(mid),
-                "subject": subject,
-                "from": sender,
+                "subject": clean_subject,
+                "from": clean_sender,
                 "date": date_str,
-                "body": body_text.strip()[:2000],
+                "body": final_body,
                 "attachments": attachment_names,
             })
 

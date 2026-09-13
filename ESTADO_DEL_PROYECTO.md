@@ -20,7 +20,7 @@ Este documento resume el estado técnico actual de **Dédalo Standalone**, su or
 - **Control de cambios**: Detección de modificaciones no guardadas con modal de confirmación antes de cambiar de flujo.
 - **Optimización de Memoria Activa**: Compactación periódica de heap con recolección de basura forzada y devolución de páginas al OS vía `malloc_trim(0)`.
 - **Evasión Antibot sin Navegador Pesado**: Motor HTTP dual con `curl_cffi` (suplantación de TLS/HTTP/2 de Chrome/Safari/Firefox y User-Agents) y fallback transparente a `httpx`.
-- **Suite de pruebas**: 81 pruebas automatizadas pasando al 100% en `pytest`.
+- **Suite de pruebas**: 87 pruebas automatizadas pasando al 100% en `pytest`.
 
 ---
 
@@ -253,6 +253,20 @@ Para diagnosticar flujos de datos complejos y experimentar con transformaciones 
   - Al modificar parámetros (expresiones regulares, selectores CSS, formatos de fecha, scripts Python, etc.), el resultado se recalcula en tiempo real (~2-4 ms) con debounce de 250ms.
   - Toma automáticamente como entrada los datos reales producidos por el nodo padre en la última ejecución/paso o permite alternar a una muestra personalizada de prueba.
 
+### L. Procesamiento Seguro de Correo, Sanitización Anti-Inyecciones y Resumen Diario (53 Nodos en Total)
+Para automatizar la lectura y análisis de emails de forma robusta frente a vectores de ataque modernos sin dependencias pesadas:
+- **Sanitización Profunda Anti Prompt-Injection**:
+  - `EmailSanitizerParser` nativo en Python estándar (`html.parser`): suprime scripts, estilos, metadatos, comentarios HTML y elementos con trucos de ocultación CSS (`display:none`, `visibility:hidden`, `opacity:0`, `font-size:0`, `color:transparent`, `color:#fff`, `text-indent:-9999px`, `aria-hidden="true"`, `hidden`).
+  - Filtro de caracteres Unicode invisibles (`_INVISIBLE_CHARS_RE`): elimina zero-width spaces/joiners (`\u200b`, `\u200c`, `\u200d`, `\u2060`, `\ufeff`), soft hyphens (`\u00ad`), planos de etiquetas Unicode (`\U000e0000` - `\U000e007f`) y overrides bidireccionales.
+  - Recorte automático de firmas mecánicas (`-- \n`, `Enviado desde mi iPhone`, `Get Outlook for iOS`, etc.) y eliminación de cláusulas legales y disclaimers de privacidad (RGPD) para evitar gasto inútil de tokens y alucinaciones en modelos de lenguaje.
+- **Nodo Autónomo `transform.clean_email` y Mejoras en `input.imap`**:
+  - `input.imap` ahora soporta `clean_body`, `strip_signatures` y `max_body_chars` configurables, limpiando tanto texto plano como HTML y sanitizando remitente y asunto.
+  - Nuevo nodo en catálogo `transform.clean_email` para limpiar correspondencia proveniente de webhooks, archivos o fuentes externas.
+- **Enriquecimiento por Elementos (`as_field`) en `transform.agent`**:
+  - Cuando se ejecuta una LLM sobre listas (`per_item: true`), el parámetro `as_field` permite inyectar la respuesta del modelo en un campo determinado (ej. `resumen` o `categoria`) preservando intactos los metadatos originales del correo (`id`, `subject`, `from`, `date`, `attachments`).
+- **Plantilla Oficial "Resumen Diario de Correos" (`resumen-correos-diario`)**:
+  - Flujo preconfigurado IMAP $\rightarrow$ LLM Asistente Ejecutivo (con system prompt defensivo que trata los correos como datos externos no confiables y formatea prioridades en Urgentes / Informativos / Boletines) $\rightarrow$ Telegram.
+
 ---
 
 ## 5. Estructura del Repositorio
@@ -280,11 +294,12 @@ dedalo/
 │   │   └── index.html
 │   ├── store.py            # Persistencia de flujos en JSON/PY y empaquetado ZIP
 │   └── templates.py        # Plantillas de inicio rápido
-├── tests/                  # Pruebas automatizadas (pytest - 81 tests)
+├── tests/                  # Pruebas automatizadas (pytest - 87 tests)
 │   ├── test_api.py
 │   ├── test_compiler.py
 │   ├── test_cron.py        # Pruebas del evaluador cron e intervalos nativo
 │   ├── test_debug.py       # Pruebas de ejecución aislada, paso a paso y preview en vivo
+│   ├── test_email_digest.py # Pruebas de sanitización anti prompt-injection y digest
 │   ├── test_history.py
 │   ├── test_runtime.py
 │   ├── test_secrets.py
