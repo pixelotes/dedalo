@@ -301,6 +301,9 @@ Para permitir resolución autónoma de tareas de código, pruebas de regresión 
   - Evaluación continua del presupuesto de tokens (`~3.5` caracteres por token).
   - Al alcanzar el 90% del contexto, se preservan los prompts de inicio y las llamadas recientes, y se sintetiza el historial intermedio denso mediante el algoritmo extractivo `Luhn+` (filtrado de stopwords, normalización por longitud, sesgo de posición y diversidad MMR).
   - Truncado defensivo adicional sobre salidas de herramientas individuales desproporcionadas.
+- **Plantillas Oficiales con Coder**:
+  - **Auto-reparación de scrapers web (`auto-reparar-scraper`)**: Descarga el HTML actualizado con `input.http_call` (curl_cffi con impersonación de navegador), inspecciona selectores en `scrapers/extractor.py`, aplica parches con `edit` y valida la ejecución local mediante `bash` antes de alertar por Telegram.
+  - **Sincronización de documentación con Git (`sincronizar-docs-codigo`)**: Extrae el diff de los últimos cambios de código con `input.git`, compara signaturas y argumentos modificados contra `README.md`, ajusta la documentación con `edit` y genera un commit atómico con `output.git`.
 
 ---
 

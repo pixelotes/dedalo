@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from dedalo import compiler
+from dedalo.templates import get_template
 from dedalo.runtime import (
     _compact_conversation_history,
     _detect_context_window,
@@ -322,4 +323,44 @@ def test_coder_agent_triggers_luhn_compaction(tmp_path: Path):
     # Verificar que en el registro de llamadas figura luhn+_compact
     tools_called = [item["tool"] for item in res.data["tool_history"]]
     assert "luhn+_compact" in tools_called
+
+
+def test_template_auto_reparar_scraper_compiles():
+    graph_dict = get_template("auto-reparar-scraper")
+    assert graph_dict is not None
+    assert graph_dict["name"] == "auto-reparar-scraper"
+    assert len(graph_dict["nodes"]) == 3
+    assert len(graph_dict["edges"]) == 2
+
+    g = compiler.Graph.from_dict(graph_dict)
+    code = compiler.compile(g)
+    assert "def node_lector_web" in code
+    assert "def node_reparador_coder" in code
+    assert "def node_notificacion" in code
+    assert "runtime.http_call" in code
+    assert "runtime.coder_agent" in code
+    assert "runtime.telegram" in code
+
+    compiled_obj = compile(code, "<test_auto_reparar_scraper>", "exec")
+    assert compiled_obj is not None
+
+
+def test_template_sincronizar_docs_codigo_compiles():
+    graph_dict = get_template("sincronizar-docs-codigo")
+    assert graph_dict is not None
+    assert graph_dict["name"] == "sincronizar-docs-codigo"
+    assert len(graph_dict["nodes"]) == 3
+    assert len(graph_dict["edges"]) == 2
+
+    g = compiler.Graph.from_dict(graph_dict)
+    code = compiler.compile(g)
+    assert "def node_lector_git" in code
+    assert "def node_sincronizador_coder" in code
+    assert "def node_guardar_git" in code
+    assert "runtime.git_read" in code
+    assert "runtime.coder_agent" in code
+    assert "runtime.git_commit" in code
+
+    compiled_obj = compile(code, "<test_sincronizar_docs_codigo>", "exec")
+    assert compiled_obj is not None
 

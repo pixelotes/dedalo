@@ -275,6 +275,124 @@ TEMPLATES: tuple[Template, ...] = (
             [_edge("lector_git", "auditor_ia"), _edge("auditor_ia", "telegram")],
         ),
     ),
+    Template(
+        name="auto-reparar-scraper",
+        title="Auto-reparación de scrapers web con Coder",
+        description="Descarga el HTML actual de una web cuyo scraper ha fallado y utiliza el agente Coder para inspeccionar la nueva estructura y ajustar el selector local hasta validar la extracción.",
+        teaches="Uso del bucle ReAct multi-turno para mantenimiento adaptativo de scripts y scrapers.",
+        graph=_graph(
+            "auto-reparar-scraper",
+            [
+                _node(
+                    "lector_web",
+                    "input.http_call",
+                    {
+                        "url": "https://ejemplo.com/catalogo",
+                        "engine": "curl_cffi",
+                        "impersonate": "chrome",
+                    },
+                    x=60,
+                    y=140,
+                    label="Descargar HTML Objetivo",
+                ),
+                _node(
+                    "reparador_coder",
+                    "transform.coder",
+                    {
+                        "prompt": (
+                            "El scraper local en 'scrapers/extractor.py' no encuentra los elementos porque la página cambió su estructura HTML. "
+                            "En la entrada previa tienes el HTML actual descargado. Tareas:\n"
+                            "1. Usa 'grep' o 'read' para ver qué selector CSS o función se usa en 'scrapers/extractor.py'.\n"
+                            "2. Localiza en el HTML actual dónde residen ahora los títulos o datos a extraer.\n"
+                            "3. Usa 'edit' para actualizar el selector o la lógica en 'scrapers/extractor.py'.\n"
+                            "4. Ejecuta 'python3 scrapers/extractor.py' mediante 'bash' para comprobar que extrae datos con éxito.\n"
+                            "5. Si pasa, concluye con un resumen conciso de los cambios realizados."
+                        ),
+                        "tools_preset": "coding",
+                        "workspace_dir": ".",
+                        "max_turns": 6,
+                        "output_format": "text",
+                    },
+                    x=380,
+                    y=140,
+                    label="Agente Coder (Reparación)",
+                ),
+                _node(
+                    "notificacion",
+                    "output.telegram",
+                    {
+                        "chat_id": "TU_CHAT_ID",
+                        "secret": "TELEGRAM_BOT_TOKEN",
+                    },
+                    x=700,
+                    y=140,
+                    label="Aviso de Scraper Reparado",
+                ),
+            ],
+            [_edge("lector_web", "reparador_coder"), _edge("reparador_coder", "notificacion")],
+        ),
+    ),
+    Template(
+        name="sincronizar-docs-codigo",
+        title="Sincronización automática de documentación con Git y Coder",
+        description="Inspecciona los commits recientes con input.git, compara cambios de endpoints, argumentos o flags contra el README.md y actualiza la documentación automáticamente antes de crear el commit.",
+        teaches="Automatización de documentación viva mediante el agente programador y Git.",
+        graph=_graph(
+            "sincronizar-docs-codigo",
+            [
+                _node(
+                    "lector_git",
+                    "input.git",
+                    {
+                        "action": "diff",
+                        "repo_path": ".",
+                        "revision": "HEAD~1..HEAD",
+                        "path_filter": "*.py, *.sh, *.json",
+                        "max_chars": 6000,
+                    },
+                    x=60,
+                    y=140,
+                    label="Diff de Código Reciente",
+                ),
+                _node(
+                    "sincronizador_coder",
+                    "transform.coder",
+                    {
+                        "prompt": (
+                            "Analiza el parche de cambios (diff) recibido en la entrada previa. Tareas:\n"
+                            "1. Identifica si se han modificado endpoints en la API, opciones en la CLI o firmas de funciones públicas.\n"
+                            "2. Lee con 'read' el archivo 'README.md' o la documentación correspondiente.\n"
+                            "3. Si hay parámetros, endpoints o tablas desactualizadas, corrígelas con 'edit' manteniendo el formato y estilo existente.\n"
+                            "4. Si no hay discrepancias que requieran actualización en la documentación, no modifiques ningún archivo y responde 'Documentación al día'."
+                        ),
+                        "tools_preset": "coding",
+                        "workspace_dir": ".",
+                        "max_turns": 5,
+                        "output_format": "full",
+                    },
+                    x=360,
+                    y=140,
+                    label="Agente Coder (Sincronizar Docs)",
+                ),
+                _node(
+                    "guardar_git",
+                    "output.git",
+                    {
+                        "repo_path": ".",
+                        "message": "docs: actualizar documentación sincronizada con últimos cambios",
+                        "files": "README.md, docs/",
+                        "author_name": "Dedalo Docs Bot",
+                        "author_email": "bot@dedalo.local",
+                        "push": False,
+                    },
+                    x=680,
+                    y=140,
+                    label="Commit de Documentación",
+                ),
+            ],
+            [_edge("lector_git", "sincronizador_coder"), _edge("sincronizador_coder", "guardar_git")],
+        ),
+    ),
 )
 
 
