@@ -6840,5 +6840,69 @@ def teams_webhook(
     return NodeResult("ok", data={"sent": True, "title": card_title, "status_code": resp.status_code})
 
 
+# ---------------------------------------------------------------------------
+# Control de Flujo: Aprobación Humana (Approval Gate)
+# ---------------------------------------------------------------------------
+
+
+def human_approval(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    prompt_message: str = "¿Deseas autorizar la ejecución de este paso?",
+    on_reject: str = "skip",
+    auto_approve: bool = False,
+) -> NodeResult:
+    """Paso de aprobación / confirmación humana (Approval Gate).
+    En terminal solicita confirmación interactiva al usuario.
+    Admite los flags --yes / --non-interactive o DEDALO_AUTO_APPROVE=1 para saltarse la espera.
+    Si se aprueba, emite los datos recibidos intactos. Si se rechaza, emite SKIPPED o error."""
+    inp = Inputs(inputs)
+    first = inp.first_data()
+    raw_text = inp.text()
+
+    # 1. Comprobar si se ha habilitado auto-aprobación
+    env_auto = os.environ.get("DEDALO_AUTO_APPROVE", "").lower() in ("1", "true", "yes", "y")
+    ctx_auto = bool(getattr(ctx, "auto_approve", False))
+    if auto_approve or env_auto or ctx_auto:
+        return NodeResult("ok", data=first if first is not None else (raw_text or "Aprobado automáticamente"))
+
+    # 2. Comprobar si la sesión es interactiva (TTY en stdin)
+    is_interactive = sys.stdin and hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
+
+    if is_interactive:
+        preview = ""
+        if first is not None:
+            preview = json.dumps(first, ensure_ascii=False) if isinstance(first, (dict, list)) else str(first)
+            if len(preview) > 200:
+                preview = preview[:200] + "..."
+        elif raw_text:
+            preview = raw_text[:200] + ("..." if len(raw_text) > 200 else "")
+
+        border = "=" * 60
+        print(f"\n{border}\n⚠️  SOLICITUD DE APROBACIÓN HUMANA (Gate)\n{prompt_message}")
+        if preview:
+            print(f"📦 Datos a procesar: {preview}")
+        print(f"{border}")
+
+        try:
+            ans = input("👉 ¿Autorizas la ejecución? [s/N]: ").strip().lower()
+            confirmed = ans in ("s", "si", "y", "yes")
+        except (EOFError, KeyboardInterrupt):
+            confirmed = False
+            print("\n⛔ Cancelado por el usuario.")
+
+        if confirmed:
+            return NodeResult("ok", data=first if first is not None else (raw_text or "Aprobado"))
+
+    # Si no se confirmó o no era interactivo
+    if on_reject.lower() == "error":
+        msg = "Ejecución cancelada por el usuario en el paso de aprobación" if is_interactive else "El paso de aprobación requiere terminal interactiva o flag --yes / --non-interactive"
+        return NodeResult("error", error=msg)
+
+    return SKIPPED
+
+
+
 
 

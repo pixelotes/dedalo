@@ -324,6 +324,35 @@ def test_secops_and_network_nodes_compilation():
     assert "def run(ctx):" in standalone
 
 
+def test_approval_node_compilation():
+    g = compiler.Graph(
+        name="pipeline_with_approval",
+        nodes=[
+            _node("hook", "input.webhook"),
+            _node("gate", "transform.approval", {"prompt_message": "¿Continuar con despliegue?", "on_reject": "skip"}),
+            _node("alert", "output.alert", {"text": "Desplegado"}),
+        ],
+        edges=[
+            _edge("hook", "gate", "ok"),
+            _edge("gate", "alert", "ok"),
+        ],
+    )
+    src = compiler.compile(g)
+    assert "def run(ctx):" in src
+    assert "runtime.human_approval" in src
+
+    ns = {}
+    exec(src, ns)
+    assert callable(ns["run"])
+
+    standalone = compiler.compile_standalone(g)
+    assert "def human_approval(" in standalone
+    assert "--yes" in standalone
+    assert "--non-interactive" in standalone
+    assert "def run(ctx):" in standalone
+
+
+
 
 
 

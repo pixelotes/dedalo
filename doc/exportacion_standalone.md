@@ -70,6 +70,18 @@ Una vez descargado el script (ej. `auditoria_k8s.py`), puedes ejecutarlo en cual
 python3 auditoria_k8s.py
 ```
 
+#### Flags y Argumentos de Línea de Comandos en Scripts Autónomos
+
+Los scripts generados incorporan un analizador de argumentos estándar (`argparse`) con los siguientes switches:
+- `-i / --input <json|texto>`: Inyecta un payload o datos directamente al primer nodo del flujo.
+- `-f / --input-file <ruta>`: Lee el archivo especificado y lo inyecta como entrada.
+- `-j / --json`: Formatea la salida final del flujo como un objeto JSON estructurado por nodo.
+- `-v / --verbose`: Muestra trazas detalladas y tiempos de ejecución paso a paso en `stderr`.
+- `-y / --yes / --non-interactive`: **Auto-aprobación en gates humanos**. En flujos que incluyan nodos de confirmación (`transform.approval`), aprueba automáticamente la ejecución sin solicitar entrada interactiva en la terminal (ideal para runners de GitHub Actions, GitLab CI, cron o Docker).
+- `--create-venv`: Crea automáticamente un entorno virtual Python local e instala los paquetes necesarios (especificados vía PEP 723).
+- Flags dinámicos de secretos (`--secret-<nombre>`): Si el flujo utiliza secretos guardados, pueden pasarse por CLI o variables de entorno (`DEDALO_SECRET_<NOMBRE>`).
+- Flags dinámicos de LLM (`--llm-url`, `--llm-model`, `--llm-key`): Si el flujo contiene nodos con agentes o LLMs.
+
 ### 4.2. Planificación con Cron del Sistema
 Para automatizar la ejecución periódica sin servicios en segundo plano:
 ```cron

@@ -206,3 +206,57 @@ def test_api_export_standalone_py_endpoint(tmp_path, monkeypatch):
     res_alt = client.get("/api/flow/export-py?id=flujo-exportable")
     assert res_alt.status_code == 200
     assert res_alt.text == res.text
+
+
+def test_standalone_approval_flags(tmp_path):
+    g = compiler.Graph(
+        name="test_approval_flags",
+        nodes=[
+            _node("hook", "input.webhook"),
+            _node("gate", "transform.approval", {"prompt_message": "¿Proceder?"}),
+            _node("tmpl", "transform.template", {"template": "Aprobado: {status}"}),
+        ],
+        edges=[_edge("hook", "gate"), _edge("gate", "tmpl")],
+    )
+    src = compiler.compile_standalone(g)
+    script_path = tmp_path / "flujo_approval.py"
+    script_path.write_text(src, encoding="utf-8")
+
+    payload = json.dumps({"status": "deploy_prod"})
+
+    # 1. Sin flag en entorno no interactivo (stdin es pipe no-tty) -> debe omitirse (SKIPPED)
+    res_reject = subprocess.run(
+        [sys.executable, str(script_path), "--json", "-i", payload],
+        capture_output=True,
+        text=True,
+    )
+    assert res_reject.returncode == 0
+    data_reject = json.loads(res_reject.stdout)
+    assert data_reject["gate"]["status"] == "skipped"
+    # El nodo downstream (tmpl) debe haberse omitido
+    assert data_reject["tmpl"]["status"] == "skipped"
+
+    # 2. Con flag --yes -> se aprueba automáticamente
+    res_yes = subprocess.run(
+        [sys.executable, str(script_path), "--json", "--yes", "-i", payload],
+        capture_output=True,
+        text=True,
+    )
+    assert res_yes.returncode == 0
+    data_yes = json.loads(res_yes.stdout)
+    assert data_yes["gate"]["status"] == "ok"
+    assert data_yes["tmpl"]["status"] == "ok"
+    assert data_yes["tmpl"]["data"] == "Aprobado: deploy_prod"
+
+    # 3. Con flag --non-interactive -> alias exacto de --yes
+    res_non_interactive = subprocess.run(
+        [sys.executable, str(script_path), "--json", "--non-interactive", "-i", payload],
+        capture_output=True,
+        text=True,
+    )
+    assert res_non_interactive.returncode == 0
+    data_non_interactive = json.loads(res_non_interactive.stdout)
+    assert data_non_interactive["gate"]["status"] == "ok"
+    assert data_non_interactive["tmpl"]["status"] == "ok"
+    assert data_non_interactive["tmpl"]["data"] == "Aprobado: deploy_prod"
+

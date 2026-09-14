@@ -1279,6 +1279,28 @@ NODE_TYPES: dict[str, NodeSpec] = {
             "per_item": "Si la entrada es una lista, aplica el mapeo a cada elemento individualmente.",
         },
     ),
+    "transform.approval": NodeSpec(
+        category="transform",
+        runtime_fn="human_approval",
+        optional={
+            "prompt_message": "¿Deseas autorizar la ejecución de este paso?",
+            "on_reject": "skip",
+            "auto_approve": False,
+        },
+        label="Aprobación Humana (Approval Gate)",
+        output="mismos datos si se aprueba, o SKIPPED si se rechaza",
+        choices={
+            "on_reject": [
+                {"value": "skip", "label": "Omitir siguientes nodos (SKIPPED)"},
+                {"value": "error", "label": "Detener con Error (Abortar flujo)"},
+            ],
+        },
+        help={
+            "prompt_message": "Pregunta o mensaje de advertencia que se mostrará al operador en la consola.",
+            "on_reject": "Acción si el usuario rechaza la aprobación o no hay terminal interactiva (skip/error).",
+            "auto_approve": "Si se activa, aprueba automáticamente sin preguntar (sobreescribible con --yes / --non-interactive).",
+        },
+    ),
     "transform.merge": NodeSpec(
         category="transform",
         runtime_fn="merge",
@@ -2152,6 +2174,7 @@ def compile_standalone(graph: Graph) -> str:
         "    started_at: float = field(default_factory=time.time)",
         "    payload: Any = None",
         "    headers: dict[str, str] = field(default_factory=dict)",
+        "    auto_approve: bool = False",
         "",
         "class _SecretsShim:",
         "    @staticmethod",
@@ -2305,6 +2328,14 @@ def compile_standalone(graph: Graph) -> str:
         '        dest="input_file",',
         '        help="Ruta a un archivo cuyo contenido se usará como entrada para el flujo.",',
         "    )",
+        "    parser.add_argument(",
+        '        "--yes",',
+        '        "-y",',
+        '        "--non-interactive",',
+        '        dest="auto_approve",',
+        '        action="store_true",',
+        '        help="Aprueba automáticamente pasos que requieran confirmación humana (sin preguntar de forma interactiva).",',
+        "    )",
     ]
 
     # Argumentos de LLM si se detecta uso
@@ -2421,7 +2452,7 @@ def compile_standalone(graph: Graph) -> str:
         "        except Exception:",
         "            pass",
         "",
-        f"    ctx = FlowContext(flow_name={flow_name!r}, payload=payload)",
+        f"    ctx = FlowContext(flow_name={flow_name!r}, payload=payload, auto_approve=bool(getattr(args, 'auto_approve', False)))",
         "    t0 = time.time()",
         "    try:",
         "        results = run(ctx)",

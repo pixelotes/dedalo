@@ -1721,6 +1721,58 @@ def test_teams_webhook(monkeypatch):
     assert recorded["json"]["potentialAction"][0]["name"] == "Ver en Jira"
 
 
+def test_human_approval_interactive_and_auto(monkeypatch):
+    import builtins
+    from types import SimpleNamespace
+
+    inp = runtime.NodeResult("ok", data={"action": "deploy_prod", "version": "1.0.4"})
+
+    # 1. Auto-aprobación vía parámetro
+    r_auto = runtime.human_approval(None, [inp], auto_approve=True)
+    assert r_auto.ok
+    assert r_auto.data["action"] == "deploy_prod"
+
+    # 2. Auto-aprobación vía contexto (simulando flag --yes / --non-interactive)
+    ctx_yes = SimpleNamespace(auto_approve=True)
+    r_ctx = runtime.human_approval(ctx_yes, [inp])
+    assert r_ctx.ok
+    assert r_ctx.data["version"] == "1.0.4"
+
+    # 3. Auto-aprobación vía variable de entorno DEDALO_AUTO_APPROVE
+    monkeypatch.setenv("DEDALO_AUTO_APPROVE", "1")
+    r_env = runtime.human_approval(None, [inp])
+    assert r_env.ok
+    monkeypatch.delenv("DEDALO_AUTO_APPROVE", raising=False)
+
+    # 4. Modo interactivo simulado con confirmación afirmativa
+    monkeypatch.setattr(runtime.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(builtins, "input", lambda prompt="": "s")
+
+    r_yes = runtime.human_approval(None, [inp], prompt_message="¿Confirmar?")
+    assert r_yes.ok
+    assert r_yes.data["action"] == "deploy_prod"
+
+    # 5. Modo interactivo con rechazo (on_reject="skip")
+    monkeypatch.setattr(builtins, "input", lambda prompt="": "n")
+    r_no = runtime.human_approval(None, [inp], on_reject="skip")
+    assert r_no is runtime.SKIPPED
+
+    # 6. Modo interactivo con rechazo (on_reject="error")
+    r_err = runtime.human_approval(None, [inp], on_reject="error")
+    assert not r_err.ok
+    assert "cancelada por el usuario" in r_err.error
+
+    # 7. Modo no interactivo (sin TTY) y sin flag --yes
+    monkeypatch.setattr(runtime.sys.stdin, "isatty", lambda: False)
+    r_non_tty_skip = runtime.human_approval(None, [inp], on_reject="skip")
+    assert r_non_tty_skip is runtime.SKIPPED
+
+    r_non_tty_err = runtime.human_approval(None, [inp], on_reject="error")
+    assert not r_non_tty_err.ok
+    assert "requiere terminal interactiva" in r_non_tty_err.error
+
+
+
 
 
 

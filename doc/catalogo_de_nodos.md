@@ -1,8 +1,8 @@
 # Catálogo Completo de Nodos de Dédalo
 
-Dédalo cuenta con **71 nodos modulares** categorizados en tres familias:
+Dédalo cuenta con **72 nodos modulares** categorizados en tres familias:
 - **Entradas (`input.*`)**: 27 nodos para ingerir datos desde APIs, servicios, colas, hardware, repositorios o archivos.
-- **Transformaciones (`transform.*`)**: 27 nodos para limpiar, filtrar, agregar, calcular, deduplicar, auditar vulnerabilidades (CVE/SBOM), escanear secretos (DLP), mapear datos o enriquecerlos con algoritmos locales o agentes LLM.
+- **Transformaciones (`transform.*`)**: 28 nodos para limpiar, filtrar, agregar, calcular, deduplicar, auditar vulnerabilidades (CVE/SBOM), escanear secretos (DLP), mapear datos, puertas de aprobación humana o enriquecerlos con algoritmos locales o agentes LLM.
 - **Salidas (`output.*`)**: 17 nodos para persistir evidencias, abrir incidencias, actualizar wikis, enviar alertas a mensajería (incluyendo Microsoft Teams) o ejecutar acciones.
 
 ---
@@ -164,6 +164,16 @@ Dédalo cuenta con **71 nodos modulares** categorizados en tres familias:
 ### `transform.threshold` y `transform.router`
 - **Etiquetas**: Control de Flujo Condicional.
 - **Descripción**: `threshold` detiene la ejecución emitiendo el centinela `SKIPPED` si un valor no supera los límites configurados; `router` bifurca la salida hacia diferentes ramas según reglas de condición.
+
+### `transform.approval`
+- **Etiqueta**: Aprobación Humana (Approval Gate).
+- **Descripción**: Puerta de validación humana para flujos críticos (despliegues a producción, aislamiento de hosts comprometidos, borrado o remediación). En modo interactivo, pausa la ejecución y solicita confirmación al operador en la consola (`[s/N]`), mostrando una previsualización de los datos entrantes.
+- **Modos de funcionamiento**:
+  - **Aprobado**: Emite los datos de entrada intactos hacia los nodos downstream.
+  - **Rechazado**: Según `on_reject`, emite el centinela `SKIPPED` (omitiendo el resto de la rama de forma limpia) o detiene el flujo con error (`error`).
+  - **Pipelines CI/CD / No Interactivo**: Permite omitir la espera interactiva usando los flags `--yes`, `-y` o `--non-interactive` en scripts exportados, la variable de entorno `DEDALO_AUTO_APPROVE=1`, o el parámetro de configuración `auto_approve`. Si se ejecuta en un entorno sin terminal interactiva (pipe/CI) y sin flags de auto-aprobación, se rechaza de forma segura.
+- **Parámetros**: `prompt_message` (pregunta o advertencia a mostrar), `on_reject` (`"skip"` o `"error"`), `auto_approve` (`true`/`false`).
+- **Salida**: Datos recibidos intactos en caso de éxito, o centinela `SKIPPED` / `error`.
 
 ### `transform.template`, `transform.table`, `transform.datetime`, `transform.aggregate`, `transform.keywords_rake`, `transform.delay`, `transform.merge`
 - **Descripción**: Operaciones auxiliares para formateo de plantillas, tablas Markdown/HTML, cálculos temporales con zona horaria, agregados estadísticos (suma, media, percentiles), extracción de palabras clave con RAKE, retardos y combinación de múltiples ramas.
