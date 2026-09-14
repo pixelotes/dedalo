@@ -2811,6 +2811,11 @@ function renderFlowInspector(body) {
   btnExportZip.innerHTML = '<svg class="ic" width="13" height="13"><use href="#i-download"/></svg> Exportar este flujo (.zip)';
   btnExportZip.onclick = () => exportFlowZip(state.graph.name);
 
+  const btnExportPy = document.createElement('button');
+  btnExportPy.className = 'btn secondary sm';
+  btnExportPy.innerHTML = '<svg class="ic" width="13" height="13"><use href="#i-download"/></svg> Exportar script (.py)';
+  btnExportPy.onclick = () => exportFlowPy(state.graph.name);
+
   const btnDelFlow = document.createElement('button');
   btnDelFlow.className = 'btn secondary sm';
   btnDelFlow.style.color = 'var(--port-err)';
@@ -2823,6 +2828,7 @@ function renderFlowInspector(body) {
   actBox.appendChild(btnRun);
   actBox.appendChild(btnAdvSched);
   actBox.appendChild(btnExportZip);
+  actBox.appendChild(btnExportPy);
   actBox.appendChild(btnDelFlow);
   body.appendChild(actBox);
 }
@@ -3013,6 +3019,21 @@ function exportFlowZip(flowId) {
   link.click();
   document.body.removeChild(link);
   toast(`Descargando ${fid}.zip`, 'ok');
+}
+
+function exportFlowPy(flowId) {
+  const fid = (flowId || state.graph.name || '').trim();
+  if (!fid) {
+    toast('Guarda el flujo antes de exportarlo', 'err');
+    return;
+  }
+  const link = document.createElement('a');
+  link.href = `/api/flow/export-py?id=${encodeURIComponent(fid)}`;
+  link.download = `${fid}.py`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  toast(`Descargando ${fid}.py`, 'ok');
 }
 
 function exportAllFlowsZip() {

@@ -205,4 +205,59 @@ def test_n8n_nodes_compile():
     assert callable(ns["run"])
 
 
+def test_secops_pipeline_compilation():
+    g = compiler.Graph(
+        name="secops_pipeline",
+        nodes=[
+            _node("telemetry", "input.telemetry", {"incident_id": "inc-101", "resource": "k8s/cluster-a"}),
+            _node("vault", "output.evidence_vault", {"compress": True}),
+            _node("analyzer", "transform.analyzer", {"sanitize_secrets": True}),
+            _node("planner", "transform.planner", {"output_format": "markdown"}),
+        ],
+        edges=[
+            _edge("telemetry", "vault", "ok"),
+            _edge("vault", "analyzer", "ok"),
+            _edge("analyzer", "planner", "ok"),
+        ],
+    )
+    src = compiler.compile(g)
+    assert "def run(ctx):" in src
+    assert "runtime.telemetry_input" in src
+    assert "runtime.evidence_vault" in src
+    assert "runtime.analyzer_agent" in src
+    assert "runtime.planner_agent" in src
+
+    ns = {}
+    exec(src, ns)
+    assert callable(ns["run"])
+
+
+def test_atlassian_nodes_compilation():
+    g = compiler.Graph(
+        name="atlassian_pipeline",
+        nodes=[
+            _node("jira_in", "input.jira_issues", {"instance_url": "https://test.atlassian.net", "jql": "project=SEC"}),
+            _node("conf_in", "input.confluence_pages", {"instance_url": "https://test.atlassian.net/wiki", "space_key": "SEC"}),
+            _node("jira_out", "output.jira_issue", {"instance_url": "https://test.atlassian.net", "project_key": "SEC"}),
+            _node("conf_out", "output.confluence_page", {"instance_url": "https://test.atlassian.net/wiki", "space_key": "SEC"}),
+        ],
+        edges=[
+            _edge("jira_in", "jira_out", "ok"),
+            _edge("conf_in", "conf_out", "ok"),
+        ],
+    )
+    src = compiler.compile(g)
+    assert "def run(ctx):" in src
+    assert "runtime.jira_issues_input" in src
+    assert "runtime.confluence_pages_input" in src
+    assert "runtime.jira_issue_output" in src
+    assert "runtime.confluence_page_output" in src
+
+    ns = {}
+    exec(src, ns)
+    assert callable(ns["run"])
+
+
+
+
 

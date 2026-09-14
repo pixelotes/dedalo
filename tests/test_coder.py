@@ -314,6 +314,7 @@ def test_coder_agent_triggers_luhn_compaction(tmp_path: Path):
             tools_preset="coding",
             max_turns=3,
             max_context=500,  # Umbral bajo para forzar compactación al 90% (450 tokens)
+            compaction_engine="luhn+",
             model="qwen2.5-coder",
         )
 
@@ -403,4 +404,256 @@ def test_template_generar_tests_coder_compiles():
 
     compiled_obj = compile(code, "<test_generar_tests_coder>", "exec")
     assert compiled_obj is not None
+
+
+def test_compact_conversation_history_with_blackhole():
+    messages = [
+        {"role": "system", "content": "Eres un programador."},
+        {"role": "user", "content": "Refactoriza el módulo de autenticación."},
+        {
+            "role": "assistant",
+            "content": "Voy a inspeccionar auth.py",
+            "tool_calls": [{
+                "id": "c1",
+                "type": "function",
+                "function": {"name": "read", "arguments": json.dumps({"path": "src/auth.py", "start_line": 1, "end_line": 50})},
+            }],
+        },
+        {"role": "tool", "name": "read", "content": "def login(): pass\n" * 20},
+        {
+            "role": "assistant",
+            "content": "Editando auth.py",
+            "tool_calls": [{
+                "id": "c2",
+                "type": "function",
+                "function": {"name": "edit", "arguments": json.dumps({"path": "src/auth.py", "old_str": "inexistente", "new_str": "nuevo"})},
+            }],
+        },
+        {"role": "tool", "name": "edit", "content": "Error: No se encontró 'old_str' en src/auth.py"},
+        {
+            "role": "assistant",
+            "content": "Ejecutando tests",
+            "tool_calls": [{
+                "id": "c3",
+                "type": "function",
+                "function": {"name": "bash", "arguments": json.dumps({"command": "pytest tests/test_auth.py"})},
+            }],
+        },
+        {"role": "tool", "name": "bash", "content": "PASSED tests/test_auth.py [Código de salida: 0]"},
+        {"role": "assistant", "content": "¿Deseas que continúe?", "tool_calls": []},
+    ]
+
+    tokens_before = _estimate_messages_tokens(messages)
+    assert tokens_before > 150
+
+    compacted, did_compact = _compact_conversation_history(messages, context_window=180, engine="blackhole")
+    assert did_compact is True
+
+    summary_msg = compacted[2]
+    assert summary_msg["role"] == "user"
+    content = summary_msg["content"]
+    assert "[Memoria resumida del progreso previo mediante Blackhole" in content
+    assert "### Objetivo Principal" in content
+    assert "Refactoriza el módulo de autenticación." in content
+    assert "### Archivos y Rutas" in content
+    assert "src/auth.py" in content
+    assert "### Registro de Acciones Recientes" in content
+    assert "read('src/auth.py'" in content
+    assert "edit('src/auth.py')" in content
+    assert "### Errores e Incidencias Detectadas" in content
+    assert "No se encontró 'old_str'" in content
+
+
+def test_compact_conversation_history_with_blackhole_llm():
+    messages = [
+        {"role": "system", "content": "Eres un programador."},
+        {"role": "user", "content": "Agrega tests para la base de datos."},
+        {
+            "role": "assistant",
+            "content": "Escribiendo test_db.py",
+            "tool_calls": [{
+                "id": "c1",
+                "type": "function",
+                "function": {"name": "write", "arguments": json.dumps({"path": "tests/test_db.py", "content": "import pytest"})},
+            }],
+        },
+        {"role": "tool", "name": "write", "content": "guardado 'tests/test_db.py'\n" * 15},
+        {
+            "role": "assistant",
+            "content": "Continuando con la configuración",
+            "tool_calls": [{
+                "id": "c2",
+                "type": "function",
+                "function": {"name": "bash", "arguments": json.dumps({"command": "pytest"})},
+            }],
+        },
+        {"role": "tool", "name": "bash", "content": "1 passed in 0.05s [Código de salida: 0]"},
+        {"role": "assistant", "content": "Listo para continuar.", "tool_calls": []},
+    ]
+
+    mock_client = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": "- Se implementó el archivo tests/test_db.py\n- Se verificó compatibilidad SQLite WAL",
+            }
+        }]
+    }
+    mock_client.post.return_value = mock_resp
+
+    compacted, did_compact = _compact_conversation_history(
+        messages,
+        context_window=100,
+        engine="blackhole_llm",
+        client=mock_client,
+        endpoint="http://localhost:11434/v1/chat/completions",
+        headers={},
+        target_model="local-model",
+        temperature=0.1,
+    )
+    assert did_compact is True
+    summary_msg = compacted[2]
+    content = summary_msg["content"]
+    assert "[Memoria resumida del progreso previo mediante Blackhole con LLM" in content
+    assert "### Reflexiones y Decisiones Clave (LLM local)" in content
+    assert "Se verificó compatibilidad SQLite WAL" in content
+
+
+def test_coder_agent_triggers_blackhole_compaction(tmp_path: Path):
+    large_code = "\n".join([f"def funcion_{i}(): return {i}" for i in range(120)])
+    (tmp_path / "modulo.py").write_text(large_code, encoding="utf-8")
+
+    responses = [
+        MagicMock(
+            status_code=200,
+            json=lambda: {
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "Leyendo modulo",
+                        "tool_calls": [{
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "read",
+                                "arguments": json.dumps({"path": "modulo.py"}),
+                            },
+                        }],
+                    },
+                }],
+            },
+        ),
+        MagicMock(
+            status_code=200,
+            json=lambda: {
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "Análisis finalizado con éxito.",
+                        "tool_calls": None,
+                    },
+                }],
+            },
+        ),
+    ]
+
+    with patch("httpx.Client.post", side_effect=responses):
+        res = coder_agent(
+            None,
+            [],
+            prompt="Audita modulo.py",
+            workspace_dir=str(tmp_path),
+            tools_preset="coding",
+            max_turns=3,
+            max_context=450,
+            compaction_engine="blackhole",
+            model="qwen2.5-coder",
+        )
+
+    assert res.ok is True
+    assert res.data["completed"] is True
+    assert res.data["compactions_count"] >= 1
+    assert res.data["compaction_engine"] == "blackhole"
+    tools_called = [item["tool"] for item in res.data["tool_history"]]
+    assert "blackhole_compact" in tools_called
+
+
+def test_coder_agent_loop_detection_consecutive_failures(tmp_path: Path):
+    (tmp_path / "app.py").write_text("def hello(): pass\n", encoding="utf-8")
+
+    def fail_edit_call(call_id):
+        return {
+            "id": call_id,
+            "type": "function",
+            "function": {
+                "name": "edit",
+                "arguments": json.dumps({
+                    "path": "app.py",
+                    "old_str": "string_que_no_existe",
+                    "new_str": "nuevo",
+                }),
+            },
+        }
+
+    recorded_requests = []
+
+    def mock_post(url, headers, json):
+        recorded_requests.append(json)
+        current_turn = len(recorded_requests)
+        if current_turn in (1, 2, 3):
+            # Turnos 1, 2 y 3: el modelo insiste en el mismo edit fallido
+            return MagicMock(
+                status_code=200,
+                json=lambda: {
+                    "choices": [{
+                        "message": {
+                            "role": "assistant",
+                            "content": f"Intento de edición {current_turn}",
+                            "tool_calls": [fail_edit_call(f"call_{current_turn}")],
+                        }
+                    }]
+                },
+            )
+        else:
+            # Turno 4: el modelo ve la alerta de bucle y se detiene
+            return MagicMock(
+                status_code=200,
+                json=lambda: {
+                    "choices": [{
+                        "message": {
+                            "role": "assistant",
+                            "content": "He visto la advertencia de bucle, me detengo para revisar.",
+                            "tool_calls": None,
+                        }
+                    }]
+                },
+            )
+
+    with patch("httpx.Client.post", side_effect=mock_post):
+        res = coder_agent(
+            None,
+            [],
+            prompt="Corrige app.py",
+            workspace_dir=str(tmp_path),
+            tools_preset="coding",
+            max_turns=5,
+            max_context=32768,
+            model="qwen2.5-coder",
+        )
+
+    assert res.ok is True
+    assert res.data["completed"] is True
+
+    # Comprobar que en el historial figura loop_detected_alert
+    tool_names = [item["tool"] for item in res.data["tool_history"]]
+    assert "loop_detected_alert" in tool_names
+
+    # Comprobar que en el cuarto request (Turno 4), el prompt contiene la alerta de bucle
+    turn4_messages = recorded_requests[3]["messages"]
+    user_alerts = [m["content"] for m in turn4_messages if m.get("role") == "user" and "[Aviso de bucle del sistema]" in m.get("content", "")]
+    assert len(user_alerts) >= 1
+    assert "La herramienta 'edit' ha fallado 3 veces consecutivas" in user_alerts[0]
 

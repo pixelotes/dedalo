@@ -264,6 +264,21 @@ def _extract_required_secrets(graph_dict: dict[str, Any]) -> list[str]:
     return sorted(secrets_set)
 
 
+def export_flow_standalone_py(flow_id: str) -> str:
+    """Exporta un flujo a un script Python autónomo y ejecutable por CLI."""
+    s = slug(flow_id)
+    flow_data = load_flow(s)
+    if not flow_data:
+        raise FileNotFoundError(f"Flujo «{flow_id}» no encontrado.")
+
+    graph_dict = flow_data.get("graph", {})
+    graph = compiler.Graph.from_dict(graph_dict)
+    if not graph.name:
+        graph.name = s
+
+    return compiler.compile_standalone(graph)
+
+
 def export_flow_zip(flow_id: str) -> bytes:
     """Exporta un flujo a un archivo ZIP en memoria con su grafo, metadatos y manifiesto."""
     s = slug(flow_id)

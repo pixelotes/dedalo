@@ -6,6 +6,7 @@ Los scripts compilados invocan directamente estas funciones sin sobrecarga de ru
 
 from __future__ import annotations
 
+import base64
 import csv
 import ctypes
 import datetime
@@ -13,6 +14,7 @@ import difflib
 import email
 import email.header
 import gc
+import gzip
 import hashlib
 import html
 import imaplib
@@ -630,6 +632,222 @@ def directory_scan(
         return NodeResult("ok", data=files)
     except Exception as exc:
         return NodeResult("error", error=f"Error escaneando directorio: {exc}")
+
+
+def telemetry_input(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    incident_id: str = "",
+    resource: str = "",
+    telemetry_json: str = "",
+    file_path: str = "",
+) -> NodeResult:
+    """Recolecta telemetría de incidente desde JSON directo, archivo local o entradas."""
+    inp = Inputs(inputs)
+    payload_data: Any = None
+
+    # 1. Prioridad: archivo si se especifica
+    if file_path.strip():
+        p = Path(file_path.strip())
+        if not p.exists() or not p.is_file():
+            return NodeResult("error", error=f"Fichero de telemetría no encontrado: {file_path}")
+        try:
+            content = p.read_text(encoding="utf-8", errors="replace")
+            try:
+                payload_data = json.loads(content)
+            except Exception:
+                payload_data = content
+        except Exception as exc:
+            return NodeResult("error", error=f"Error leyendo telemetría de {file_path}: {exc}")
+
+    # 2. JSON inline si no hubo archivo
+    elif telemetry_json.strip():
+        raw_txt = telemetry_json.strip()
+        try:
+            payload_data = json.loads(raw_txt)
+        except Exception:
+            payload_data = raw_txt
+
+    # 3. Datos provenientes de nodos previos si no hay ni archivo ni JSON
+    else:
+        first = inp.first_data()
+        payload_data = first if first is not None else inp.text()
+
+    if payload_data is None:
+        payload_data = {}
+
+    inc_id = incident_id.strip()
+    if not inc_id:
+        if isinstance(payload_data, dict) and payload_data.get("incident_id"):
+            inc_id = str(payload_data["incident_id"])
+        elif isinstance(payload_data, dict) and payload_data.get("id"):
+            inc_id = str(payload_data["id"])
+        else:
+            inc_id = f"inc-{int(time.time())}"
+
+    res_name = resource.strip()
+    if not res_name and isinstance(payload_data, dict):
+        res_name = str(payload_data.get("resource") or payload_data.get("target") or "")
+
+    result_bundle = {
+        "incident_id": inc_id,
+        "resource": res_name,
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "telemetry": payload_data,
+    }
+    return NodeResult("ok", data=result_bundle)
+
+
+def _build_atlassian_auth_header(email: str, secret_name: str) -> dict[str, str]:
+    """Construye cabeceras HTTP con Basic Auth (email:api_token) para Atlassian Cloud."""
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    clean_email = email.strip()
+    token = secrets.get(secret_name) if secret_name else ""
+    if clean_email and token:
+        cred = f"{clean_email}:{token}"
+        b64_cred = base64.b64encode(cred.encode("utf-8")).decode("ascii")
+        headers["Authorization"] = f"Basic {b64_cred}"
+    elif token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def jira_issues_input(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    instance_url: str,
+    email: str = "",
+    secret: str = "",
+    jql: str = "",
+    fields: str = "summary,status,priority,assignee,created,updated,description",
+    max_results: int = 20,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> NodeResult:
+    """Busca y extrae issues de Jira Cloud mediante JQL usando la REST API oficial."""
+    base_url = instance_url.strip().rstrip("/")
+    if not base_url:
+        return NodeResult("error", error="Falta la URL de la instancia de Jira (ej. https://mi-dominio.atlassian.net)")
+
+    headers = _build_atlassian_auth_header(email, secret)
+    endpoint = f"{base_url}/rest/api/3/search"
+
+    field_list = [f.strip() for f in fields.split(",") if f.strip()] if fields else ["summary", "status", "priority"]
+    clean_jql = jql.strip()
+    if not clean_jql:
+        clean_jql = "order by created DESC"
+
+    payload: dict[str, Any] = {
+        "jql": clean_jql,
+        "fields": field_list,
+        "maxResults": min(max(1, int(max_results or 20)), 100),
+    }
+
+    try:
+        with httpx.Client(timeout=float(timeout)) as client:
+            resp = client.post(endpoint, headers=headers, json=payload)
+            if resp.status_code >= 400:
+                return NodeResult("error", error=f"Jira API error ({resp.status_code}): {resp.text[:300]}")
+            data = resp.json()
+            raw_issues = data.get("issues", [])
+            total = data.get("total", len(raw_issues))
+
+            simplified_issues = []
+            for issue in raw_issues:
+                f = issue.get("fields") or {}
+                simplified_issues.append({
+                    "key": issue.get("key"),
+                    "id": issue.get("id"),
+                    "url": f"{base_url}/browse/{issue.get('key')}",
+                    "summary": f.get("summary"),
+                    "status": (f.get("status") or {}).get("name"),
+                    "priority": (f.get("priority") or {}).get("name"),
+                    "assignee": (f.get("assignee") or {}).get("displayName"),
+                    "created": f.get("created"),
+                    "updated": f.get("updated"),
+                    "raw_fields": f,
+                })
+            return NodeResult("ok", data={
+                "total": total,
+                "count": len(simplified_issues),
+                "jql": clean_jql,
+                "issues": simplified_issues,
+            })
+    except Exception as exc:
+        return NodeResult("error", error=f"Error consultando Jira: {exc}")
+
+
+def confluence_pages_input(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    instance_url: str,
+    email: str = "",
+    secret: str = "",
+    cql: str = "",
+    space_key: str = "",
+    title: str = "",
+    limit: int = 10,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> NodeResult:
+    """Busca y lee páginas de Confluence Cloud mediante CQL o parámetros de espacio/título."""
+    base_url = instance_url.strip().rstrip("/")
+    if not base_url:
+        return NodeResult("error", error="Falta la URL de la instancia de Confluence (ej. https://mi-dominio.atlassian.net/wiki)")
+
+    # Asegurar sufijo /wiki si no se incluyó en la URL de Atlassian
+    wiki_base = base_url if base_url.endswith("/wiki") else f"{base_url}/wiki"
+    headers = _build_atlassian_auth_header(email, secret)
+    endpoint = f"{wiki_base}/rest/api/content/search"
+
+    query_parts = []
+    if cql.strip():
+        query_parts.append(cql.strip())
+    else:
+        query_parts.append("type=page")
+        if space_key.strip():
+            query_parts.append(f'space="{space_key.strip()}"')
+        if title.strip():
+            query_parts.append(f'title ~ "{title.strip()}"')
+
+    final_cql = " AND ".join(query_parts)
+    params = {
+        "cql": final_cql,
+        "limit": min(max(1, int(limit or 10)), 50),
+        "expand": "body.storage,version,space",
+    }
+
+    try:
+        with httpx.Client(timeout=float(timeout)) as client:
+            resp = client.get(endpoint, headers=headers, params=params)
+            if resp.status_code >= 400:
+                return NodeResult("error", error=f"Confluence API error ({resp.status_code}): {resp.text[:300]}")
+            data = resp.json()
+            raw_results = data.get("results", [])
+
+            pages = []
+            for item in raw_results:
+                body_val = ((item.get("body") or {}).get("storage") or {}).get("value", "")
+                # Limpieza rápida de etiquetas XML de almacenamiento Confluence
+                clean_body = re.sub(r"<[^>]+>", " ", body_val)
+                clean_body = re.sub(r"\s+", " ", clean_body).strip()
+                pages.append({
+                    "id": item.get("id"),
+                    "title": item.get("title"),
+                    "space": (item.get("space") or {}).get("key"),
+                    "url": f"{wiki_base}{((item.get('_links') or {}).get('webui') or '')}",
+                    "version": (item.get("version") or {}).get("number"),
+                    "body_storage": body_val,
+                    "text_preview": clean_body[:2000],
+                })
+            return NodeResult("ok", data={
+                "total": data.get("size", len(pages)),
+                "cql": final_cql,
+                "pages": pages,
+            })
+    except Exception as exc:
+        return NodeResult("error", error=f"Error consultando Confluence: {exc}")
 
 
 def http_health(
@@ -1314,6 +1532,233 @@ def agent(
         return NodeResult("error", error=f"Error en llamada LLM: {exc}")
 
 
+_DEFAULT_ANALYZER_PROMPT = """Analiza la telemetría, eventos o logs proporcionados.
+Identifica la causa raíz del problema, clasifica la severidad (crítica, alta, media, baja o falso positivo),
+indica los componentes afectados y resume el hallazgo de forma clara y técnica.
+Devuelve un informe estructurado."""
+
+_DEFAULT_PLANNER_PROMPT = """A partir del diagnóstico y causa raíz proporcionados,
+genera un plan de acción paso a paso para resolver o mitigar la incidencia.
+Incluye pasos preventivos, verificaciones y comandos o configuraciones sugeridas (declarativas o seguras)."""
+
+_SECRET_MASK_PATTERNS = [
+    re.compile(r'(?i)(bearer\s+)[A-Za-z0-9_\-\.]{15,}'),
+    re.compile(r'(?i)(password|passwd|pwd|secret|api[_-]?key|token)\s*[:=]\s*["\']?([^"\'\s,;]{4,})["\']?'),
+]
+
+
+def _mask_secrets_in_text(text: str) -> str:
+    """Enmascara tokens, contraseñas y claves privadas en texto plano."""
+    if not text:
+        return ""
+    result = text
+    for pat in _SECRET_MASK_PATTERNS:
+        result = pat.sub(r'\1 [REDACTED]', result)
+    return result
+
+
+def analyzer_agent(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    prompt: str = "",
+    system_prompt: str = "",
+    llm: str = "",
+    model: str = "",
+    url: str = "",
+    secret: str = "",
+    temperature: float = 0.2,
+    tokens: int = DEFAULT_AGENT_TOKENS,
+    sanitize_secrets: bool = True,
+    per_item: bool = False,
+    as_field: str = "",
+    json_mode: bool = False,
+) -> NodeResult:
+    """Nodo Agente Analizador (diagnóstico y causa raíz sobre telemetría, alertas o incidencias)."""
+    inp = Inputs(inputs)
+    raw_text = inp.text()
+    first = inp.first_data()
+
+    if not raw_text and first is None:
+        return NodeResult("error", error="El nodo analizador requiere datos de entrada (telemetría o incidente)")
+
+    analysis_instruction = prompt.strip() or _DEFAULT_ANALYZER_PROMPT
+    sys_instruction = system_prompt.strip() or (
+        "Eres un analista senior de ciberseguridad e infraestructura (SecOps / SRE). "
+        "Tu objetivo es diagnosticar incidentes, identificar causas raíz con precisión "
+        "y evaluar impacto sin inventar hechos no respaldados por la evidencia."
+    )
+
+    overrides: dict[str, Any] = {
+        "url": url,
+        "model": model,
+        "secret": secret,
+        "temperature": temperature,
+    }
+    resolved = llms.resolve(name=llm, overrides=overrides)
+
+    # Extraer lista si viene de un nodo tipo input.jira_issues (dict con "issues")
+    items_to_process = None
+    if per_item:
+        if isinstance(first, list):
+            items_to_process = first
+        elif isinstance(first, dict) and isinstance(first.get("issues"), list):
+            items_to_process = first["issues"]
+        elif isinstance(first, dict) and isinstance(first.get("pages"), list):
+            items_to_process = first["pages"]
+
+    if per_item and items_to_process is not None:
+        results = []
+        field_name = as_field.strip() or "analysis"
+        for item in items_to_process[:MAX_ITEMS]:
+            item_str = json.dumps(item, ensure_ascii=False) if isinstance(item, (dict, list)) else str(item)
+            if sanitize_secrets:
+                item_str = _mask_secrets_in_text(item_str)
+            item_msg = f"{analysis_instruction}\n\n=== ELEMENTO / TICKET ===\n{item_str}"
+            try:
+                ans = call_llm(
+                    item_msg,
+                    system=sys_instruction,
+                    llm=llm,
+                    model=resolved["model"],
+                    url=resolved["url"],
+                    secret_name=resolved["secret"],
+                    tokens=tokens,
+                    temperature=float(resolved["temperature"]),
+                    json_mode=bool(json_mode),
+                )
+                if isinstance(item, dict):
+                    enriched = dict(item)
+                    enriched[field_name] = ans
+                    results.append(enriched)
+                else:
+                    results.append({"item": item, field_name: ans})
+            except Exception as exc:
+                return NodeResult("error", error=f"Error en llamada LLM per_item: {exc}")
+        return NodeResult("ok", data=results)
+
+    if sanitize_secrets:
+        raw_text = _mask_secrets_in_text(raw_text)
+
+    full_user_msg = f"{analysis_instruction}\n\n=== EVIDENCIA / TELEMETRÍA ===\n{raw_text}"
+
+    try:
+        ans = call_llm(
+            full_user_msg,
+            system=sys_instruction,
+            llm=llm,
+            model=resolved["model"],
+            url=resolved["url"],
+            secret_name=resolved["secret"],
+            tokens=tokens,
+            temperature=float(resolved["temperature"]),
+            json_mode=bool(json_mode),
+        )
+
+        incident_meta = {}
+        if isinstance(first, dict):
+            incident_meta = {
+                "incident_id": first.get("incident_id") or first.get("key"),
+                "resource": first.get("resource"),
+                "evidence_file": first.get("evidence_file") or first.get("vault_path"),
+                "evidence_sha256": first.get("evidence_sha256") or first.get("sha256"),
+            }
+
+        parsed_json = None
+        if json_mode:
+            try:
+                parsed_json = json.loads(ans)
+            except Exception:
+                pass
+
+        return NodeResult("ok", data={
+            "analysis": ans,
+            "parsed": parsed_json,
+            "meta": incident_meta,
+            "sanitized": sanitize_secrets,
+        })
+    except Exception as exc:
+        return NodeResult("error", error=f"Error en agente analizador: {exc}")
+
+
+def planner_agent(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    prompt: str = "",
+    system_prompt: str = "",
+    llm: str = "",
+    model: str = "",
+    url: str = "",
+    secret: str = "",
+    temperature: float = 0.2,
+    tokens: int = DEFAULT_AGENT_TOKENS,
+    output_format: str = "markdown",
+    json_mode: bool = False,
+) -> NodeResult:
+    """Nodo Agente Planificador (genera plan de acción, mitigación o remediación)."""
+    inp = Inputs(inputs)
+    first = inp.first_data()
+    raw_text = inp.text()
+
+    if not raw_text and not first:
+        return NodeResult("error", error="El nodo planificador requiere datos de entrada (diagnóstico previo)")
+
+    diagnosis_context = ""
+    if isinstance(first, dict) and "analysis" in first:
+        diagnosis_context = str(first["analysis"])
+    else:
+        diagnosis_context = raw_text
+
+    plan_instruction = prompt.strip() or _DEFAULT_PLANNER_PROMPT
+    sys_instruction = system_prompt.strip() or (
+        "Eres un arquitecto de operaciones y remediación de infraestructura y seguridad. "
+        "Diseñas planes de mitigación claros, seguros, verificables y paso a paso. "
+        "Diferencia siempre entre acciones de contención inmediata y soluciones definitivas."
+    )
+
+    user_msg = f"{plan_instruction}\n\n=== DIAGNÓSTICO / CAUSA RAÍZ ===\n{diagnosis_context}"
+    if output_format == "json" or json_mode:
+        user_msg += "\n\nResponde en formato JSON estructurado con los campos 'summary', 'immediate_steps', 'long_term_steps' y 'verification'."
+        json_mode = True
+
+    overrides: dict[str, Any] = {
+        "url": url,
+        "model": model,
+        "secret": secret,
+        "temperature": temperature,
+    }
+    resolved = llms.resolve(name=llm, overrides=overrides)
+
+    try:
+        ans = call_llm(
+            user_msg,
+            system=sys_instruction,
+            llm=llm,
+            model=resolved["model"],
+            url=resolved["url"],
+            secret_name=resolved["secret"],
+            tokens=tokens,
+            temperature=float(resolved["temperature"]),
+            json_mode=bool(json_mode),
+        )
+
+        parsed_plan = None
+        if json_mode:
+            try:
+                parsed_plan = json.loads(ans)
+            except Exception:
+                pass
+
+        return NodeResult("ok", data={
+            "plan": ans,
+            "parsed": parsed_plan,
+            "format": output_format,
+        })
+    except Exception as exc:
+        return NodeResult("error", error=f"Error en agente planificador: {exc}")
+
+
 # ---------------------------------------------------------------------------
 # Algoritmo Luhn+ y Resumen Léxico (Compartido)
 # ---------------------------------------------------------------------------
@@ -1445,12 +1890,170 @@ def _estimate_messages_tokens(messages: list[dict[str, Any]]) -> int:
     return max(1, int(total_chars / 3.5))
 
 
+def _is_tool_failure(tool_name: str, result_str: str) -> bool:
+    """Determina deterministamente si el resultado de una herramienta representa un fallo o error."""
+    if not result_str:
+        return False
+    r = result_str.strip()
+    if r.startswith("Error:") or r.startswith("Error ") or r.startswith("Error\n"):
+        return True
+    if "Error de seguridad" in r:
+        return True
+    if "No se encontró 'old_str'" in r or "aparece repetido" in r or ("aparece" in r and "veces en" in r):
+        return True
+    if "no está disponible o no está autorizada" in r:
+        return True
+    if tool_name == "bash":
+        match = re.search(r"\[Código de salida:\s*(-?\d+)\]", r)
+        if match and match.group(1) != "0":
+            return True
+        if "command not found" in r.lower() or "traceback (most recent call last)" in r.lower():
+            return True
+    return False
+
+
+def _extract_blackhole_summary(
+    middle: list[dict[str, Any]],
+    user_goal: str = "",
+) -> str:
+    """Extrae de forma 100% determinista un resumen estructurado (VCC) a partir de los turnos intermedios."""
+    files_modified: list[str] = []
+    files_read: list[str] = []
+    files_explored: list[str] = []
+    actions: list[str] = []
+    errors: list[str] = []
+    user_notes: list[str] = []
+
+    for m in middle:
+        role = m.get("role")
+        content = str(m.get("content") or "").strip()
+
+        if role == "user" and content:
+            user_notes.append(content[:160])
+
+        elif role == "assistant":
+            for call in m.get("tool_calls") or []:
+                fn = call.get("function", {})
+                fn_name = fn.get("name", "")
+                raw_args = fn.get("arguments", "{}")
+                if isinstance(raw_args, str):
+                    try:
+                        args = json.loads(raw_args)
+                    except Exception:
+                        args = {}
+                else:
+                    args = raw_args or {}
+
+                if fn_name in ("write", "edit"):
+                    path = str(args.get("path", "")).strip()
+                    if path and path not in files_modified:
+                        files_modified.append(path)
+                    actions.append(f"{fn_name}('{path}')")
+                elif fn_name == "read":
+                    path = str(args.get("path", "")).strip()
+                    if path and path not in files_read:
+                        files_read.append(path)
+                    lines_info = f" L{args.get('start_line', 1)}-{args.get('end_line')}" if args.get("end_line") else ""
+                    actions.append(f"read('{path}'{lines_info})")
+                elif fn_name in ("grep", "find", "ls"):
+                    p = str(args.get("pattern") or args.get("path") or ".").strip()
+                    if p and p not in files_explored:
+                        files_explored.append(p)
+                    actions.append(f"{fn_name}('{p}')")
+                elif fn_name == "bash":
+                    cmd = str(args.get("command", "")).strip()
+                    actions.append(f"bash('{cmd[:80]}')")
+
+        elif role == "tool":
+            fn_name = m.get("name", "tool")
+            if _is_tool_failure(fn_name, content):
+                first_err_line = next((line.strip() for line in content.splitlines() if line.strip()), content[:120])
+                if first_err_line and first_err_line not in errors:
+                    errors.append(f"{fn_name}: {first_err_line[:140]}")
+
+    sections = ["[Memoria compactada de la sesión (Modo Blackhole)]:"]
+
+    # 1. Objetivo
+    goal_line = user_goal.strip() if user_goal else ""
+    if goal_line:
+        primary_goal = goal_line.splitlines()[0][:200]
+        sections.append(f"### Objetivo Principal\n- {primary_goal}")
+    if user_notes:
+        sections.append("### Instrucciones Intermedias del Usuario\n" + "\n".join(f"- {note}" for note in user_notes[-3:]))
+
+    # 2. Archivos intervenidos
+    files_sec = []
+    if files_modified:
+        files_sec.append(f"- Modificados / Creados: {', '.join(files_modified)}")
+    if files_read:
+        files_sec.append(f"- Leídos: {', '.join(files_read)}")
+    if files_explored:
+        files_sec.append(f"- Explorados / Listados: {', '.join(files_explored[:6])}")
+    if files_sec:
+        sections.append("### Archivos y Rutas\n" + "\n".join(files_sec))
+
+    # 3. Acciones ejecutadas (últimas 10 acciones)
+    if actions:
+        recent_actions = actions[-10:] if len(actions) > 10 else actions
+        prefix = f"(... {len(actions) - 10} acciones previas omitidas ...)\n" if len(actions) > 10 else ""
+        sections.append("### Registro de Acciones Recientes\n" + prefix + "\n".join(f"- {act}" for act in recent_actions))
+
+    # 4. Errores detectados
+    if errors:
+        recent_errors = errors[-4:]
+        sections.append("### Errores e Incidencias Detectadas\n" + "\n".join(f"- {err}" for err in recent_errors))
+    else:
+        sections.append("### Estado de Errores\n- Sin errores persistentes registrados.")
+
+    return "\n\n".join(sections)
+
+
+def _synthesize_with_local_llm(
+    client: Any,
+    endpoint: str,
+    headers: dict[str, str],
+    target_model: str,
+    temperature: float,
+    blackhole_summary: str,
+) -> str:
+    """Realiza una única llamada al LLM local ya cargado para sintetizar 2-3 reflexiones clave."""
+    prompt = (
+        "Eres el asistente del motor de compactación de Dédalo. "
+        "A partir de este registro estructurado de la sesión, sintetiza en un máximo de 3 viñetas breves "
+        "(1 o 2 líneas cada una) las decisiones arquitectónicas clave adoptadas, los hallazgos confirmados "
+        "y el estado actual para continuar la tarea:\n\n"
+        f"{blackhole_summary}"
+    )
+    payload = {
+        "model": target_model,
+        "messages": [
+            {"role": "system", "content": "Sé extremadamente conciso y factual. Solo devuelve viñetas con guiones."},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.0,
+        "max_tokens": 250,
+    }
+    resp = client.post(endpoint, headers=headers, json=payload, timeout=15.0)
+    if resp.status_code == 200:
+        data = resp.json()
+        content = (data["choices"][0]["message"].get("content") or "").strip()
+        if content:
+            return content
+    return ""
+
+
 def _compact_conversation_history(
     messages: list[dict[str, Any]],
     context_window: int,
     preserve_recent_turns: int = 1,
+    engine: str = "luhn+",
+    client: Any = None,
+    endpoint: str = "",
+    headers: dict[str, str] | None = None,
+    target_model: str = "",
+    temperature: float = 0.1,
 ) -> tuple[list[dict[str, Any]], bool]:
-    """Si los mensajes superan el 90% del contexto soportado, compacta el historial previo con Luhn+."""
+    """Si los mensajes superan el 90% del contexto soportado, compacta el historial previo según el motor configurado."""
     threshold = int(context_window * 0.90)
     current_tokens = _estimate_messages_tokens(messages)
     if current_tokens < threshold:
@@ -1458,6 +2061,7 @@ def _compact_conversation_history(
 
     did_compact = False
     new_msgs = list(messages)
+    eng = (engine or "luhn+").lower().strip()
 
     # 1. Compactar mensajes de herramientas que individualmente superen el umbral o sean desproporcionados
     for idx, m in enumerate(new_msgs):
@@ -1465,11 +2069,22 @@ def _compact_conversation_history(
             c_text = str(m["content"])
             # Si el contenido de la tool supera el 40% del umbral de contexto
             if len(c_text) > int(threshold * 1.5):
-                summary = _run_luhn_plus(c_text, target_count=8, output_format="bullets")
-                compacted_m = dict(m)
-                compacted_m["content"] = f"[Salida de herramienta compactada con Luhn+ (superado 90% contexto)]:\n{summary}"
-                new_msgs[idx] = compacted_m
-                did_compact = True
+                if eng in ("luhn", "luhn+", "luhn_plus", "luhnplus"):
+                    summary = _run_luhn_plus(c_text, target_count=8, output_format="bullets")
+                    compacted_m = dict(m)
+                    compacted_m["content"] = f"[Salida de herramienta compactada con Luhn+ (superado 90% contexto)]:\n{summary}"
+                    new_msgs[idx] = compacted_m
+                    did_compact = True
+                else:
+                    lines = c_text.splitlines()
+                    if len(lines) > 30:
+                        folded = "\n".join(lines[:10]) + f"\n\n[... {len(lines) - 20} líneas omitidas por compactador Blackhole ...]\n\n" + "\n".join(lines[-10:])
+                    else:
+                        folded = c_text[:1000] + f"\n\n[... {max(0, len(c_text) - 1500)} caracteres omitidos por compactador Blackhole ...]\n\n" + c_text[-500:]
+                    compacted_m = dict(m)
+                    compacted_m["content"] = f"[Salida de herramienta colapsada por Blackhole (superado contexto)]:\n{folded}"
+                    new_msgs[idx] = compacted_m
+                    did_compact = True
 
     # Si tras compactar herramientas ya bajamos del 90%, retornamos
     if did_compact and _estimate_messages_tokens(new_msgs) < threshold:
@@ -1478,35 +2093,66 @@ def _compact_conversation_history(
     # 2. Compactar turnos intermedios si el historial se ha acumulado
     if len(new_msgs) > 4:
         head = new_msgs[:2]  # system + user prompt original
+        user_goal = str(head[1].get("content") or "") if len(head) > 1 else ""
         tail_len = min(len(new_msgs) - 2, max(2, preserve_recent_turns * 2))
         tail = new_msgs[-tail_len:]
         middle = new_msgs[2:-tail_len]
         if middle:
-            chunks = []
-            for m in middle:
-                role = m.get("role")
-                content = m.get("content")
-                name = m.get("name")
-                if role == "assistant":
-                    if content:
-                        chunks.append(f"Asistente: {content}")
-                    if m.get("tool_calls"):
-                        fn_names = [c.get("function", {}).get("name", "") for c in m["tool_calls"]]
-                        chunks.append(f"Llamadas a herramientas: {', '.join(filter(None, fn_names))}")
-                elif role == "tool":
-                    chunks.append(f"Herramienta {name or 'tool'}:\n{content}")
-                elif role == "user":
-                    chunks.append(f"Usuario: {content}")
+            if eng in ("luhn", "luhn+", "luhn_plus", "luhnplus"):
+                chunks = []
+                for m in middle:
+                    role = m.get("role")
+                    content = m.get("content")
+                    name = m.get("name")
+                    if role == "assistant":
+                        if content:
+                            chunks.append(f"Asistente: {content}")
+                        if m.get("tool_calls"):
+                            fn_names = [c.get("function", {}).get("name", "") for c in m["tool_calls"]]
+                            chunks.append(f"Llamadas a herramientas: {', '.join(filter(None, fn_names))}")
+                    elif role == "tool":
+                        chunks.append(f"Herramienta {name or 'tool'}:\n{content}")
+                    elif role == "user":
+                        chunks.append(f"Usuario: {content}")
 
-            raw_middle = "\n\n".join(chunks)
-            summary_bullets = _run_luhn_plus(raw_middle, target_count=8, output_format="bullets")
+                raw_middle = "\n\n".join(chunks)
+                summary_bullets = _run_luhn_plus(raw_middle, target_count=8, output_format="bullets")
+                summary_content = (
+                    f"[Memoria resumida del progreso previo mediante Luhn+ (alcanzado 90% de contexto: {current_tokens}/{context_window} tokens)]:\n"
+                    f"{summary_bullets}"
+                )
+            elif eng in ("blackhole_llm", "blackhole+llm", "mixed"):
+                bh_summary = _extract_blackhole_summary(middle, user_goal=user_goal)
+                reflections = ""
+                if client and endpoint and target_model:
+                    try:
+                        reflections = _synthesize_with_local_llm(
+                            client=client,
+                            endpoint=endpoint,
+                            headers=headers or {},
+                            target_model=target_model,
+                            temperature=temperature,
+                            blackhole_summary=bh_summary,
+                        )
+                    except Exception:
+                        reflections = ""
+                if reflections:
+                    bh_summary += f"\n\n### Reflexiones y Decisiones Clave (LLM local)\n{reflections}"
+
+                summary_content = (
+                    f"[Memoria resumida del progreso previo mediante Blackhole con LLM (alcanzado 90% de contexto: {current_tokens}/{context_window} tokens)]:\n"
+                    f"{bh_summary}"
+                )
+            else:  # "blackhole" por defecto
+                bh_summary = _extract_blackhole_summary(middle, user_goal=user_goal)
+                summary_content = (
+                    f"[Memoria resumida del progreso previo mediante Blackhole (alcanzado 90% de contexto: {current_tokens}/{context_window} tokens)]:\n"
+                    f"{bh_summary}"
+                )
 
             summary_msg = {
                 "role": "user",
-                "content": (
-                    f"[Memoria resumida del progreso previo mediante Luhn+ (alcanzado 90% de contexto: {current_tokens}/{context_window} tokens)]:\n"
-                    f"{summary_bullets}"
-                ),
+                "content": summary_content,
             }
             ack_msg = {
                 "role": "assistant",
@@ -2020,6 +2666,7 @@ def coder_agent(
     max_turns: int = 5,
     max_tool_chars: int = 4000,
     max_context: int = 0,
+    compaction_engine: str = "blackhole",
     output_format: str = "full",
     model: str = "",
     url: str = "",
@@ -2028,7 +2675,7 @@ def coder_agent(
     system_prompt: str = "",
     timeout: float = 120.0,
 ) -> NodeResult:
-    """Microarnés de agente programador con bucle ReAct multi-turno, detección de contexto y compactación con Luhn+."""
+    """Microarnés de agente programador con bucle ReAct multi-turno, detección de bucles y compactación Blackhole / Luhn+."""
     inp = Inputs(inputs)
     input_text = inp.text()
     user_msg = f"{prompt}\n\nContexto / Entrada previa:\n{input_text}" if input_text else prompt
@@ -2109,6 +2756,7 @@ def coder_agent(
     turns = 0
     modified_files: set[str] = set()
     tool_calls_log: list[dict[str, Any]] = []
+    consecutive_tool_failures: dict[str, int] = {}
     final_response = ""
     completed = False
     turn_limit = max(1, min(int(max_turns or 5), 20))
@@ -2118,15 +2766,30 @@ def coder_agent(
             for _ in range(turn_limit):
                 turns += 1
 
-                # Comprobación de ventana de contexto: compactar con Luhn+ si se alcanza el 90%
-                messages, did_compact = _compact_conversation_history(messages, context_window)
+                # Comprobación de ventana de contexto: compactar según el motor configurado al alcanzar el 90%
+                messages, did_compact = _compact_conversation_history(
+                    messages,
+                    context_window=context_window,
+                    engine=compaction_engine,
+                    client=client,
+                    endpoint=endpoint,
+                    headers=headers,
+                    target_model=target_model,
+                    temperature=float(model_temp),
+                )
                 if did_compact:
                     compactions_count += 1
+                    eng_clean = (compaction_engine or "blackhole").lower().strip()
+                    comp_tool_name = "luhn+_compact" if eng_clean in ("luhn", "luhn+", "luhn_plus", "luhnplus") else f"{eng_clean}_compact"
                     tool_calls_log.append({
                         "turn": turns,
-                        "tool": "luhn+_compact",
-                        "args": {"context_window": context_window, "threshold": int(context_window * 0.90)},
-                        "output_preview": f"Contexto compactado al 90% con Luhn+ ({_estimate_messages_tokens(messages)} tokens estimados)",
+                        "tool": comp_tool_name,
+                        "args": {
+                            "context_window": context_window,
+                            "threshold": int(context_window * 0.90),
+                            "engine": eng_clean,
+                        },
+                        "output_preview": f"Contexto compactado al 90% con {eng_clean} ({_estimate_messages_tokens(messages)} tokens estimados)",
                     })
 
                 payload: dict[str, Any] = {
@@ -2175,6 +2838,13 @@ def coder_agent(
                         except Exception as err:
                             result_str = f"Error al ejecutar '{fn_name}': {err}"
 
+                    # Detección de fallos para control de bucles
+                    is_fail = _is_tool_failure(fn_name, result_str)
+                    if is_fail:
+                        consecutive_tool_failures[fn_name] = consecutive_tool_failures.get(fn_name, 0) + 1
+                    else:
+                        consecutive_tool_failures[fn_name] = 0
+
                     clipped = _clip_tool_output(result_str, max_chars=int(max_tool_chars or 4000))
                     tool_calls_log.append({
                         "turn": turns,
@@ -2189,9 +2859,43 @@ def coder_agent(
                         "content": clipped,
                     })
 
+                # Detección de bucles: comprobar si alguna herramienta ha fallado consecutivamente >= 3 veces
+                loop_warnings = []
+                for t_name, failures in list(consecutive_tool_failures.items()):
+                    if failures >= 3:
+                        loop_warnings.append(f"La herramienta '{t_name}' ha fallado {failures} veces consecutivas.")
+                        consecutive_tool_failures[t_name] = 0  # Reiniciar tras advertir para evitar repeticiones en cada turno
+
+                if loop_warnings:
+                    warning_msg = (
+                        "[Aviso de bucle del sistema]: "
+                        + " ".join(loop_warnings)
+                        + " Detén los intentos repetitivos con los mismos parámetros. "
+                        "Analiza la causa raíz del error, inspecciona el estado de los archivos o cambia de estrategia antes de continuar."
+                    )
+                    messages.append({
+                        "role": "user",
+                        "content": warning_msg,
+                    })
+                    tool_calls_log.append({
+                        "turn": turns,
+                        "tool": "loop_detected_alert",
+                        "args": {"warnings": loop_warnings},
+                        "output_preview": warning_msg[:200],
+                    })
+
             if not completed:
                 # Comprobar compactación antes del resumen final
-                messages, _ = _compact_conversation_history(messages, context_window)
+                messages, _ = _compact_conversation_history(
+                    messages,
+                    context_window=context_window,
+                    engine=compaction_engine,
+                    client=client,
+                    endpoint=endpoint,
+                    headers=headers,
+                    target_model=target_model,
+                    temperature=float(model_temp),
+                )
                 messages.append({
                     "role": "user",
                     "content": "Se ha alcanzado el límite de turnos. Resume brevemente las acciones realizadas y el estado actual.",
@@ -2203,7 +2907,7 @@ def coder_agent(
                         json={
                             "model": target_model,
                             "messages": messages,
-                            "temperature": float(temperature),
+                            "temperature": float(model_temp),
                         },
                     )
                     if final_resp.status_code == 200:
@@ -2221,8 +2925,12 @@ def coder_agent(
         "completed": completed,
         "context_window": context_window,
         "compactions_count": compactions_count,
+        "compaction_engine": compaction_engine,
         "modified_files": sorted(list(modified_files)),
-        "tool_calls_count": len([c for c in tool_calls_log if c["tool"] != "luhn+_compact"]),
+        "tool_calls_count": len([
+            c for c in tool_calls_log
+            if not c["tool"].endswith("_compact") and c["tool"] != "loop_detected_alert"
+        ]),
         "tool_history": tool_calls_log,
     }
 
@@ -2673,6 +3381,518 @@ def file(
         return NodeResult("ok", data=str(target))
     except Exception as exc:
         return NodeResult("error", error=f"Error al escribir fichero: {exc}")
+
+
+def evidence_vault(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    directory: str = "data/vault",
+    compress: bool = True,
+    filename_pattern: str = "evidence_{incident_id}_{hash}",
+    include_metadata: bool = True,
+) -> NodeResult:
+    """Archiva evidencia inmutable calculando SHA-256 en disco local con compresión gzip opcional."""
+    inp = Inputs(inputs)
+    first = inp.first_data()
+    raw_text = inp.text()
+
+    if first is None and not raw_text:
+        return NodeResult("error", error="El nodo de custodia de evidencia (Evidence Vault) no recibió datos")
+
+    incident_id = "inc"
+    resource = ""
+    target_payload: Any = first if first is not None else raw_text
+
+    if isinstance(first, dict):
+        if first.get("incident_id"):
+            incident_id = str(first["incident_id"]).strip()
+        elif first.get("id"):
+            incident_id = str(first["id"]).strip()
+
+        if first.get("resource"):
+            resource = str(first["resource"]).strip()
+        elif first.get("target"):
+            resource = str(first["target"]).strip()
+
+    if isinstance(target_payload, (dict, list)):
+        payload_bytes = json.dumps(target_payload, ensure_ascii=False, indent=2).encode("utf-8")
+    elif isinstance(target_payload, bytes):
+        payload_bytes = target_payload
+    else:
+        payload_bytes = str(target_payload).encode("utf-8")
+
+    sha256_full = hashlib.sha256(payload_bytes).hexdigest()
+    sha256_short = sha256_full[:12]
+    now_ts = int(time.time())
+    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+    fname = (
+        filename_pattern.replace("{incident_id}", incident_id)
+        .replace("{hash}", sha256_short)
+        .replace("{timestamp}", str(now_ts))
+    )
+
+    base_dir = Path(directory.strip() or "data/vault")
+    base_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        if compress:
+            if not fname.endswith(".json.gz") and not fname.endswith(".gz"):
+                fname += ".json.gz"
+            final_path = base_dir / fname
+            compressed_bytes = gzip.compress(payload_bytes)
+            final_path.write_bytes(compressed_bytes)
+            size_bytes = len(compressed_bytes)
+        else:
+            if not fname.endswith(".json") and not fname.endswith(".txt") and not fname.endswith(".log"):
+                fname += ".json"
+            final_path = base_dir / fname
+            final_path.write_bytes(payload_bytes)
+            size_bytes = len(payload_bytes)
+
+        # Si se solicita metadatos, guardar un manifiesto .meta.json al lado
+        if include_metadata:
+            meta_path = final_path.parent / f"{final_path.name}.meta.json"
+            meta_content = {
+                "incident_id": incident_id,
+                "resource": resource,
+                "created_at": now_iso,
+                "original_size_bytes": len(payload_bytes),
+                "stored_size_bytes": size_bytes,
+                "compressed": compress,
+                "sha256": sha256_full,
+                "file": str(final_path),
+            }
+            meta_path.write_text(json.dumps(meta_content, indent=2, ensure_ascii=False), encoding="utf-8")
+
+        result_data = {
+            "incident_id": incident_id,
+            "resource": resource,
+            "vault_path": str(final_path),
+            "sha256": sha256_full,
+            "size_bytes": size_bytes,
+            "compressed": compress,
+            "timestamp": now_iso,
+            "telemetry": target_payload,
+        }
+        return NodeResult("ok", data=result_data)
+    except Exception as exc:
+        return NodeResult("error", error=f"Error al escribir en Evidence Vault: {exc}")
+
+
+def _text_to_atlassian_doc(text: str) -> dict[str, Any]:
+    """Convierte texto plano o markdown simple en formato Atlassian Document Format (ADF)."""
+    paragraphs = [p.strip() for p in (text or "").split("\n\n") if p.strip()]
+    if not paragraphs:
+        paragraphs = [text or ""]
+
+    content = []
+    for p in paragraphs:
+        lines = p.splitlines()
+        p_content = []
+        for idx, line in enumerate(lines):
+            if idx > 0:
+                p_content.append({"type": "hardBreak"})
+            p_content.append({"type": "text", "text": line})
+        content.append({
+            "type": "paragraph",
+            "content": p_content,
+        })
+
+    return {
+        "version": 1,
+        "type": "doc",
+        "content": content,
+    }
+
+
+def jira_issue_output(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    instance_url: str,
+    action: str = "create",
+    issue_key: str = "",
+    project_key: str = "",
+    email: str = "",
+    secret: str = "",
+    issue_type: str = "Task",
+    summary: str = "",
+    description: str = "",
+    comment: str = "",
+    priority: str = "",
+    status_transition: str = "",
+    labels: str = "",
+    timeout: float = DEFAULT_TIMEOUT,
+) -> NodeResult:
+    """Crea, actualiza, comenta o transiciona tickets en Jira Cloud usando la REST API v3."""
+    base_url = instance_url.strip().rstrip("/")
+    if not base_url:
+        return NodeResult("error", error="Falta la URL de la instancia de Jira (ej. https://mi-dominio.atlassian.net)")
+
+    headers = _build_atlassian_auth_header(email, secret)
+    inp = Inputs(inputs)
+    first = inp.first_data()
+    raw_text = inp.text()
+
+    act = (action or "create").strip().lower()
+
+    # Si la entrada es una lista de tickets enriquecida por el agente (ej. per_item)
+    # o un diccionario singular, extraemos los items a procesar
+    items = []
+    if isinstance(first, list):
+        items = first
+    elif isinstance(first, dict) and isinstance(first.get("issues"), list):
+        items = first["issues"]
+    elif isinstance(first, dict):
+        items = [first]
+    else:
+        items = [{"raw": raw_text}]
+
+    def _execute_single(item_data: dict[str, Any], client: httpx.Client) -> dict[str, Any]:
+        # Determinar clave de ticket (issue_key o del item)
+        target_key = (
+            issue_key.strip()
+            or str(item_data.get("key") or item_data.get("issue_key") or item_data.get("id") or "").strip()
+        )
+
+        # Determinar texto de comentario o contenido
+        comment_text = comment.strip()
+        if not comment_text:
+            comment_text = str(
+                item_data.get("comment")
+                or item_data.get("analysis")
+                or item_data.get("plan")
+                or item_data.get("analisis_triaje")
+                or (item_data.get("plan") if isinstance(item_data.get("plan"), str) else "")
+                or (item_data.get("analysis") if isinstance(item_data.get("analysis"), str) else "")
+                or ""
+            )
+        if not comment_text and act == "add_comment":
+            comment_text = raw_text
+
+        # 1. ACCIÓN: AÑADIR COMENTARIO
+        if act == "add_comment":
+            if not target_key:
+                raise ValueError("Se requiere issue_key para añadir un comentario al ticket")
+            if not comment_text:
+                raise ValueError(f"No hay contenido de comentario para el ticket {target_key}")
+
+            comment_endpoint = f"{base_url}/rest/api/3/issue/{target_key}/comment"
+            comment_payload = {"body": _text_to_atlassian_doc(comment_text)}
+            resp = client.post(comment_endpoint, headers=headers, json=comment_payload)
+            if resp.status_code >= 400:
+                raise RuntimeError(f"Jira comment error ({resp.status_code}): {resp.text[:200]}")
+            data = resp.json()
+            return {
+                "key": target_key,
+                "action": "comment_added",
+                "comment_id": data.get("id"),
+                "url": f"{base_url}/browse/{target_key}",
+            }
+
+        # 2. ACCIÓN: TRANSICIÓN DE ESTADO
+        elif act in ("transition", "change_status"):
+            if not target_key:
+                raise ValueError("Se requiere issue_key para transicionar el estado del ticket")
+            target_status = (status_transition.strip() or str(item_data.get("status_transition") or "")).strip()
+            if not target_status:
+                raise ValueError("Falta especificar status_transition (ej. 'In Progress', 'Done', 'Triaged')")
+
+            # Obtener transiciones disponibles para el issue
+            trans_endpoint = f"{base_url}/rest/api/3/issue/{target_key}/transitions"
+            t_resp = client.get(trans_endpoint, headers=headers)
+            if t_resp.status_code >= 400:
+                raise RuntimeError(f"Error obteniendo transiciones para {target_key}: {t_resp.text[:200]}")
+            transitions = t_resp.json().get("transitions", [])
+            match_trans = next(
+                (t for t in transitions if t.get("name", "").lower() == target_status.lower()),
+                None
+            )
+            if not match_trans:
+                available = ", ".join(t.get("name", "") for t in transitions)
+                raise ValueError(f"Transición '{target_status}' no disponible para {target_key}. Disponibles: {available or 'ninguna'}")
+
+            trans_payload = {"transition": {"id": match_trans["id"]}}
+            if comment_text:
+                trans_payload["update"] = {"comment": [{"add": {"body": _text_to_atlassian_doc(comment_text)}}]}
+
+            post_t = client.post(trans_endpoint, headers=headers, json=trans_payload)
+            if post_t.status_code >= 400:
+                raise RuntimeError(f"Error aplicando transición a {target_key}: {post_t.text[:200]}")
+
+            return {
+                "key": target_key,
+                "action": "transitioned",
+                "status": match_trans.get("name"),
+                "url": f"{base_url}/browse/{target_key}",
+            }
+
+        # 3. ACCIÓN: ACTUALIZAR CAMPOS (Prioridad, etiquetas, resumen)
+        elif act == "update":
+            if not target_key:
+                raise ValueError("Se requiere issue_key para actualizar el ticket")
+            update_endpoint = f"{base_url}/rest/api/3/issue/{target_key}"
+            fields_to_update: dict[str, Any] = {}
+
+            prio = (priority.strip() or str(item_data.get("priority") or "")).strip()
+            if prio:
+                fields_to_update["priority"] = {"name": prio}
+
+            lbls = (labels.strip() or str(item_data.get("labels") or "")).strip()
+            if lbls:
+                fields_to_update["labels"] = [l.strip().replace(" ", "-") for l in lbls.split(",") if l.strip()]
+
+            if summary.strip():
+                fields_to_update["summary"] = summary.strip()[:250]
+            if description.strip():
+                fields_to_update["description"] = _text_to_atlassian_doc(description.strip())
+
+            if not fields_to_update and not comment_text:
+                raise ValueError("No se especificaron campos ni comentarios para actualizar en el ticket")
+
+            update_payload: dict[str, Any] = {}
+            if fields_to_update:
+                update_payload["fields"] = fields_to_update
+            if comment_text:
+                update_payload["update"] = {"comment": [{"add": {"body": _text_to_atlassian_doc(comment_text)}}]}
+
+            put_resp = client.put(update_endpoint, headers=headers, json=update_payload)
+            if put_resp.status_code >= 400:
+                raise RuntimeError(f"Error actualizando issue {target_key}: {put_resp.text[:200]}")
+
+            return {
+                "key": target_key,
+                "action": "updated",
+                "updated_fields": list(fields_to_update.keys()),
+                "url": f"{base_url}/browse/{target_key}",
+            }
+
+        # 4. ACCIÓN: CREAR NUEVO TICKET (Por defecto)
+        else:
+            proj = (project_key.strip() or str(item_data.get("project_key") or "")).strip().upper()
+            if not proj:
+                raise ValueError("Falta la clave del proyecto (project_key, ej. SEC, OPS) para crear el ticket")
+
+            final_sum = summary.strip()
+            if not final_sum:
+                final_sum = str(
+                    item_data.get("summary")
+                    or item_data.get("title")
+                    or (item_data.get("meta") or {}).get("incident_id")
+                    or "Incidencia detectada por Dédalo"
+                )
+
+            final_d = description.strip()
+            if not final_d:
+                if item_data.get("plan"):
+                    final_d = str(item_data["plan"])
+                elif item_data.get("analysis"):
+                    final_d = str(item_data["analysis"])
+                else:
+                    final_d = raw_text or final_sum
+
+            create_endpoint = f"{base_url}/rest/api/3/issue"
+            fields_payload: dict[str, Any] = {
+                "project": {"key": proj},
+                "summary": final_sum[:250],
+                "issuetype": {"name": issue_type.strip() or "Task"},
+                "description": _text_to_atlassian_doc(final_d),
+            }
+
+            prio = (priority.strip() or str(item_data.get("priority") or "")).strip()
+            if prio:
+                fields_payload["priority"] = {"name": prio}
+
+            lbls = (labels.strip() or str(item_data.get("labels") or "")).strip()
+            if lbls:
+                lbl_list = [l.strip().replace(" ", "-") for l in lbls.split(",") if l.strip()]
+                if lbl_list:
+                    fields_payload["labels"] = lbl_list
+
+            resp = client.post(create_endpoint, headers=headers, json={"fields": fields_payload})
+            if resp.status_code >= 400:
+                raise RuntimeError(f"Error al crear ticket en Jira ({resp.status_code}): {resp.text[:300]}")
+            data = resp.json()
+            k = data.get("key")
+            return {
+                "key": k,
+                "id": data.get("id"),
+                "url": f"{base_url}/browse/{k}",
+                "summary": final_sum,
+                "project": proj,
+                "action": "created",
+            }
+
+    try:
+        with httpx.Client(timeout=float(timeout)) as client:
+            executed = []
+            for item in items[:MAX_ITEMS]:
+                if not isinstance(item, dict):
+                    item = {"raw": str(item)}
+                res = _execute_single(item, client)
+                executed.append(res)
+
+            if len(executed) == 1 and not isinstance(first, list):
+                return NodeResult("ok", data=executed[0])
+            return NodeResult("ok", data={"processed": len(executed), "results": executed})
+    except Exception as exc:
+        return NodeResult("error", error=f"Error en operación de Jira ({act}): {exc}")
+
+
+def confluence_page_output(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    instance_url: str,
+    page_id: str = "",
+    space_key: str = "",
+    email: str = "",
+    secret: str = "",
+    title: str = "",
+    content: str = "",
+    mode: str = "create_or_update",
+    timeout: float = DEFAULT_TIMEOUT,
+) -> NodeResult:
+    """Crea o actualiza una página en Confluence Cloud usando XHTML/Storage format."""
+    base_url = instance_url.strip().rstrip("/")
+    if not base_url:
+        return NodeResult("error", error="Falta la URL de la instancia de Confluence (ej. https://mi-dominio.atlassian.net/wiki)")
+
+    wiki_base = base_url if base_url.endswith("/wiki") else f"{base_url}/wiki"
+    headers = _build_atlassian_auth_header(email, secret)
+
+    inp = Inputs(inputs)
+    first = inp.first_data()
+    raw_text = inp.text()
+
+    target_page_id = page_id.strip()
+    target_space = space_key.strip()
+    final_title = title.strip()
+    final_content = content.strip()
+
+    # Si viene de input.confluence_pages o de un nodo que extrajo la página:
+    if isinstance(first, dict):
+        if not target_page_id and first.get("id"):
+            target_page_id = str(first["id"]).strip()
+        if not target_space and first.get("space"):
+            target_space = str(first["space"]).strip()
+        if not final_title and first.get("title"):
+            final_title = str(first["title"]).strip()
+
+        if not final_content:
+            if first.get("content"):
+                final_content = str(first["content"])
+            elif first.get("plan"):
+                final_content = str(first["plan"])
+            elif first.get("analysis"):
+                final_content = str(first["analysis"])
+            elif first.get("text"):
+                final_content = str(first["text"])
+            else:
+                final_content = json.dumps(first, ensure_ascii=False, indent=2)
+    elif not final_title:
+        final_title = f"Documento Dédalo - {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        if not final_content:
+            final_content = raw_text or "Contenido generado automáticamente."
+
+    if not final_content:
+        final_content = "Documento vacío."
+
+    if not target_page_id and not target_space:
+        return NodeResult("error", error="Falta la clave del espacio (space_key) o el ID de página (page_id) de Confluence")
+
+    # Formatear el contenido nuevo en HTML/XHTML para Confluence Storage Format
+    html_paragraphs = "".join(f"<p>{html.escape(p)}</p>" for p in final_content.split("\n\n") if p.strip())
+    if not html_paragraphs:
+        html_paragraphs = f"<p>{html.escape(final_content)}</p>"
+
+    try:
+        with httpx.Client(timeout=float(timeout)) as client:
+            existing_page = None
+
+            # 1. Búsqueda por page_id directo
+            if target_page_id:
+                get_url = f"{wiki_base}/rest/api/content/{target_page_id}?expand=version,body.storage,space"
+                g_resp = client.get(get_url, headers=headers)
+                if g_resp.status_code == 200:
+                    resp_json = g_resp.json()
+                    if isinstance(resp_json, dict) and "id" in resp_json:
+                        existing_page = resp_json
+                        if not final_title:
+                            final_title = existing_page.get("title", final_title)
+                        if not target_space:
+                            target_space = (existing_page.get("space") or {}).get("key", "")
+
+            # 2. Búsqueda por space y title si mode == create_or_update
+            if not existing_page and mode in ("create_or_update", "append") and target_space and final_title:
+                search_url = f"{wiki_base}/rest/api/content"
+                s_resp = client.get(
+                    search_url,
+                    headers=headers,
+                    params={"spaceKey": target_space, "title": final_title, "expand": "version,body.storage"},
+                )
+                if s_resp.status_code == 200:
+                    results = s_resp.json().get("results", [])
+                    if results:
+                        existing_page = results[0]
+
+            if existing_page:
+                # Actualizar página existente incrementando versión
+                pid = existing_page["id"]
+                current_ver = existing_page.get("version", {}).get("number", 1)
+                update_url = f"{wiki_base}/rest/api/content/{pid}"
+
+                storage_value = html_paragraphs
+                if mode == "append":
+                    current_body = ((existing_page.get("body") or {}).get("storage") or {}).get("value", "")
+                    storage_value = f"{current_body}\n{html_paragraphs}"
+
+                put_payload = {
+                    "version": {"number": current_ver + 1},
+                    "title": final_title,
+                    "type": "page",
+                    "body": {
+                        "storage": {
+                            "value": storage_value,
+                            "representation": "storage",
+                        }
+                    },
+                }
+                resp = client.put(update_url, headers=headers, json=put_payload)
+            else:
+                # Crear página nueva
+                create_url = f"{wiki_base}/rest/api/content"
+                post_payload = {
+                    "type": "page",
+                    "title": final_title,
+                    "space": {"key": target_space},
+                    "body": {
+                        "storage": {
+                            "value": html_paragraphs,
+                            "representation": "storage",
+                        }
+                    },
+                }
+                resp = client.post(create_url, headers=headers, json=post_payload)
+
+            if resp.status_code >= 400:
+                return NodeResult("error", error=f"Error en Confluence ({resp.status_code}): {resp.text[:300]}")
+
+            data = resp.json()
+            webui = (data.get("_links") or {}).get("webui") or ""
+            page_url = f"{wiki_base}{webui}"
+            return NodeResult("ok", data={
+                "id": data.get("id"),
+                "title": final_title,
+                "space": target_space,
+                "url": page_url,
+                "version": (data.get("version") or {}).get("number", 1),
+                "action": "updated" if existing_page else "created",
+            })
+    except Exception as exc:
+        return NodeResult("error", error=f"Error de conexión con Confluence: {exc}")
 
 
 def sqlite_exec(

@@ -416,6 +416,74 @@ NODE_TYPES: dict[str, NodeSpec] = {
             "expected_status": "Código de respuesta esperado.",
         },
     ),
+    "input.telemetry": NodeSpec(
+        category="input",
+        runtime_fn="telemetry_input",
+        optional={
+            "incident_id": "",
+            "resource": "",
+            "telemetry_json": "",
+            "file_path": "",
+        },
+        label="Telemetría de Incidente",
+        output="dict con incident_id, resource, timestamp y telemetría estructurada",
+        help={
+            "incident_id": "Identificador único de la incidencia (opcional, se autogenera si está vacío).",
+            "resource": "Recurso objetivo (ej: clúster/pod, suscripción azure, tenant saas).",
+            "telemetry_json": "JSON o texto con logs/métricas directas (opcional si viene de otro nodo).",
+            "file_path": "Ruta a un archivo local con los logs o volcado de eventos (opcional).",
+        },
+    ),
+    "input.jira_issues": NodeSpec(
+        category="input",
+        runtime_fn="jira_issues_input",
+        required=frozenset({"instance_url"}),
+        optional={
+            "email": "",
+            "secret": "",
+            "jql": "",
+            "fields": "summary,status,priority,assignee,created,updated,description",
+            "max_results": 20,
+            "timeout": 20.0,
+        },
+        label="Jira Issues (JQL)",
+        output="dict con issues (lista de tickets), total, count y jql",
+        choices_from={"secret": "secrets"},
+        help={
+            "instance_url": "URL base de la instancia Jira Cloud (ej. https://tu-empresa.atlassian.net).",
+            "email": "Email del usuario de Atlassian.",
+            "secret": "Nombre del secreto con el API Token de Atlassian.",
+            "jql": "Consulta JQL (ej. project = SEC AND status != Closed ORDER BY created DESC).",
+            "fields": "Campos a extraer separados por comas.",
+            "max_results": "Número máximo de tickets a recuperar.",
+        },
+    ),
+    "input.confluence_pages": NodeSpec(
+        category="input",
+        runtime_fn="confluence_pages_input",
+        required=frozenset({"instance_url"}),
+        optional={
+            "email": "",
+            "secret": "",
+            "space_key": "",
+            "title": "",
+            "cql": "",
+            "limit": 10,
+            "timeout": 20.0,
+        },
+        label="Confluence Páginas (CQL)",
+        output="dict con pages (lista de páginas con id, title, space, url, preview), total y cql",
+        choices_from={"secret": "secrets"},
+        help={
+            "instance_url": "URL de Confluence Cloud (ej. https://tu-empresa.atlassian.net/wiki).",
+            "email": "Email del usuario de Atlassian.",
+            "secret": "Nombre del secreto con el API Token de Atlassian.",
+            "space_key": "Clave del espacio (ej. IT, SEC, DOCS).",
+            "title": "Búsqueda por título o coincidencia de texto.",
+            "cql": "Consulta CQL avanzada opcional (ej. type=page and space=SEC).",
+            "limit": "Número máximo de páginas a recuperar.",
+        },
+    ),
     "input.disk_free": NodeSpec(
         category="input",
         runtime_fn="disk_free",
@@ -843,6 +911,7 @@ NODE_TYPES: dict[str, NodeSpec] = {
             "max_turns": 5,
             "max_tool_chars": 4000,
             "max_context": 0,
+            "compaction_engine": "blackhole",
             "output_format": "full",
             "model": "",
             "url": "",
@@ -855,6 +924,7 @@ NODE_TYPES: dict[str, NodeSpec] = {
         output="dict con resumen, turnos, archivos modificados y registro de herramientas (o texto)",
         choices={
             "tools_preset": ["coding", "read_only", "all", "custom"],
+            "compaction_engine": ["blackhole", "blackhole_llm", "luhn+"],
             "output_format": ["full", "text"],
         },
         choices_from={"llm": "llms", "secret": "secrets"},
@@ -866,7 +936,8 @@ NODE_TYPES: dict[str, NodeSpec] = {
             "custom_tools": "Lista separada por comas de herramientas si tools_preset es custom.",
             "max_turns": "Número máximo de turnos de razonamiento e invocación de herramientas.",
             "max_tool_chars": "Límite de caracteres en la salida de cada herramienta para proteger el contexto.",
-            "max_context": "Límite de tokens de la ventana de contexto (0 para autodetección desde el servidor; compacta con Luhn+ al 90%).",
+            "max_context": "Límite de tokens de la ventana de contexto (0 para autodetección desde el servidor; compacta al alcanzar el 90%).",
+            "compaction_engine": "Motor de compactación de contexto: 'blackhole' (determinista estructurado sin LLM), 'blackhole_llm' (mixto determinista + síntesis con LLM local) o 'luhn+' (extractivo por frecuencias).",
             "output_format": "Formato de salida: 'full' (objeto estructurado con resumen y métricas) o 'text' (solo la respuesta textual).",
             "model": "Nombre del modelo en el servidor de inferencia (vacío usa el del perfil LLM o global).",
             "url": "URL base compatible con OpenAI (vacío usa la del perfil LLM o global).",
@@ -874,6 +945,77 @@ NODE_TYPES: dict[str, NodeSpec] = {
             "temperature": "Temperatura para el modelo (0.0 para máxima precisión).",
             "system_prompt": "Prompt de sistema para guiar el comportamiento (opcional).",
             "timeout": "Tiempo máximo en segundos por turno HTTP.",
+        },
+    ),
+    "transform.analyzer": NodeSpec(
+        category="transform",
+        runtime_fn="analyzer_agent",
+        optional={
+            "llm": "",
+            "prompt": "",
+            "system_prompt": "",
+            "temperature": 0.2,
+            "tokens": DEFAULT_AGENT_TOKENS,
+            "sanitize_secrets": True,
+            "per_item": False,
+            "as_field": "",
+            "json_mode": False,
+            "model": "",
+            "url": "",
+            "secret": "",
+        },
+        label="Agente Analizador (SecOps / SRE)",
+        output="dict con analysis, parsed, meta (o lista de elementos enriquecidos si per_item)",
+        choices_from={"llm": "llms", "secret": "secrets"},
+        help={
+            "llm": "Perfil LLM a utilizar (vacío usa el configurado por defecto).",
+            "prompt": "Instrucción de análisis personalizada (por defecto realiza diagnóstico de causa raíz y severidad).",
+            "system_prompt": "Rol del sistema especializado para el análisis.",
+            "sanitize_secrets": "Enmascara tokens, contraseñas y claves privadas antes de enviar la telemetría al LLM.",
+            "per_item": "Ejecuta el análisis individualmente por cada ticket o elemento de una lista.",
+            "as_field": "Campo donde insertar el análisis resultante dentro de cada objeto si per_item es True.",
+            "json_mode": "Fuerza respuesta JSON estructurada.",
+            "temperature": "Creatividad (0.0 a 0.2 recomendado para análisis forense).",
+            "tokens": "Límite de tokens en la respuesta.",
+            "model": "Nombre del modelo específico (opcional).",
+            "url": "URL del endpoint de inferencia (opcional).",
+            "secret": "Nombre del secreto con la API Key si aplica.",
+        },
+    ),
+    "transform.planner": NodeSpec(
+        category="transform",
+        runtime_fn="planner_agent",
+        optional={
+            "llm": "",
+            "prompt": "",
+            "system_prompt": "",
+            "temperature": 0.2,
+            "tokens": DEFAULT_AGENT_TOKENS,
+            "output_format": "markdown",
+            "json_mode": False,
+            "model": "",
+            "url": "",
+            "secret": "",
+        },
+        label="Agente Planificador (Remediación / Mitigación)",
+        output="dict con plan, parsed y format",
+        choices={
+            "output_format": [
+                {"value": "markdown", "label": "Markdown estructurado"},
+                {"value": "json", "label": "JSON estructurado (pasos y verificaciones)"},
+            ]
+        },
+        choices_from={"llm": "llms", "secret": "secrets"},
+        help={
+            "llm": "Perfil LLM a utilizar (vacío usa el configurado por defecto).",
+            "prompt": "Instrucción del plan (por defecto genera pasos de mitigación y verificación basados en la causa raíz).",
+            "system_prompt": "Rol del sistema especializado para la planificación de acciones.",
+            "output_format": "Formato de salida del plan: Markdown o JSON estructurado.",
+            "temperature": "Creatividad (0.0 a 0.2 para planes deterministas).",
+            "tokens": "Límite de tokens en la respuesta.",
+            "model": "Nombre del modelo específico (opcional).",
+            "url": "URL del endpoint de inferencia (opcional).",
+            "secret": "Nombre del secreto con la API Key si aplica.",
         },
     ),
     "transform.clean_email": NodeSpec(
@@ -1061,6 +1203,109 @@ NODE_TYPES: dict[str, NodeSpec] = {
         },
         show_when={"message": {"content": ["static"]}},
         help={"filename": "Admite {fecha}, {hora}, {timestamp}."},
+    ),
+    "output.evidence_vault": NodeSpec(
+        category="output",
+        runtime_fn="evidence_vault",
+        optional={
+            "directory": "data/vault",
+            "compress": True,
+            "filename_pattern": "evidence_{incident_id}_{hash}",
+            "include_metadata": True,
+        },
+        label="Custodia de Evidencia (Evidence Vault)",
+        output="dict con vault_path, sha256, incident_id, timestamp y telemetry",
+        help={
+            "directory": "Directorio seguro donde almacenar la evidencia.",
+            "compress": "Comprime los datos en formato gzip (.json.gz) para ahorrar espacio y optimizar I/O.",
+            "filename_pattern": "Patrón de nombre de archivo. Admite {incident_id}, {hash} y {timestamp}.",
+            "include_metadata": "Genera un manifiesto .meta.json acompañante con hash criptográfico SHA-256 e información forense.",
+        },
+    ),
+    "output.jira_issue": NodeSpec(
+        category="output",
+        runtime_fn="jira_issue_output",
+        required=frozenset({"instance_url"}),
+        optional={
+            "action": "create",
+            "issue_key": "",
+            "project_key": "",
+            "email": "",
+            "secret": "",
+            "issue_type": "Task",
+            "summary": "",
+            "description": "",
+            "comment": "",
+            "priority": "",
+            "status_transition": "",
+            "labels": "",
+            "timeout": 20.0,
+        },
+        label="Operaciones Jira (Crear / Comentar / Modificar)",
+        output="dict con resultado de la operación (o lista de resultados si la entrada es un lote)",
+        choices={
+            "action": [
+                {"value": "create", "label": "Crear nuevo ticket"},
+                {"value": "add_comment", "label": "Añadir comentario a ticket existente"},
+                {"value": "update", "label": "Actualizar campos / prioridad / etiquetas"},
+                {"value": "transition", "label": "Cambiar estado (transición)"},
+            ]
+        },
+        choices_from={"secret": "secrets"},
+        show_when={
+            "project_key": {"action": ["create"]},
+            "issue_type": {"action": ["create"]},
+            "issue_key": {"action": ["add_comment", "update", "transition"]},
+            "comment": {"action": ["add_comment", "update", "transition"]},
+            "status_transition": {"action": ["transition"]},
+        },
+        help={
+            "instance_url": "URL base de la instancia Jira Cloud (ej. https://tu-empresa.atlassian.net).",
+            "action": "Acción a realizar: crear ticket, añadir comentario, actualizar campos o transicionar estado.",
+            "issue_key": "Clave del ticket a modificar (ej. SEC-101). Opcional si la entrada ya contiene el campo 'key'.",
+            "project_key": "Clave del proyecto para creación (ej. SEC, OPS).",
+            "email": "Email del usuario de Atlassian.",
+            "secret": "Nombre del secreto con el API Token de Atlassian.",
+            "comment": "Texto del comentario (si se deja vacío, se inyecta el análisis/plan del nodo anterior).",
+            "status_transition": "Nombre del estado destino (ej. 'In Progress', 'Done', 'Triaged').",
+            "priority": "Nueva prioridad o prioridad inicial (Lowest, Low, Medium, High, Highest).",
+            "labels": "Etiquetas separadas por comas (ej. dedalo,secops,autofix).",
+        },
+    ),
+    "output.confluence_page": NodeSpec(
+        category="output",
+        runtime_fn="confluence_page_output",
+        required=frozenset({"instance_url"}),
+        optional={
+            "page_id": "",
+            "space_key": "",
+            "email": "",
+            "secret": "",
+            "title": "",
+            "content": "",
+            "mode": "create_or_update",
+            "timeout": 20.0,
+        },
+        label="Publicar o Actualizar en Confluence",
+        output="dict con id, title, space, url, version y action",
+        choices={
+            "mode": [
+                {"value": "create_or_update", "label": "Crear nueva o actualizar si ya existe"},
+                {"value": "append", "label": "Añadir al final del contenido existente"},
+                {"value": "create_only", "label": "Crear siempre nueva"},
+            ]
+        },
+        choices_from={"secret": "secrets"},
+        help={
+            "instance_url": "URL de Confluence Cloud (ej. https://tu-empresa.atlassian.net/wiki).",
+            "page_id": "ID numérico de la página a actualizar (ej. 20001). Opcional si viene de input.confluence_pages o se busca por space_key y title.",
+            "space_key": "Clave del espacio donde guardar o buscar la página (ej. SEC, OPS).",
+            "email": "Email del usuario de Atlassian.",
+            "secret": "Nombre del secreto con el API Token de Atlassian.",
+            "title": "Título de la página (si está vacío, se toma de la página leída o fecha actual).",
+            "content": "Cuerpo del documento (si está vacío, se toma el contenido del nodo anterior).",
+            "mode": "Modo de guardado: crear/actualizar por versión completa o añadir al final (append).",
+        },
     ),
     "output.git": NodeSpec(
         category="output",
@@ -1517,5 +1762,585 @@ def compile(graph: Graph) -> str:
         _compile_source(source, "<dedalo>", "exec")
     except SyntaxError as exc:
         raise GraphError([f"el código generado no es Python válido: {exc}"]) from exc
+
+    return source
+
+
+def _extract_runtime_tree_shaken(graph: Graph) -> tuple[str, list[str]]:
+    """Extrae las funciones y clases del runtime estrictamente necesarias para el grafo, sin dependencias de Dédalo."""
+    from pathlib import Path
+
+    runtime_file = Path(__file__).parent / "runtime.py"
+    runtime_code = runtime_file.read_text(encoding="utf-8")
+    runtime_lines = runtime_code.splitlines()
+    tree = ast.parse(runtime_code)
+
+    definitions: dict[str, Any] = {}
+    order: list[tuple[str, Any]] = []
+
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+            definitions[node.name] = node
+            order.append((node.name, node))
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    definitions[target.id] = node
+                    order.append((target.id, node))
+        elif isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name):
+                definitions[node.target.id] = node
+                order.append((node.target.id, node))
+
+    def get_referenced_names(n: Any) -> set[str]:
+        return {child.id for child in ast.walk(n) if isinstance(child, ast.Name)}
+
+    root_fns = [NODE_TYPES[n.type].runtime_fn for n in graph.nodes if n.type in NODE_TYPES]
+    root_fns += ["summarize", "compact_memory", "NodeResult", "Inputs", "SKIPPED"]
+
+    needed = set(root_fns)
+    queue = list(root_fns)
+    while queue:
+        curr = queue.pop(0)
+        if curr in definitions:
+            refs = get_referenced_names(definitions[curr])
+            for ref in refs:
+                if ref in definitions and ref not in needed:
+                    needed.add(ref)
+                    queue.append(ref)
+
+    # Identificar dependencias externas reales
+    external_pkgs: list[str] = []
+    all_needed_nodes = [definitions[name] for name in needed if name in definitions]
+    all_refs: set[str] = set()
+    for n in all_needed_nodes:
+        all_refs.update(get_referenced_names(n))
+
+    if "httpx" in all_refs or any(
+        n.type in (
+            "input.http_call",
+            "input.web_read",
+            "input.web_search",
+            "input.jira_issues",
+            "input.confluence_pages",
+            "transform.agent",
+            "transform.coder",
+            "transform.analyzer",
+            "transform.planner",
+            "output.jira_issue",
+            "output.confluence_page",
+        )
+        for n in graph.nodes
+    ):
+        external_pkgs.append("httpx>=0.27.0")
+
+    uses_curl = any(n.config.get("impersonate") or n.config.get("antibot") for n in graph.nodes)
+    if uses_curl or "curl_cffi" in all_refs:
+        external_pkgs.append("curl_cffi>=0.7.0")
+
+    seen_nodes: set[int] = set()
+    chunks: list[str] = []
+    for name, node in order:
+        if name in needed and id(node) not in seen_nodes:
+            seen_nodes.add(id(node))
+            start_line = (
+                min(d.lineno for d in node.decorator_list)
+                if getattr(node, "decorator_list", None)
+                else node.lineno
+            )
+            chunks.append("\n".join(runtime_lines[start_line - 1 : node.end_lineno]))
+
+    return "\n\n".join(chunks), sorted(set(external_pkgs))
+
+
+def _analyze_standalone_requirements(graph: Graph) -> dict[str, Any]:
+    """Inspecciona los nodos del grafo para identificar secretos y uso de LLM."""
+    required_secrets: set[str] = set()
+    uses_llm = False
+    has_webhook = False
+
+    for node in graph.nodes:
+        cfg = node.config or {}
+        for key in ("secret", "token_secret"):
+            val = cfg.get(key)
+            if val and isinstance(val, str) and val.strip():
+                required_secrets.add(val.strip())
+
+        if node.type in ("transform.agent", "transform.coder", "transform.analyzer", "transform.planner") or "llm" in cfg:
+            uses_llm = True
+
+        if node.type == "input.webhook":
+            has_webhook = True
+
+    return {
+        "required_secrets": sorted(required_secrets),
+        "uses_llm": uses_llm,
+        "has_webhook": has_webhook,
+    }
+
+
+def compile_standalone(graph: Graph) -> str:
+    """Compila el grafo a un script Python 100% autónomo sin ninguna dependencia del paquete Dédalo."""
+    errors = validate(graph)
+    if errors:
+        raise GraphError(errors)
+
+    order = _topological_order(graph)
+    assert order is not None
+
+    reqs = _analyze_standalone_requirements(graph)
+    shaken_runtime, external_deps = _extract_runtime_tree_shaken(graph)
+    flow_name = graph.name or "flujo"
+
+    lines: list[str] = [
+        "#!/usr/bin/env python3",
+        "# /// script",
+        '# requires-python = ">=3.11"',
+        "# dependencies = [",
+    ]
+    for dep in external_deps:
+        lines.append(f'#     "{dep}",')
+    lines += [
+        "# ]",
+        "# ///",
+        f'"""Flujo Dédalo: {flow_name}',
+        "Script Python totalmente independiente generado por Dédalo.",
+        "",
+        "Uso:",
+        f"    python3 {flow_name}.py --help",
+        f"    python3 {flow_name}.py --create-venv",
+        f"    python3 {flow_name}.py [opciones]",
+        '"""',
+        "",
+        "from __future__ import annotations",
+        "",
+        "import argparse",
+        "import csv",
+        "import ctypes",
+        "import datetime",
+        "import difflib",
+        "import email",
+        "import email.header",
+        "import gc",
+        "import gzip",
+        "import hashlib",
+        "import html",
+        "import imaplib",
+        "import json",
+        "import math",
+        "import os",
+        "import random",
+        "import re",
+        "import select",
+        "import shutil",
+        "import smtplib",
+        "import socket",
+        "import ssl",
+        "import statistics",
+        "import subprocess",
+        "import sys",
+        "import time",
+        "import urllib.parse",
+        "import xml.etree.ElementTree as ET",
+        "from collections import Counter, defaultdict",
+        "from dataclasses import dataclass, field",
+        "from email.mime.multipart import MIMEMultipart",
+        "from email.mime.text import MIMEText",
+        "from html.parser import HTMLParser",
+        "from pathlib import Path",
+        "from typing import Any, Callable",
+        "",
+    ]
+
+    # Import condicional de librerías externas
+    if "httpx>=0.27.0" in external_deps:
+        lines += [
+            "try:",
+            "    import httpx",
+            "except ImportError:",
+            "    httpx = None",
+            "",
+        ]
+
+    if "curl_cffi>=0.7.0" in external_deps:
+        lines += [
+            "try:",
+            "    from curl_cffi import requests as curl_requests",
+            "except ImportError:",
+            "    curl_requests = None",
+            "",
+        ]
+
+    # Verificación de dependencias en arranque
+    if external_deps:
+        dep_checks = []
+        if "httpx>=0.27.0" in external_deps:
+            dep_checks.append('if httpx is None: missing.append("httpx>=0.27.0")')
+        if "curl_cffi>=0.7.0" in external_deps:
+            dep_checks.append('if curl_requests is None: missing.append("curl_cffi>=0.7.0")')
+
+        lines += [
+            "def _verify_dependencies() -> None:",
+            "    missing = []",
+            *[f"    {dc}" for dc in dep_checks],
+            '    if missing and "--create-venv" not in sys.argv and "-h" not in sys.argv and "--help" not in sys.argv:',
+            '        print(f"Error: Faltan dependencias en el entorno activo: {\', \'.join(missing)}\\n"',
+            '              f"Ejecuta este script con \'--create-venv\' para configurar el entorno automáticamente:\\n"',
+            '              f"    {sys.executable} {sys.argv[0]} --create-venv\\n", file=sys.stderr)',
+            "        sys.exit(1)",
+            "_verify_dependencies()",
+            "",
+        ]
+
+    # Shims para Secretos, LLMs y Contexto de ejecución
+    lines += [
+        "@dataclass",
+        "class FlowContext:",
+        "    flow_name: str",
+        "    started_at: float = field(default_factory=time.time)",
+        "    payload: Any = None",
+        "    headers: dict[str, str] = field(default_factory=dict)",
+        "",
+        "class _SecretsShim:",
+        "    @staticmethod",
+        "    def get(name: str) -> str | None:",
+        "        if not name:",
+        "            return None",
+        '        return os.environ.get("DEDALO_SECRET_" + name.upper().replace("-", "_")) or None',
+        "",
+        "secrets = _SecretsShim()",
+        "",
+        "class _LLMsShim:",
+        "    @staticmethod",
+        "    def resolve(name: str = '', overrides: dict[str, Any] | None = None) -> dict[str, Any]:",
+        "        o = overrides or {}",
+        "        sec_name = str(o.get('secret') or '')",
+        "        api_key = secrets.get(sec_name) if sec_name else ''",
+        "        if not api_key:",
+        '            api_key = os.environ.get("DEDALO_LLM_KEY") or os.environ.get("OPENAI_API_KEY") or ""',
+        "        return {",
+        "            'name': name or 'default',",
+        "            'url': (o.get('url') or os.environ.get('DEDALO_LLM_URL') or os.environ.get('OPENAI_BASE_URL') or 'http://localhost:11434/v1').rstrip('/'),",
+        "            'model': o.get('model') or os.environ.get('DEDALO_LLM_MODEL') or 'llama3',",
+        "            'api_key': api_key,",
+        "            'secret': sec_name,",
+        "            'temperature': float(o.get('temperature') if o.get('temperature') is not None else os.environ.get('DEDALO_LLM_TEMPERATURE', '0.7')),",
+        "            'max_context': int(o.get('max_context') or 0),",
+        "        }",
+        "",
+        "llms = _LLMsShim()",
+        "",
+        "# ==========================================================================",
+        "# Runtime embebido",
+        "# ==========================================================================",
+        shaken_runtime,
+        "",
+        "runtime = sys.modules[__name__]",
+        "",
+        "",
+    ]
+
+    # Renderizado de los nodos del DAG
+    for node in order:
+        spec = NODE_TYPES[node.type]
+        if spec.code_field:
+            lines += _render_code_node(graph, node, spec)
+        else:
+            kwargs = _render_config_kwargs(node, spec)
+            call = f"runtime.{spec.runtime_fn}(ctx, inputs" + (
+                f", {kwargs})" if kwargs else ")"
+            )
+            lines.append(f"def node_{node.id}(ctx, inputs):")
+            lines.append(f"    return {call}")
+        lines.append("")
+        lines.append("")
+
+    # Función run(ctx)
+    lines.append("def run(ctx):")
+    for node in order:
+        guard = _guard_expression(graph, node)
+        inputs_expr = _inputs_expression(graph, node)
+        call = f"node_{node.id}(ctx, {inputs_expr})"
+        if guard is None:
+            lines.append(f"    r_{node.id} = {call}")
+        else:
+            lines.append(f"    r_{node.id} = {call} if {guard} else SKIPPED")
+
+    results_dict = "{" + ", ".join(f"{n.id!r}: r_{n.id}" for n in order) + "}"
+    lines.append(f"    return runtime.summarize({results_dict}, ctx)")
+    lines.append("")
+    lines.append("")
+
+    # Función setup_virtual_environment
+    lines += [
+        'def setup_virtual_environment(venv_dir: str = ".venv") -> None:',
+        '    """Crea un entorno virtual e instala las dependencias necesarias."""',
+        "    import subprocess",
+        "    import venv",
+        "",
+        "    target = Path(venv_dir).resolve()",
+        '    print(f"[*] Configurando entorno virtual en: {target}")',
+        "    if not target.exists():",
+        '        print("    -> Creando entorno virtual...")',
+        "        venv.EnvBuilder(with_pip=True).create(target)",
+        "    else:",
+        '        print("    -> Entorno virtual existente detectado.")',
+        "",
+        '    is_win = sys.platform == "win32"',
+        '    pip_exe = target / ("Scripts" if is_win else "bin") / ("pip.exe" if is_win else "pip")',
+        '    python_exe = target / ("Scripts" if is_win else "bin") / ("python.exe" if is_win else "python")',
+        "",
+        "    if not pip_exe.exists():",
+        '        print(f"Error: No se encontró pip en {pip_exe}", file=sys.stderr)',
+        "        sys.exit(1)",
+        "",
+        '    print("    -> Actualizando pip...")',
+        "    try:",
+        '        subprocess.run([str(pip_exe), "install", "--upgrade", "pip"], check=True)',
+        "    except Exception as exc:",
+        '        print(f"Aviso al actualizar pip: {exc}", file=sys.stderr)',
+        "",
+        f"    deps = {external_deps!r}",
+        "    if deps:",
+        '        print(f"    -> Instalando dependencias: {\', \'.join(deps)}...")',
+        "        try:",
+        '            subprocess.run([str(pip_exe), "install"] + deps, check=True)',
+        "        except Exception as exc:",
+        '            print(f"Error instalando dependencias: {exc}", file=sys.stderr)',
+        "            sys.exit(1)",
+        "    else:",
+        '        print("    -> Este flujo no requiere dependencias externas adicionales.")',
+        "",
+        '    print("[✓] Entorno virtual configurado exitosamente.")',
+        '    print("    Para ejecutar este flujo, usa:")',
+        '    print(f"    {python_exe} {sys.argv[0]} [opciones]")',
+        "",
+        "",
+    ]
+
+    # Función parse_args
+    lines += [
+        "def parse_args():",
+        "    parser = argparse.ArgumentParser(",
+        f"        description={flow_name!r},",
+        "        formatter_class=argparse.RawDescriptionHelpFormatter,",
+        "    )",
+        "    parser.add_argument(",
+        '        "--create-venv",',
+        '        action="store_true",',
+        '        help="Crea un entorno virtual .venv local e instala las dependencias necesarias.",',
+        "    )",
+        "    parser.add_argument(",
+        '        "--json",',
+        '        action="store_true",',
+        '        help="Muestra el resultado completo del flujo en formato JSON estructurado.",',
+        "    )",
+        "    parser.add_argument(",
+        '        "--verbose",',
+        '        "-v",',
+        '        action="store_true",',
+        '        help="Muestra información detallada de la ejecución de cada nodo.",',
+        "    )",
+        "    parser.add_argument(",
+        '        "--input",',
+        '        "-i",',
+        '        dest="input_data",',
+        '        help="Carga útil (payload) de entrada para el flujo (texto o JSON).",',
+        "    )",
+        "    parser.add_argument(",
+        '        "--input-file",',
+        '        "-f",',
+        '        dest="input_file",',
+        '        help="Ruta a un archivo cuyo contenido se usará como entrada para el flujo.",',
+        "    )",
+    ]
+
+    # Argumentos de LLM si se detecta uso
+    if reqs["uses_llm"]:
+        lines += [
+            "",
+            '    llm_grp = parser.add_argument_group("Configuración de Modelos de Lenguaje (LLM)")',
+            "    llm_grp.add_argument(",
+            '        "--llm-url",',
+            '        default=os.environ.get("DEDALO_LLM_URL") or os.environ.get("OPENAI_BASE_URL") or "http://localhost:11434/v1",',
+            '        help="URL base del endpoint compatible OpenAI (default: http://localhost:11434/v1). (Env: DEDALO_LLM_URL o OPENAI_BASE_URL)",',
+            "    )",
+            "    llm_grp.add_argument(",
+            '        "--llm-model",',
+            '        default=os.environ.get("DEDALO_LLM_MODEL") or "llama3",',
+            '        help="Nombre del modelo LLM (default: llama3). (Env: DEDALO_LLM_MODEL)",',
+            "    )",
+            "    llm_grp.add_argument(",
+            '        "--llm-key",',
+            '        default=os.environ.get("DEDALO_LLM_KEY") or os.environ.get("OPENAI_API_KEY") or "",',
+            '        help="API Key para el LLM. (Env: DEDALO_LLM_KEY o OPENAI_API_KEY)",',
+            "    )",
+            "    llm_grp.add_argument(",
+            '        "--llm-temperature",',
+            "        type=float,",
+            '        default=float(os.environ.get("DEDALO_LLM_TEMPERATURE", "0.7")),',
+            '        help="Temperatura de muestreo (default: 0.7).",',
+            "    )",
+        ]
+
+    # Argumentos para secretos si se detectan
+    if reqs["required_secrets"]:
+        lines += [
+            "",
+            '    sec_grp = parser.add_argument_group("Secretos y Credenciales Requeridos")',
+        ]
+        for sec in reqs["required_secrets"]:
+            cli_flag = f"--secret-{sec.lower().replace('_', '-')}"
+            dest_var = f"secret_{sec.lower().replace('-', '_')}"
+            env_var = f"DEDALO_SECRET_{sec.upper().replace('-', '_')}"
+            lines += [
+                "    sec_grp.add_argument(",
+                f"        {cli_flag!r},",
+                f"        dest={dest_var!r},",
+                f"        default=os.environ.get({env_var!r}, ''),",
+                f'        help="Valor para el secreto \'{sec}\'. (Env: {env_var})",',
+                "    )",
+            ]
+
+    lines += [
+        "    return parser.parse_args()",
+        "",
+        "",
+        "def main():",
+        "    args = parse_args()",
+        "",
+        "    if args.create_venv:",
+        "        setup_virtual_environment()",
+        "        return",
+        "",
+    ]
+
+    # Inyección de LLM en variables de entorno
+    if reqs["uses_llm"]:
+        lines += [
+            '    if getattr(args, "llm_url", None):',
+            '        os.environ["DEDALO_LLM_URL"] = args.llm_url',
+            '    if getattr(args, "llm_model", None):',
+            '        os.environ["DEDALO_LLM_MODEL"] = args.llm_model',
+            '    if getattr(args, "llm_key", None):',
+            '        os.environ["DEDALO_LLM_KEY"] = args.llm_key',
+            '    if getattr(args, "llm_temperature", None) is not None:',
+            '        os.environ["DEDALO_LLM_TEMPERATURE"] = str(args.llm_temperature)',
+            "",
+        ]
+
+    # Inyección de secretos en variables de entorno
+    if reqs["required_secrets"]:
+        lines += [
+            f"    secrets_list = {reqs['required_secrets']!r}",
+            "    for sec in secrets_list:",
+            '        dest_var = "secret_" + sec.lower().replace("-", "_")',
+            '        env_var = "DEDALO_SECRET_" + sec.upper().replace("-", "_")',
+            "        val = getattr(args, dest_var, None)",
+            "        if val:",
+            "            os.environ[env_var] = str(val)",
+            "",
+        ]
+
+    # Resolución de entrada y ejecución
+    lines += [
+        "    payload = None",
+        "    if args.input_file:",
+        "        try:",
+        '            payload = Path(args.input_file).read_text(encoding="utf-8")',
+        "        except Exception as err:",
+        '            print(f"Error al leer archivo de entrada \'{args.input_file}\': {err}", file=sys.stderr)',
+        "            sys.exit(1)",
+        "    elif args.input_data is not None:",
+        "        payload = args.input_data",
+        "    elif not sys.stdin.isatty():",
+        "        try:",
+        "            import select",
+        "            if select.select([sys.stdin], [], [], 0.0)[0]:",
+        "                stdin_data = sys.stdin.read().strip()",
+        "                if stdin_data:",
+        "                    payload = stdin_data",
+        "        except Exception:",
+        "            pass",
+        "",
+        "    if isinstance(payload, str):",
+        "        try:",
+        "            payload = json.loads(payload)",
+        "        except Exception:",
+        "            pass",
+        "",
+        f"    ctx = FlowContext(flow_name={flow_name!r}, payload=payload)",
+        "    t0 = time.time()",
+        "    try:",
+        "        results = run(ctx)",
+        "    except Exception as exc:",
+        '        print(f"Error durante la ejecución del flujo: {exc}", file=sys.stderr)',
+        "        sys.exit(1)",
+        "    duration = time.time() - t0",
+        "",
+        "    has_error = False",
+        "    if isinstance(results, dict):",
+        '        has_error = any(',
+        '            (isinstance(r, dict) and r.get("status") == "error") or getattr(r, "failed", False)',
+        '            for r in results.values()',
+        '        )',
+        "",
+        "    if args.json:",
+        "        out = {}",
+        "        if isinstance(results, dict):",
+        "            for k, v in results.items():",
+        '                if isinstance(v, dict):',
+        "                    out[k] = v",
+        '                elif hasattr(v, "status"):',
+        "                    out[k] = {",
+        '                        "status": v.status,',
+        '                        "data": v.data,',
+        '                        "error": v.error,',
+        '                        "duration_ms": getattr(v, "duration", 0.0),',
+        "                    }",
+        "                else:",
+        "                    out[k] = str(v)",
+        "        else:",
+        '            out = {"result": str(results)}',
+        "        print(json.dumps(out, indent=2, ensure_ascii=False, default=str))",
+        "    else:",
+        "        if args.verbose:",
+        '            print(f"[*] Flujo completado en {duration:.3f}s")',
+        "            if isinstance(results, dict):",
+        "                for k, v in results.items():",
+        '                    if isinstance(v, dict):',
+        '                        st = str(v.get("status", "ok")).upper()',
+        '                        dur = v.get("duration_ms", 0.0)',
+        '                        err = v.get("error") or ""',
+        '                    else:',
+        '                        st = getattr(v, "status", "ok").upper()',
+        '                        dur = getattr(v, "duration", 0.0)',
+        '                        err = getattr(v, "error", "")',
+        '                    print(f"  - [{st}] {k} ({dur:.3f}s){\': \' + err if err else \'\'}")',
+        "        elif isinstance(results, dict):",
+        '            for v in reversed(list(results.values())):',
+        '                data = v.get("data") if isinstance(v, dict) else getattr(v, "data", None)',
+        '                st = v.get("status") if isinstance(v, dict) else getattr(v, "status", None)',
+        '                if st == "ok" and data is not None:',
+        '                    if isinstance(data, (dict, list)):',
+        '                        print(json.dumps(data, indent=2, ensure_ascii=False))',
+        '                    else:',
+        '                        print(data)',
+        '                    break',
+        "",
+        "    sys.exit(1 if has_error else 0)",
+        "",
+        "",
+        'if __name__ == "__main__":',
+        "    main()",
+        "",
+    ]
+
+    source = "\n".join(lines)
+    try:
+        ast.parse(source)
+        _compile_source(source, "<dedalo_standalone>", "exec")
+    except SyntaxError as exc:
+        raise GraphError([f"el código generado para modo autónomo no es Python válido: {exc}"]) from exc
 
     return source

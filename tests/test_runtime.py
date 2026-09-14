@@ -1,6 +1,7 @@
 """Tests para el runtime de Dédalo Standalone."""
 
 from dedalo import runtime
+from pathlib import Path
 import re
 
 
@@ -1098,6 +1099,356 @@ def test_weather_forecast_mocked(monkeypatch):
     assert "Mayormente despejado" in res.data["weather_desc"]
     assert "🌤️" in res.data["markdown"]
     assert "22.4°C" in res.data["markdown"]
+
+
+def test_telemetry_input_and_evidence_vault(tmp_path):
+    # 1. Telemetry input directo con JSON inline
+    raw_payload = '{"pod": "checkout-6b7d", "status": "CrashLoopBackOff", "exit_code": 137}'
+    r_telemetry = runtime.telemetry_input(
+        None,
+        [],
+        incident_id="k8s-oom-001",
+        resource="k8s/checkout-api",
+        telemetry_json=raw_payload,
+    )
+    assert r_telemetry.ok
+    assert r_telemetry.data["incident_id"] == "k8s-oom-001"
+    assert r_telemetry.data["resource"] == "k8s/checkout-api"
+    assert r_telemetry.data["telemetry"]["exit_code"] == 137
+
+    # 2. Custodia inmutable en Evidence Vault
+    vault_dir = str(tmp_path / "vault")
+    r_vault = runtime.evidence_vault(
+        None,
+        [r_telemetry],
+        directory=vault_dir,
+        compress=True,
+        include_metadata=True,
+    )
+    assert r_vault.ok
+    assert r_vault.data["incident_id"] == "k8s-oom-001"
+    assert r_vault.data["sha256"]
+    assert r_vault.data["compressed"] is True
+
+    target_file = Path(r_vault.data["vault_path"])
+    assert target_file.exists()
+    assert target_file.name.endswith(".json.gz")
+
+    meta_file = target_file.parent / f"{target_file.name}.meta.json"
+    assert meta_file.exists()
+    import json
+    meta_info = json.loads(meta_file.read_text(encoding="utf-8"))
+    assert meta_info["sha256"] == r_vault.data["sha256"]
+    assert meta_info["incident_id"] == "k8s-oom-001"
+
+
+def test_analyzer_and_planner_agents(monkeypatch):
+    recorded_calls = []
+
+    def fake_call_llm(prompt, system="", **kwargs):
+        recorded_calls.append({"prompt": prompt, "system": system, "kwargs": kwargs})
+        if "=== EVIDENCIA" in prompt:
+            return "Diagnóstico: Causa raíz OOMKilled por pico de memoria en checkout-api."
+        elif "=== DIAGNÓSTICO" in prompt:
+            return "Plan de mitigación:\n1. Aumentar memoria a 1Gi.\n2. Reiniciar deployment."
+        return "Respuesta LLM genérica"
+
+    monkeypatch.setattr(runtime, "call_llm", fake_call_llm)
+
+    # Iniciar con telemetría con secretos sensibles
+    telemetry_data = {
+        "incident_id": "sec-alert-42",
+        "resource": "auth-service",
+        "telemetry": "Error conectando a DB con password=SuperSecretPassword123! y bearer abcdef1234567890xyz",
+    }
+    r_in = runtime.NodeResult("ok", data=telemetry_data)
+
+    # 1. Analyzer agent con sanitización activa
+    r_analyzer = runtime.analyzer_agent(
+        None,
+        [r_in],
+        prompt="Analiza la falla",
+        sanitize_secrets=True,
+    )
+    assert r_analyzer.ok
+    assert "Causa raíz OOMKilled" in r_analyzer.data["analysis"]
+    assert r_analyzer.data["meta"]["incident_id"] == "sec-alert-42"
+    assert len(recorded_calls) == 1
+    # Verificar que el prompt enviado al LLM fue sanitizado
+    assert "SuperSecretPassword123!" not in recorded_calls[0]["prompt"]
+    assert "[REDACTED]" in recorded_calls[0]["prompt"]
+
+    # 2. Planner agent encadenado
+    r_planner = runtime.planner_agent(
+        None,
+        [r_analyzer],
+        prompt="Genera remediación inmediata",
+        output_format="markdown",
+    )
+    assert r_planner.ok
+    assert "Aumentar memoria a 1Gi" in r_planner.data["plan"]
+    assert len(recorded_calls) == 2
+    assert "Causa raíz OOMKilled" in recorded_calls[1]["prompt"]
+
+
+def test_jira_nodes_input_and_output(monkeypatch):
+    from dedalo import secrets
+    monkeypatch.setattr(secrets, "get", lambda name: "fake-atlassian-token" if name == "mi_jira_token" else "")
+
+    recorded_requests = []
+
+    class FakeJiraResponse:
+        def __init__(self, endpoint, method, json_body=None):
+            self.endpoint = endpoint
+            self.method = method
+            self.json_body = json_body
+            self.status_code = 200
+
+        def json(self):
+            if "search" in self.endpoint:
+                return {
+                    "total": 1,
+                    "issues": [{
+                        "key": "SEC-101",
+                        "id": "10001",
+                        "fields": {
+                            "summary": "Incidencia de seguridad pod-crash",
+                            "status": {"name": "In Progress"},
+                            "priority": {"name": "High"},
+                            "assignee": {"displayName": "Raul Sec"},
+                            "created": "2026-09-14T20:00:00.000Z",
+                        }
+                    }]
+                }
+            elif "issue" in self.endpoint:
+                return {
+                    "id": "10002",
+                    "key": "SEC-102",
+                }
+            return {}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def post(self, url, json=None, headers=None):
+            recorded_requests.append({"url": url, "json": json, "headers": headers, "method": "POST"})
+            return FakeJiraResponse(url, "POST", json)
+        def put(self, url, json=None, headers=None):
+            recorded_requests.append({"url": url, "json": json, "headers": headers, "method": "PUT"})
+            class DummyPut:
+                status_code = 204
+            return DummyPut()
+
+    monkeypatch.setattr(runtime.httpx, "Client", FakeClient)
+
+    # 1. Probar input.jira_issues
+    r_jira_in = runtime.jira_issues_input(
+        None,
+        [],
+        instance_url="https://mi-empresa.atlassian.net",
+        email="raul@empresa.com",
+        secret="mi_jira_token",
+        jql="project = SEC AND status != Closed",
+    )
+    assert r_jira_in.ok
+    assert r_jira_in.data["total"] == 1
+    assert r_jira_in.data["issues"][0]["key"] == "SEC-101"
+    assert "Basic " in recorded_requests[0]["headers"]["Authorization"]
+
+    # 2. Probar output.jira_issue
+    mock_plan = runtime.NodeResult("ok", data={"plan": "Plan de contención paso a paso.", "summary": "Mitigación OOMKilled"})
+    r_jira_out = runtime.jira_issue_output(
+        None,
+        [mock_plan],
+        instance_url="https://mi-empresa.atlassian.net",
+        email="raul@empresa.com",
+        secret="mi_jira_token",
+        project_key="SEC",
+        issue_type="Task",
+        priority="High",
+        labels="secops,autofix",
+    )
+    assert r_jira_out.ok
+    assert r_jira_out.data["key"] == "SEC-102"
+    assert r_jira_out.data["project"] == "SEC"
+    assert recorded_requests[1]["json"]["fields"]["project"]["key"] == "SEC"
+    assert recorded_requests[1]["json"]["fields"]["labels"] == ["secops", "autofix"]
+
+    # 3. Probar output.jira_issue con add_comment sobre issue existente
+    r_comment = runtime.jira_issue_output(
+        None,
+        [],
+        instance_url="https://mi-empresa.atlassian.net",
+        email="raul@empresa.com",
+        secret="mi_jira_token",
+        action="add_comment",
+        issue_key="SEC-101",
+        comment="Pasos de resolución:\n1. Reiniciar pod\n2. Monitorear memoria",
+    )
+    assert r_comment.ok
+    assert r_comment.data["action"] == "comment_added"
+    assert r_comment.data["key"] == "SEC-101"
+
+    # 4. Probar output.jira_issue con update (cambiar prioridad y etiquetas)
+    r_update = runtime.jira_issue_output(
+        None,
+        [],
+        instance_url="https://mi-empresa.atlassian.net",
+        email="raul@empresa.com",
+        secret="mi_jira_token",
+        action="update",
+        issue_key="SEC-101",
+        priority="Highest",
+        labels="triaged,secops",
+    )
+    assert r_update.ok
+    assert r_update.data["action"] == "updated"
+    assert "priority" in r_update.data["updated_fields"]
+    assert "labels" in r_update.data["updated_fields"]
+
+    # 5. Probar output.jira_issue con per_item procesando lote de tickets
+    mock_batch = runtime.NodeResult("ok", data=[
+        {"key": "SEC-201", "analysis": "Diagnóstico ticket 201"},
+        {"key": "SEC-202", "analysis": "Diagnóstico ticket 202"},
+    ])
+    r_batch_comment = runtime.jira_issue_output(
+        None,
+        [mock_batch],
+        instance_url="https://mi-empresa.atlassian.net",
+        email="raul@empresa.com",
+        secret="mi_jira_token",
+        action="add_comment",
+    )
+    assert r_batch_comment.ok
+    assert r_batch_comment.data["processed"] == 2
+    assert len(r_batch_comment.data["results"]) == 2
+    assert r_batch_comment.data["results"][0]["key"] == "SEC-201"
+    assert r_batch_comment.data["results"][1]["key"] == "SEC-202"
+
+
+
+def test_confluence_nodes_input_and_output(monkeypatch):
+    from dedalo import secrets
+    monkeypatch.setattr(secrets, "get", lambda name: "fake-confluence-token" if name == "mi_conf_token" else "")
+
+    recorded_requests = []
+
+    class FakeConfluenceResponse:
+        def __init__(self, url, method):
+            self.url = url
+            self.method = method
+            self.status_code = 200
+
+        def json(self):
+            if "search" in self.url:
+                return {
+                    "size": 1,
+                    "results": [{
+                        "id": "20001",
+                        "title": "Postura de Seguridad K8s",
+                        "space": {"key": "SEC"},
+                        "_links": {"webui": "/spaces/SEC/pages/20001"},
+                        "version": {"number": 1},
+                        "body": {"storage": {"value": "<p>Documentación de seguridad</p>"}},
+                    }]
+                }
+            elif "content/20001" in self.url and self.method == "GET":
+                return {
+                    "id": "20001",
+                    "title": "Postura de Seguridad K8s",
+                    "space": {"key": "SEC"},
+                    "version": {"number": 1},
+                    "body": {"storage": {"value": "<p>Documentación previa</p>"}},
+                }
+            elif "content" in self.url and self.method == "GET":
+                # Búsqueda por título previa a create_or_update
+                return {"results": []}
+            elif "content" in self.url and self.method == "POST":
+                # Creación
+                return {
+                    "id": "20002",
+                    "title": "Nuevo Reporte",
+                    "_links": {"webui": "/spaces/SEC/pages/20002"},
+                    "version": {"number": 1},
+                }
+            return {}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def get(self, url, params=None, headers=None):
+            recorded_requests.append({"url": url, "params": params, "headers": headers, "method": "GET"})
+            return FakeConfluenceResponse(url, "GET")
+        def post(self, url, json=None, headers=None):
+            recorded_requests.append({"url": url, "json": json, "headers": headers, "method": "POST"})
+            return FakeConfluenceResponse(url, "POST")
+        def put(self, url, json=None, headers=None):
+            recorded_requests.append({"url": url, "json": json, "headers": headers, "method": "PUT"})
+            class DummyPutConf:
+                status_code = 200
+                def json(self):
+                    return {
+                        "id": "20001",
+                        "title": "Postura de Seguridad K8s",
+                        "_links": {"webui": "/spaces/SEC/pages/20001"},
+                        "version": {"number": 2},
+                    }
+            return DummyPutConf()
+
+    monkeypatch.setattr(runtime.httpx, "Client", FakeClient)
+
+    # 1. Probar input.confluence_pages
+    r_conf_in = runtime.confluence_pages_input(
+        None,
+        [],
+        instance_url="https://mi-empresa.atlassian.net/wiki",
+        email="raul@empresa.com",
+        secret="mi_conf_token",
+        space_key="SEC",
+        title="Postura",
+    )
+    assert r_conf_in.ok
+    assert r_conf_in.data["total"] == 1
+    assert r_conf_in.data["pages"][0]["title"] == "Postura de Seguridad K8s"
+
+    # 2. Probar output.confluence_page
+    mock_input = runtime.NodeResult("ok", data="Texto del reporte para Confluence")
+    r_conf_out = runtime.confluence_page_output(
+        None,
+        [mock_input],
+        instance_url="https://mi-empresa.atlassian.net",
+        email="raul@empresa.com",
+        secret="mi_conf_token",
+        space_key="SEC",
+        title="Nuevo Reporte",
+    )
+    assert r_conf_out.ok
+    assert r_conf_out.data["id"] == "20002"
+    assert r_conf_out.data["action"] == "created"
+
+    # 3. Probar ciclo completo: leer página existente -> procesar -> actualizar esa misma página (PUT con nueva versión)
+    page_modificada = {
+        "id": "20001",
+        "title": "Postura de Seguridad K8s",
+        "space": "SEC",
+        "content": "Lista de hallazgos actualizada:\n- Pod checkout corregido\n- Limites de memoria aplicados",
+    }
+    r_update_conf = runtime.confluence_page_output(
+        None,
+        [runtime.NodeResult("ok", data=page_modificada)],
+        instance_url="https://mi-empresa.atlassian.net",
+        email="raul@empresa.com",
+        secret="mi_conf_token",
+        mode="create_or_update",
+    )
+    assert r_update_conf.ok
+    assert r_update_conf.data["id"] == "20001"
+    assert r_update_conf.data["version"] == 2
+    assert r_update_conf.data["action"] == "updated"
+
+
 
 
 

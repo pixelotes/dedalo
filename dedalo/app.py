@@ -414,6 +414,27 @@ def export_flow_endpoint(flow_id: str = "", id: str = "") -> Response:
         raise HTTPException(status_code=500, detail=f"Error exportando flujo: {exc}")
 
 
+@app.get("/api/flow/export-py")
+@app.get("/api/flows/{flow_id}/export-py")
+def export_flow_py_endpoint(flow_id: str = "", id: str = "") -> Response:
+    target_id = flow_id or id
+    if not target_id:
+        raise HTTPException(status_code=400, detail="Falta el identificador del flujo a exportar.")
+    try:
+        py_source = store.export_flow_standalone_py(target_id)
+        filename = f"{store.slug(target_id)}.py"
+        return Response(
+            content=py_source,
+            media_type="text/x-python",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Flujo «{target_id}» no encontrado.")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error exportando script del flujo: {exc}")
+
+
+
 @app.get("/api/flows/export-all")
 def export_all_flows_endpoint() -> Response:
     try:
