@@ -1449,6 +1449,83 @@ def test_confluence_nodes_input_and_output(monkeypatch):
     assert r_update_conf.data["action"] == "updated"
 
 
+def test_cve_audit_cyclonedx_and_requirements(monkeypatch):
+    class FakeOSVResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "results": [
+                    {
+                        "vulns": [
+                            {
+                                "id": "GHSA-r64q-w8jr-g9qp",
+                                "aliases": ["CVE-2023-45803"],
+                                "summary": "urllib3 HTTP request body not stripped after redirect",
+                                "database_specific": {"severity": "HIGH"},
+                                "affected": [
+                                    {
+                                        "package": {"name": "urllib3", "ecosystem": "PyPI"},
+                                        "ranges": [
+                                            {
+                                                "type": "ECOSYSTEM",
+                                                "events": [{"introduced": "0"}, {"fixed": "1.26.18"}],
+                                            }
+                                        ],
+                                    }
+                                ],
+                                "references": [{"type": "WEB", "url": "https://nvd.nist.gov/vuln/detail/CVE-2023-45803"}],
+                            }
+                        ]
+                    },
+                    {
+                        "vulns": []  # Segundo paquete sin vulnerabilidades
+                    },
+                ]
+            }
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def post(self, url, json=None, headers=None):
+            assert "querybatch" in url
+            assert len(json["queries"]) == 2
+            return FakeOSVResponse()
+
+    monkeypatch.setattr(runtime.httpx, "Client", FakeClient)
+
+    # 1. Probar con CycloneDX JSON
+    cyclonedx_bom = {
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.4",
+        "components": [
+            {"name": "urllib3", "version": "1.26.4", "purl": "pkg:pypi/urllib3@1.26.4"},
+            {"name": "requests", "version": "2.31.0", "purl": "pkg:pypi/requests@2.31.0"},
+        ],
+    }
+
+    inp = runtime.NodeResult("ok", data=cyclonedx_bom)
+    res = runtime.cve_audit(None, [inp], severity_threshold="LOW")
+    assert res.ok
+    assert res.data["total_packages"] == 2
+    assert res.data["vulnerable_packages"] == 1
+    assert res.data["total_vulnerabilities"] == 1
+    assert res.data["highest_severity"] == "HIGH"
+    assert res.data["severity_counts"]["HIGH"] == 1
+    assert res.data["vulnerabilities"][0]["package"] == "urllib3"
+    assert res.data["vulnerabilities"][0]["fixed_version"] == "1.26.18"
+    assert res.data["vulnerabilities"][0]["cve"] == "CVE-2023-45803"
+    assert "| `urllib3` | `1.26.4` |" in res.data["markdown"]
+
+    # 2. Probar filtro de severidad: si exigimos CRITICAL, la vulnerabilidad HIGH queda excluida
+    res_crit = runtime.cve_audit(None, [inp], severity_threshold="CRITICAL")
+    assert res_crit.ok
+    assert res_crit.data["total_vulnerabilities"] == 0
+    assert "No se han detectado vulnerabilidades conocidas" in res_crit.data["markdown"]
+
+
+
 
 
 

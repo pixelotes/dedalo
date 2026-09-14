@@ -1,8 +1,8 @@
 # Catálogo Completo de Nodos de Dédalo
 
-Dédalo cuenta con **64 nodos modulares** categorizados en tres familias:
+Dédalo cuenta con **65 nodos modulares** categorizados en tres familias:
 - **Entradas (`input.*`)**: 25 nodos para ingerir datos desde APIs, servicios, colas, hardware, repositorios o archivos.
-- **Transformaciones (`transform.*`)**: 23 nodos para limpiar, filtrar, agregar, calcular, deduplicar o enriquecer datos con algoritmos locales o agentes LLM.
+- **Transformaciones (`transform.*`)**: 24 nodos para limpiar, filtrar, agregar, calcular, deduplicar, auditar vulnerabilidades (CVE/SBOM) o enriquecer datos con algoritmos locales o agentes LLM.
 - **Salidas (`output.*`)**: 16 nodos para persistir evidencias, abrir incidencias, actualizar wikis, enviar alertas a mensajería o ejecutar acciones.
 
 ---
@@ -116,6 +116,13 @@ Dédalo cuenta con **64 nodos modulares** categorizados en tres familias:
 ### `transform.script`
 - **Etiqueta**: Código Python.
 - **Descripción**: Ejecución de código Python puro personalizado. Recibe el objeto `inp` con métodos como `.first_data()`, `.text()`, `.items()` y el contexto `ctx`. Permite cualquier transformación con latencia de microsegundos y cero consumo de tokens.
+
+### `transform.cve_audit`
+- **Etiqueta**: Auditoría CVE / SBOM (OSV.dev).
+- **Descripción**: Audita listas de componentes y dependencias consultando la base de datos abierta de vulnerabilidades de **OSV.dev** (Google / OpenSSF) mediante peticiones por lotes (*batch* de hasta 500 consultas por llamada).
+- **Formatos soportados**: SBOM CycloneDX JSON, SPDX JSON, listas de diccionarios con PURL o `requirements.txt`.
+- **Salida**: Diccionario estructurado con métricas (`total_packages`, `vulnerable_packages`, `total_vulnerabilities`, `highest_severity`), lista detallada de CVEs/GHSAs con versión parcheada (*fixed version*) y reporte en tabla Markdown profesional.
+- **Parámetros**: `ecosystem`, `severity_threshold` (ALL, LOW, MEDIUM, HIGH, CRITICAL), `max_results`, `timeout`.
 
 ### `transform.filter` y `transform.array_ops`
 - **Etiquetas**: Filtrar elementos / Operaciones de Lista.

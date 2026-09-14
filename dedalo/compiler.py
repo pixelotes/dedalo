@@ -1158,6 +1158,45 @@ NODE_TYPES: dict[str, NodeSpec] = {
             "limit": "Número máximo de elementos a extraer (0 para todos).",
         },
     ),
+    "transform.cve_audit": NodeSpec(
+        category="transform",
+        runtime_fn="cve_audit",
+        optional={
+            "ecosystem": "",
+            "severity_threshold": "LOW",
+            "max_results": 100,
+            "timeout": 25.0,
+        },
+        label="Auditoría CVE / SBOM (OSV.dev)",
+        output="dict con vulnerabilidades, métricas y reporte en Markdown",
+        choices={
+            "ecosystem": [
+                {"value": "", "label": "Auto-detectar (PURL / SBOM)"},
+                {"value": "PyPI", "label": "Python (PyPI)"},
+                {"value": "npm", "label": "Node.js (npm)"},
+                {"value": "Maven", "label": "Java (Maven)"},
+                {"value": "Go", "label": "Go"},
+                {"value": "Debian", "label": "Debian (apt)"},
+                {"value": "Alpine", "label": "Alpine (apk)"},
+                {"value": "NuGet", "label": ".NET (NuGet)"},
+                {"value": "Packagist", "label": "PHP (Composer)"},
+                {"value": "crates.io", "label": "Rust (Cargo)"},
+            ],
+            "severity_threshold": [
+                {"value": "ALL", "label": "Todas las severidades"},
+                {"value": "LOW", "label": "Baja (Low) o superior"},
+                {"value": "MEDIUM", "label": "Media (Medium) o superior"},
+                {"value": "HIGH", "label": "Alta (High) o superior"},
+                {"value": "CRITICAL", "label": "Sólo Críticas (Critical)"},
+            ],
+        },
+        help={
+            "ecosystem": "Ecosistema de paquetes predeterminado si no se especifica PURL (ej. PyPI, npm, Maven).",
+            "severity_threshold": "Nivel de severidad mínimo para incluir en el reporte (ALL, LOW, MEDIUM, HIGH, CRITICAL).",
+            "max_results": "Número máximo de vulnerabilidades a incluir en el reporte.",
+            "timeout": "Tiempo máximo en segundos para la consulta batch a OSV.dev.",
+        },
+    ),
     "transform.merge": NodeSpec(
         category="transform",
         runtime_fn="merge",
@@ -1827,6 +1866,7 @@ def _extract_runtime_tree_shaken(graph: Graph) -> tuple[str, list[str]]:
             "transform.coder",
             "transform.analyzer",
             "transform.planner",
+            "transform.cve_audit",
             "output.jira_issue",
             "output.confluence_page",
         )

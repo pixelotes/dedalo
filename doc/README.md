@@ -12,9 +12,9 @@ Bienvenido a la documentación técnica y guía de arquitectura de **Dédalo**, 
    - Decisiones técnicas clave: ausencia de empaquetadores en frontend, modelo de ejecución determinista, gestión de secretos en disco (`0600`) y centinelas de omisión (`SKIPPED`).
 
 2. **[Catálogo Completo de Nodos](catalogo_de_nodos.md)**
-   - Catálogo exhaustivo de los **64 nodos disponibles**:
+   - Catálogo exhaustivo de los **65 nodos disponibles**:
      - **25 Nodos de Entrada (`input.*`)**: Webhooks, llamadas API, Git, telemetría de incidentes, Jira, Confluence, sensores Pi/Linux, RSS, IMAP, etc.
-     - **23 Nodos de Transformación (`transform.*`)**: Agentes LLM, Coder con ReAct, Analizador y Planificador SecOps, operadores de listas, diffs con hash, deduplicación difusa, regex, selectores CSS, sanitización y scripts Python.
+     - **24 Nodos de Transformación (`transform.*`)**: Agentes LLM, Coder con ReAct, Analizador y Planificador SecOps, Auditoría CVE/SBOM, operadores de listas, diffs con hash, deduplicación difusa, regex, selectores CSS, sanitización y scripts Python.
      - **16 Nodos de Salida (`output.*`)**: Bóveda de evidencia con gzip+sha256, operaciones Jira (crear, comentar, transicionar), páginas Confluence (crear, reemplazar, anexar), Git commits/push, SQLite, Telegram, Discord, Slack, MQTT, etc.
 
 3. **[Agentes Nativos e Inteligencia Artificial](agentes_y_llms.md)**

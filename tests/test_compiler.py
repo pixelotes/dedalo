@@ -258,6 +258,31 @@ def test_atlassian_nodes_compilation():
     assert callable(ns["run"])
 
 
+def test_cve_audit_pipeline_compilation():
+    g = compiler.Graph(
+        name="cve_audit_pipeline",
+        nodes=[
+            _node("sbom_file", "input.json_file", {"path": "bom.json"}),
+            _node("audit", "transform.cve_audit", {"severity_threshold": "HIGH"}),
+            _node("report", "output.file", {"filename": "cve_report.md"}),
+        ],
+        edges=[
+            _edge("sbom_file", "audit", "ok"),
+            _edge("audit", "report", "ok"),
+        ],
+    )
+    src = compiler.compile(g)
+    assert "def run(ctx):" in src
+    assert "runtime.cve_audit" in src
+
+    # Probar compilación standalone con tree-shaking
+    standalone = compiler.compile_standalone(g)
+    assert "import httpx" in standalone
+    assert "def cve_audit(" in standalone
+    assert "def run(ctx):" in standalone
+
+
+
 
 
 

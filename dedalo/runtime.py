@@ -5994,3 +5994,335 @@ def git_commit_push(
     })
 
 
+# ---------------------------------------------------------------------------
+# Auditoría de Seguridad de Vulnerabilidades (SBOM / CVE con OSV.dev)
+# ---------------------------------------------------------------------------
+
+_SEVERITY_ORDER = {
+    "NONE": 0,
+    "LOW": 1,
+    "MEDIUM": 2,
+    "MODERATE": 2,
+    "HIGH": 3,
+    "CRITICAL": 4,
+}
+
+_PURL_ECOSYSTEM_MAP = {
+    "pypi": "PyPI",
+    "npm": "npm",
+    "maven": "Maven",
+    "golang": "Go",
+    "go": "Go",
+    "deb": "Debian",
+    "debian": "Debian",
+    "apk": "Alpine",
+    "alpine": "Alpine",
+    "nuget": "NuGet",
+    "composer": "Packagist",
+    "cargo": "crates.io",
+    "gem": "RubyGems",
+    "hex": "Hex",
+    "pub": "Pub",
+}
+
+
+def _detect_ecosystem_from_purl(purl: str) -> str:
+    """Extrae el ecosistema a partir de un Package URL (PURL)."""
+    if not purl or not purl.startswith("pkg:"):
+        return ""
+    scheme_part = purl.split("/", 1)[0]
+    pkg_type = scheme_part.replace("pkg:", "").lower()
+    return _PURL_ECOSYSTEM_MAP.get(pkg_type, "")
+
+
+def _parse_purl(purl: str) -> tuple[str, str, str]:
+    """Extrae (name, version, ecosystem) de un purl estándar."""
+    ecosystem = _detect_ecosystem_from_purl(purl)
+    version = ""
+    rest = purl
+    if "@" in purl:
+        rest, version = purl.rsplit("@", 1)
+        if "?" in version:
+            version = version.split("?", 1)[0]
+    name = rest.split("/", 1)[-1] if "/" in rest else ""
+    return name, version, ecosystem
+
+
+def _parse_sbom_components(data: Any, default_eco: str = "") -> list[dict[str, str]]:
+    """Extrae lista normalizada de paquetes [{"name": ..., "version": ..., "ecosystem": ...}]
+    a partir de CycloneDX JSON, SPDX JSON, listas de diccionarios o texto plano."""
+    components: list[dict[str, str]] = []
+
+    # 1. Si es un string (archivo requirements.txt, bom json, etc.)
+    if isinstance(data, str):
+        data_str = data.strip()
+        if data_str.startswith("{") or data_str.startswith("["):
+            try:
+                data = json.loads(data_str)
+            except Exception:
+                pass
+
+    # 2. CycloneDX JSON
+    if isinstance(data, dict) and (data.get("bomFormat") == "CycloneDX" or "components" in data):
+        raw_comps = data.get("components") or []
+        for c in raw_comps:
+            if not isinstance(c, dict):
+                continue
+            name = str(c.get("name", "")).strip()
+            version = str(c.get("version", "")).strip()
+            purl = str(c.get("purl", "")).strip()
+            eco = _detect_ecosystem_from_purl(purl) or default_eco or "PyPI"
+            if not name and purl:
+                name, v, e = _parse_purl(purl)
+                version = version or v
+                eco = eco or e
+            if name:
+                components.append({"name": name, "version": version, "ecosystem": eco, "purl": purl})
+        return components
+
+    # 3. SPDX JSON
+    if isinstance(data, dict) and ("spdxVersion" in data or "packages" in data):
+        raw_pkgs = data.get("packages") or []
+        for p in raw_pkgs:
+            if not isinstance(p, dict):
+                continue
+            name = str(p.get("name", "")).strip()
+            version = str(p.get("versionInfo", "")).strip()
+            purl = ""
+            for ref in p.get("externalRefs") or []:
+                if isinstance(ref, dict) and ref.get("referenceType") == "purl":
+                    purl = str(ref.get("referenceLocator", "")).strip()
+                    break
+            eco = _detect_ecosystem_from_purl(purl) or default_eco or "PyPI"
+            if name:
+                components.append({"name": name, "version": version, "ecosystem": eco, "purl": purl})
+        return components
+
+    # 4. Lista directa de dicts o strings
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict):
+                name = str(item.get("name") or item.get("package") or "").strip()
+                version = str(item.get("version") or "").strip()
+                purl = str(item.get("purl") or "").strip()
+                eco = str(item.get("ecosystem") or _detect_ecosystem_from_purl(purl) or default_eco or "PyPI").strip()
+                if name:
+                    components.append({"name": name, "version": version, "ecosystem": eco, "purl": purl})
+            elif isinstance(item, str) and item.strip():
+                line = item.strip()
+                m = re.match(r"^([a-zA-Z0-9_\-\.\@\/]+)(?:==|@|>=|<=)([a-zA-Z0-9_\-\.]+)$", line)
+                if m:
+                    components.append({"name": m.group(1), "version": m.group(2), "ecosystem": default_eco or "PyPI", "purl": ""})
+        return components
+
+    # 5. Texto plano (requirements.txt o lista newline-separated)
+    if isinstance(data, str):
+        for line in data.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            m = re.match(r"^([a-zA-Z0-9_\-\.\@\/]+)(?:==|@|>=|<=)([a-zA-Z0-9_\-\.]+)$", line)
+            if m:
+                components.append({"name": m.group(1), "version": m.group(2), "ecosystem": default_eco or "PyPI", "purl": ""})
+
+    return components
+
+
+def _extract_severity_and_fix(vuln: dict) -> tuple[str, str, str]:
+    """Extrae (severity, fixed_version, cve_id) de un objeto de vulnerabilidad OSV."""
+    vuln_id = vuln.get("id", "")
+    aliases = vuln.get("aliases") or []
+    cve_id = next((a for a in aliases if a.startswith("CVE-")), "") or vuln_id
+
+    sev_str = "MEDIUM"
+    db_spec = vuln.get("database_specific") or {}
+    if isinstance(db_spec, dict) and db_spec.get("severity"):
+        raw_sev = str(db_spec["severity"]).upper()
+        if raw_sev in ("CRITICAL", "HIGH", "MEDIUM", "MODERATE", "LOW"):
+            sev_str = "MEDIUM" if raw_sev == "MODERATE" else raw_sev
+    elif vuln.get("severity"):
+        for s in vuln["severity"]:
+            if isinstance(s, dict) and s.get("score"):
+                score = str(s["score"])
+                if "CVSS:" in score:
+                    if "/AV:N/AC:L/PR:N" in score or "/S:C/C:H/I:H/A:H" in score:
+                        sev_str = "CRITICAL"
+                    elif "/C:H" in score or "/I:H" in score:
+                        sev_str = "HIGH"
+
+    fixed_ver = ""
+    for aff in vuln.get("affected") or []:
+        if isinstance(aff, dict):
+            for rng in aff.get("ranges") or []:
+                if isinstance(rng, dict):
+                    for ev in rng.get("events") or []:
+                        if isinstance(ev, dict) and ev.get("fixed"):
+                            fixed_ver = str(ev["fixed"])
+                            break
+            if fixed_ver:
+                break
+
+    return sev_str, fixed_ver, cve_id
+
+
+def cve_audit(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    ecosystem: str = "",
+    severity_threshold: str = "LOW",
+    max_results: int = 100,
+    timeout: float = 25.0,
+) -> NodeResult:
+    """Audita una lista de dependencias o archivo SBOM (CycloneDX / SPDX) consultando
+    la base de datos abierta de vulnerabilidades de OSV.dev (OpenSSF/Google) en batch."""
+    inp = Inputs(inputs)
+    raw = inp.first_data()
+    if raw is None:
+        raw = inp.text()
+
+    if not raw:
+        return NodeResult("error", error="El nodo de auditoría CVE requiere datos de entrada (SBOM o lista de paquetes)")
+
+    components = _parse_sbom_components(raw, default_eco=ecosystem)
+    if not components:
+        return NodeResult("error", error="No se encontraron componentes ni paquetes válidos en la entrada (esperado CycloneDX, SPDX, lista de dicts o requirements)")
+
+    queries = []
+    for c in components:
+        if c.get("purl"):
+            queries.append({"package": {"purl": c["purl"]}})
+        elif c.get("name") and c.get("version"):
+            q: dict[str, Any] = {
+                "package": {"name": c["name"]},
+                "version": c["version"],
+            }
+            if c.get("ecosystem"):
+                q["package"]["ecosystem"] = c["ecosystem"]
+            queries.append(q)
+        elif c.get("name"):
+            queries.append({"package": {"name": c["name"], "ecosystem": c.get("ecosystem", "PyPI")}})
+
+    if not queries:
+        return NodeResult("error", error="No se pudieron generar consultas válidas a partir de los componentes extraídos")
+
+    all_vuln_results = []
+    osv_url = "https://api.osv.dev/v1/querybatch"
+
+    try:
+        with httpx.Client(timeout=float(timeout)) as client:
+            chunk_size = 500
+            for i in range(0, len(queries), chunk_size):
+                batch = queries[i : i + chunk_size]
+                resp = client.post(osv_url, json={"queries": batch})
+                if resp.status_code >= 400:
+                    return NodeResult("error", error=f"Error en OSV.dev API ({resp.status_code}): {resp.text[:200]}")
+                batch_res = resp.json().get("results", [])
+                all_vuln_results.extend(batch_res)
+    except Exception as exc:
+        return NodeResult("error", error=f"Error de conexión con OSV.dev: {exc}")
+
+    min_level = _SEVERITY_ORDER.get(severity_threshold.upper().strip(), 1)
+    if severity_threshold.upper().strip() == "ALL":
+        min_level = 0
+
+    vulnerabilities = []
+    vulnerable_packages_set = set()
+    severity_counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+    max_sev_found = "NONE"
+
+    for idx, res_item in enumerate(all_vuln_results):
+        if idx >= len(components):
+            break
+        comp = components[idx]
+        vulns_found = (res_item or {}).get("vulns", [])
+        if not vulns_found:
+            continue
+
+        for v in vulns_found:
+            sev, fixed_ver, cve_id = _extract_severity_and_fix(v)
+            sev_lvl = _SEVERITY_ORDER.get(sev, 2)
+            if sev_lvl < min_level:
+                continue
+
+            vulnerable_packages_set.add(comp["name"])
+            if sev in severity_counts:
+                severity_counts[sev] += 1
+
+            if _SEVERITY_ORDER.get(sev, 0) > _SEVERITY_ORDER.get(max_sev_found, 0):
+                max_sev_found = sev
+
+            summary = v.get("summary") or ""
+            if not summary and v.get("details"):
+                summary = v["details"][:150].strip() + "..."
+
+            refs = [r.get("url") for r in (v.get("references") or []) if isinstance(r, dict) and r.get("url")]
+
+            vulnerabilities.append({
+                "package": comp["name"],
+                "version": comp.get("version", ""),
+                "ecosystem": comp.get("ecosystem", ""),
+                "id": v.get("id", ""),
+                "cve": cve_id,
+                "severity": sev,
+                "summary": summary,
+                "fixed_version": fixed_ver,
+                "references": refs[:3],
+            })
+
+            if len(vulnerabilities) >= int(max_results):
+                break
+        if len(vulnerabilities) >= int(max_results):
+            break
+
+    icon_map = {
+        "CRITICAL": "🔴",
+        "HIGH": "🟠",
+        "MEDIUM": "🟡",
+        "LOW": "🔵",
+        "NONE": "🟢",
+    }
+    sev_icon = icon_map.get(max_sev_found, "⚪")
+
+    md_lines = [
+        "## 🛡️ Auditoría de Seguridad de Vulnerabilidades (OSV / CVE)",
+        "",
+        f"- **Paquetes auditados**: {len(components)}",
+        f"- **Paquetes vulnerables**: {len(vulnerable_packages_set)}",
+        f"- **Vulnerabilidades detectadas**: {len(vulnerabilities)}",
+        f"- **Severidad máxima**: {sev_icon} **{max_sev_found}**",
+        "",
+    ]
+
+    if vulnerabilities:
+        md_lines.extend([
+            "| Paquete | Versión | CVE / ID | Severidad | Versión Parcheada | Resumen |",
+            "| :--- | :--- | :--- | :--- | :--- | :--- |",
+        ])
+        for item in vulnerabilities:
+            icon = icon_map.get(item["severity"], "⚪")
+            cve_link = f"[{item['cve']}](https://osv.dev/vulnerability/{item['id']})" if item["id"] else item["cve"]
+            fix = f"`{item['fixed_version']}`" if item["fixed_version"] else "*Pendiente*"
+            summ = item["summary"].replace("|", "/")
+            md_lines.append(
+                f"| `{item['package']}` | `{item['version']}` | {cve_link} | {icon} {item['severity']} | {fix} | {summ} |"
+            )
+    else:
+        md_lines.append("🟢 **No se han detectado vulnerabilidades conocidas para los componentes analizados.**")
+
+    markdown_report = "\n".join(md_lines)
+
+    result_data = {
+        "total_packages": len(components),
+        "vulnerable_packages": len(vulnerable_packages_set),
+        "total_vulnerabilities": len(vulnerabilities),
+        "highest_severity": max_sev_found,
+        "severity_counts": severity_counts,
+        "vulnerabilities": vulnerabilities,
+        "markdown": markdown_report,
+    }
+
+    return NodeResult("ok", data=result_data)
+
+
+
