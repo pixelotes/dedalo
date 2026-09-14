@@ -523,6 +523,38 @@ NODE_TYPES: dict[str, NodeSpec] = {
             "timeout": "Tiempo límite en segundos.",
         },
     ),
+    "input.whois_rdap": NodeSpec(
+        category="input",
+        runtime_fn="whois_rdap",
+        required=frozenset({"domain"}),
+        optional={"timeout": 15.0},
+        label="WHOIS / RDAP (Dominio)",
+        output="dict con registrar, caducidad, días restantes, nameservers y estado",
+        help={
+            "domain": "Nombre de dominio a auditar (ej. miempresa.com o google.es).",
+            "timeout": "Tiempo máximo en segundos para la consulta RDAP.",
+        },
+    ),
+    "input.dns_record": NodeSpec(
+        category="input",
+        runtime_fn="dns_record",
+        required=frozenset({"name"}),
+        optional={"type": "A", "provider": "cloudflare", "timeout": 8.0},
+        label="Registros DNS (DoH)",
+        output="dict con name, type, status, answers y lista de valores",
+        choices={
+            "type": ["A", "AAAA", "MX", "TXT", "CNAME", "NS", "SOA", "CAA"],
+            "provider": [
+                {"value": "cloudflare", "label": "Cloudflare DNS (1.1.1.1)"},
+                {"value": "google", "label": "Google DNS (8.8.8.8)"},
+            ],
+        },
+        help={
+            "name": "Host o nombre de dominio a consultar (ej. example.com).",
+            "type": "Tipo de registro DNS (A, AAAA, MX, TXT para SPF/DMARC, CNAME, NS, SOA).",
+            "provider": "Proveedor DNS-over-HTTPS (DoH).",
+        },
+    ),
     "input.ping": NodeSpec(
         category="input",
         runtime_fn="ping_host",
@@ -1197,6 +1229,56 @@ NODE_TYPES: dict[str, NodeSpec] = {
             "timeout": "Tiempo máximo en segundos para la consulta batch a OSV.dev.",
         },
     ),
+    "transform.secret_scanner": NodeSpec(
+        category="transform",
+        runtime_fn="secret_scanner",
+        optional={
+            "mode": "detect_and_redact",
+            "min_entropy": 4.3,
+            "check_patterns": True,
+            "check_entropy": True,
+        },
+        label="Escáner de Secretos (DLP)",
+        output="dict con findings, has_secrets, count y texto saneado",
+        choices={
+            "mode": [
+                {"value": "detect_and_redact", "label": "Detectar y Ofuscar ([REDACTED])"},
+                {"value": "detect_only", "label": "Sólo Detectar (marcar hallazgos)"},
+                {"value": "mask", "label": "Enmascarar parcial (ej. ab***12)"},
+            ],
+        },
+        help={
+            "mode": "Modo de operación sobre los secretos detectados.",
+            "min_entropy": "Umbral mínimo de entropía de Shannon (4.0 - 5.0) para alertar sobre cadenas aleatorias.",
+            "check_patterns": "Verificar firmas regex de AWS, GitHub, Slack, JWTs, claves privadas, etc.",
+            "check_entropy": "Verificar entropía de Shannon para detectar claves y contraseñas aleatorias desconocidas.",
+        },
+    ),
+    "transform.json_path": NodeSpec(
+        category="transform",
+        runtime_fn="json_path_extract",
+        required=frozenset({"path"}),
+        optional={"default": "", "flatten": True},
+        label="Extraer JSON Path",
+        output="valor o lista extraída del objeto",
+        help={
+            "path": "Ruta de extracción (ej. items[0].name, spec.containers[*].image, issues.*.key).",
+            "default": "Valor por defecto si la ruta no existe.",
+            "flatten": "Aplanar listas anidadas en un único nivel.",
+        },
+    ),
+    "transform.data_mapper": NodeSpec(
+        category="transform",
+        runtime_fn="data_mapper",
+        required=frozenset({"mapping"}),
+        optional={"per_item": True},
+        label="Mapeador de Datos",
+        output="dict o lista con la nueva estructura proyectada",
+        help={
+            "mapping": "Mapeo JSON o clave=ruta (ej. {'id': 'metadata.name', 'estado': 'status.phase'}).",
+            "per_item": "Si la entrada es una lista, aplica el mapeo a cada elemento individualmente.",
+        },
+    ),
     "transform.merge": NodeSpec(
         category="transform",
         runtime_fn="merge",
@@ -1472,6 +1554,33 @@ NODE_TYPES: dict[str, NodeSpec] = {
             "webhook_url": "URL del Incoming Webhook de Slack.",
             "secret": "O selecciona un secreto con la URL.",
             "text": "Mensaje a enviar (admite {entrada}).",
+        },
+    ),
+    "output.teams": NodeSpec(
+        category="output",
+        runtime_fn="teams_webhook",
+        optional={
+            "webhook_url": "",
+            "secret": "",
+            "title": "",
+            "text": "",
+            "theme_color": "0076D7",
+            "summary": "",
+            "button_text": "",
+            "button_url": "",
+            "timeout": 15.0,
+        },
+        label="Microsoft Teams Webhook",
+        output="confirmación de envío",
+        choices_from={"secret": "secrets"},
+        help={
+            "webhook_url": "URL del Incoming Webhook de Microsoft Teams / Workflows.",
+            "secret": "O selecciona un secreto con la URL del Webhook.",
+            "title": "Título de la tarjeta.",
+            "text": "Cuerpo del mensaje (por defecto el contenido de las entradas).",
+            "theme_color": "Color hexadecimal de la barra (ej. 0076D7 para azul, D83B01 para alerta roja).",
+            "button_text": "Texto para un botón de enlace opcional (ej. 'Ver en Jira').",
+            "button_url": "URL que se abrirá al pulsar el botón.",
         },
     ),
     "output.mqtt": NodeSpec(
@@ -1862,6 +1971,8 @@ def _extract_runtime_tree_shaken(graph: Graph) -> tuple[str, list[str]]:
             "input.web_search",
             "input.jira_issues",
             "input.confluence_pages",
+            "input.whois_rdap",
+            "input.dns_record",
             "transform.agent",
             "transform.coder",
             "transform.analyzer",
@@ -1869,6 +1980,7 @@ def _extract_runtime_tree_shaken(graph: Graph) -> tuple[str, list[str]]:
             "transform.cve_audit",
             "output.jira_issue",
             "output.confluence_page",
+            "output.teams",
         )
         for n in graph.nodes
     ):

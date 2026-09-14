@@ -1,9 +1,9 @@
 # Catálogo Completo de Nodos de Dédalo
 
-Dédalo cuenta con **65 nodos modulares** categorizados en tres familias:
-- **Entradas (`input.*`)**: 25 nodos para ingerir datos desde APIs, servicios, colas, hardware, repositorios o archivos.
-- **Transformaciones (`transform.*`)**: 24 nodos para limpiar, filtrar, agregar, calcular, deduplicar, auditar vulnerabilidades (CVE/SBOM) o enriquecer datos con algoritmos locales o agentes LLM.
-- **Salidas (`output.*`)**: 16 nodos para persistir evidencias, abrir incidencias, actualizar wikis, enviar alertas a mensajería o ejecutar acciones.
+Dédalo cuenta con **71 nodos modulares** categorizados en tres familias:
+- **Entradas (`input.*`)**: 27 nodos para ingerir datos desde APIs, servicios, colas, hardware, repositorios o archivos.
+- **Transformaciones (`transform.*`)**: 27 nodos para limpiar, filtrar, agregar, calcular, deduplicar, auditar vulnerabilidades (CVE/SBOM), escanear secretos (DLP), mapear datos o enriquecerlos con algoritmos locales o agentes LLM.
+- **Salidas (`output.*`)**: 17 nodos para persistir evidencias, abrir incidencias, actualizar wikis, enviar alertas a mensajería (incluyendo Microsoft Teams) o ejecutar acciones.
 
 ---
 
@@ -83,9 +83,13 @@ Dédalo cuenta con **65 nodos modulares** categorizados en tres familias:
 - **Etiqueta**: MQTT Suscribir.
 - **Descripción**: Suscripción a topics en brokers MQTT locales o remotos implementada directamente sobre sockets nativos de Python.
 
-### `input.weather` y `input.sitemap`
-- **Etiquetas**: Meteorología / Lector de Sitemap XML.
-- **Descripción**: Consultas climatológicas a Open-Meteo sin API key y rastreador de sitemaps XML para indexación web.
+### `input.whois_rdap`
+- **Etiqueta**: WHOIS / RDAP (Dominio).
+- **Descripción**: Consulta datos de registro, registrador, fechas de creación/actualización, caducidad, días restantes y nameservers de un dominio mediante el protocolo REST JSON estándar RDAP.
+
+### `input.dns_record`
+- **Etiqueta**: Registros DNS (DoH).
+- **Descripción**: Resuelve registros DNS específicos (`A`, `AAAA`, `MX`, `TXT` para SPF/DMARC, `CNAME`, `NS`, `SOA`, `CAA`) a través de DNS-over-HTTPS (DoH de Cloudflare o Google) con salida estructurada en JSON.
 
 ---
 
@@ -123,6 +127,19 @@ Dédalo cuenta con **65 nodos modulares** categorizados en tres familias:
 - **Formatos soportados**: SBOM CycloneDX JSON, SPDX JSON, listas de diccionarios con PURL o `requirements.txt`.
 - **Salida**: Diccionario estructurado con métricas (`total_packages`, `vulnerable_packages`, `total_vulnerabilities`, `highest_severity`), lista detallada de CVEs/GHSAs con versión parcheada (*fixed version*) y reporte en tabla Markdown profesional.
 - **Parámetros**: `ecosystem`, `severity_threshold` (ALL, LOW, MEDIUM, HIGH, CRITICAL), `max_results`, `timeout`.
+
+### `transform.secret_scanner`
+- **Etiqueta**: Escáner de Secretos (DLP).
+- **Descripción**: Detecta fugas de secretos y credenciales expuestas en textos, logs o diffs combinando expresiones regulares de alta precisión (AWS, GitHub, Slack, JWTs, claves privadas) con análisis de **entropía de Shannon** para cadenas criptográficas aleatorias.
+- **Modos**: `detect_and_redact` (reemplaza con `[REDACTED_SECRET]`), `detect_only` (lista los hallazgos) y `mask` (enmascara parcialmente `ab***12`).
+
+### `transform.json_path`
+- **Etiqueta**: Extraer JSON Path.
+- **Descripción**: Extrae valores específicos o listas filtradas de estructuras JSON complejas mediante sintaxis intuitiva de rutas (ej. `items[0].metadata.name`, `status.containerStatuses[*].state`).
+
+### `transform.data_mapper`
+- **Etiqueta**: Mapeador de Datos.
+- **Descripción**: Proyecta y reestructura diccionarios o listas de objetos declarativamente a partir de un mapeo (ej. `{"pod": "metadata.name", "ns": "metadata.namespace"}`).
 
 ### `transform.filter` y `transform.array_ops`
 - **Etiquetas**: Filtrar elementos / Operaciones de Lista.
@@ -179,6 +196,10 @@ Dédalo cuenta con **65 nodos modulares** categorizados en tres familias:
 ### `output.git`
 - **Etiqueta**: Publicar en Git.
 - **Descripción**: Realiza `git add`, `git commit` con autor y mensaje configurables y opcionalmente `git push` hacia la rama remota configurada.
+
+### `output.teams`
+- **Etiqueta**: Microsoft Teams Webhook.
+- **Descripción**: Envía tarjetas enriquecidas (*MessageCard*) con color de acento personalizable y botones de acción interactivos (ej. enlace directo a la incidencia de Jira o a la bóveda) a canales de Microsoft Teams vía Incoming Webhook.
 
 ### `output.telegram`, `output.discord`, `output.slack`
 - **Etiquetas**: Mensajería y Alertas.

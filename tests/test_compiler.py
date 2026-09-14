@@ -282,6 +282,49 @@ def test_cve_audit_pipeline_compilation():
     assert "def run(ctx):" in standalone
 
 
+def test_secops_and_network_nodes_compilation():
+    g = compiler.Graph(
+        name="secops_extra_pipeline",
+        nodes=[
+            _node("rdap", "input.whois_rdap", {"domain": "miempresa.com"}),
+            _node("dns", "input.dns_record", {"name": "miempresa.com", "type": "TXT"}),
+            _node("scanner", "transform.secret_scanner", {"mode": "detect_and_redact"}),
+            _node("jpath", "transform.json_path", {"path": "registrar"}),
+            _node("mapper", "transform.data_mapper", {"mapping": '{"dom": "domain"}'}),
+            _node("teams", "output.teams", {"webhook_url": "https://outlook.office.com/webhook/test"}),
+        ],
+        edges=[
+            _edge("rdap", "jpath", "ok"),
+            _edge("jpath", "mapper", "ok"),
+            _edge("dns", "scanner", "ok"),
+            _edge("scanner", "teams", "ok"),
+        ],
+    )
+    src = compiler.compile(g)
+    assert "def run(ctx):" in src
+    assert "runtime.whois_rdap" in src
+    assert "runtime.dns_record" in src
+    assert "runtime.secret_scanner" in src
+    assert "runtime.json_path_extract" in src
+    assert "runtime.data_mapper" in src
+    assert "runtime.teams_webhook" in src
+
+    ns = {}
+    exec(src, ns)
+    assert callable(ns["run"])
+
+    standalone = compiler.compile_standalone(g)
+    assert "import httpx" in standalone
+    assert "def whois_rdap(" in standalone
+    assert "def dns_record(" in standalone
+    assert "def secret_scanner(" in standalone
+    assert "def json_path_extract(" in standalone
+    assert "def data_mapper(" in standalone
+    assert "def teams_webhook(" in standalone
+    assert "def run(ctx):" in standalone
+
+
+
 
 
 

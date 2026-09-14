@@ -1525,6 +1525,203 @@ def test_cve_audit_cyclonedx_and_requirements(monkeypatch):
     assert "No se han detectado vulnerabilidades conocidas" in res_crit.data["markdown"]
 
 
+def test_whois_rdap(monkeypatch):
+    class FakeRDAPResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "ldhName": "example.com",
+                "entities": [
+                    {
+                        "roles": ["registrar"],
+                        "vcardArray": ["vcard", [["fn", {}, "text", "GoDaddy.com, LLC"]]],
+                    }
+                ],
+                "events": [
+                    {"eventAction": "registration", "eventDate": "1997-09-15T04:00:00Z"},
+                    {"eventAction": "expiration", "eventDate": "2030-09-14T04:00:00Z"},
+                ],
+                "nameservers": [{"ldhName": "A.IANA-SERVERS.NET"}, {"ldhName": "B.IANA-SERVERS.NET"}],
+                "status": ["clientDeleteProhibited", "clientTransferProhibited"],
+            }
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def get(self, url, headers=None):
+            assert "rdap.org/domain/example.com" in url
+            return FakeRDAPResponse()
+
+    monkeypatch.setattr(runtime.httpx, "Client", FakeClient)
+
+    res = runtime.whois_rdap(None, [], domain="example.com")
+    assert res.ok
+    assert res.data["domain"] == "example.com"
+    assert res.data["registrar"] == "GoDaddy.com, LLC"
+    assert res.data["expiration_date"] == "2030-09-14T04:00:00Z"
+    assert res.data["days_until_expiration"] > 365
+    assert not res.data["is_expired"]
+    assert "a.iana-servers.net" in res.data["nameservers"]
+    assert "example.com" in res.data["markdown"]
+
+
+def test_dns_record(monkeypatch):
+    class FakeDoHResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "Status": 0,
+                "Answer": [
+                    {"name": "example.com.", "type": 16, "TTL": 300, "data": '"v=spf1 -all"'}
+                ],
+            }
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def get(self, url, headers=None):
+            assert "cloudflare-dns.com" in url
+            assert "name=example.com" in url
+            assert "type=TXT" in url
+            return FakeDoHResponse()
+
+    monkeypatch.setattr(runtime.httpx, "Client", FakeClient)
+
+    res = runtime.dns_record(None, [], name="example.com", type="TXT", provider="cloudflare")
+    assert res.ok
+    assert res.data["type"] == "TXT"
+    assert res.data["total"] == 1
+    assert res.data["values"] == ["v=spf1 -all"]
+
+
+def test_secret_scanner():
+    # Texto con AWS Key, JWT y una clave privada
+    sample_text = (
+        "Logs de despliegue:\n"
+        "Configuracion cargada: AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n"
+        "Token auth: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.doNotLeakThisJwtSignatureString\n"
+        "Comprobacion completada sin errores."
+    )
+
+    inp = runtime.NodeResult("ok", data=sample_text)
+    res = runtime.secret_scanner(None, [inp], mode="detect_and_redact")
+    assert res.ok
+    assert res.data["has_secrets"]
+    assert res.data["count"] == 2
+    types_found = [f["type"] for f in res.data["findings"]]
+    assert "AWS Access Key" in types_found
+    assert "JWT Token" in types_found
+    # Comprobar que en el texto limpio se ofuscaron
+    assert "AKIAIOSFODNN7EXAMPLE" not in res.data["text"]
+    assert "[REDACTED_SECRET: AWS Access Key]" in res.data["text"]
+    assert "[REDACTED_SECRET: JWT Token]" in res.data["text"]
+
+    # Modo mask
+    res_mask = runtime.secret_scanner(None, [inp], mode="mask")
+    assert res_mask.ok
+    assert "AKIAIOSFODNN7EXAMPLE" not in res_mask.data["text"]
+    assert "AK********LE" in res_mask.data["text"]
+
+    # Texto limpio
+    clean_inp = runtime.NodeResult("ok", data="Texto normal sin secretos ni contraseñas.")
+    res_clean = runtime.secret_scanner(None, [clean_inp])
+    assert res_clean.ok
+    assert not res_clean.data["has_secrets"]
+    assert res_clean.data["count"] == 0
+
+
+def test_json_path_and_data_mapper():
+    payload = {
+        "cluster": "k8s-prod",
+        "pods": [
+            {
+                "metadata": {"name": "auth-api-54b9f", "namespace": "security"},
+                "status": {"phase": "Running", "restarts": 0},
+            },
+            {
+                "metadata": {"name": "billing-worker-91a", "namespace": "finance"},
+                "status": {"phase": "CrashLoopBackOff", "restarts": 14},
+            },
+        ],
+    }
+
+    # 1. Probar json_path_extract
+    inp = runtime.NodeResult("ok", data=payload)
+    r_extract_cluster = runtime.json_path_extract(None, [inp], path="cluster")
+    assert r_extract_cluster.ok
+    assert r_extract_cluster.data == "k8s-prod"
+
+    r_extract_pod0_name = runtime.json_path_extract(None, [inp], path="pods[0].metadata.name")
+    assert r_extract_pod0_name.ok
+    assert r_extract_pod0_name.data == "auth-api-54b9f"
+
+    r_extract_all_phases = runtime.json_path_extract(None, [inp], path="pods[*].status.phase")
+    assert r_extract_all_phases.ok
+    assert r_extract_all_phases.data == ["Running", "CrashLoopBackOff"]
+
+    # 2. Probar data_mapper sobre lista
+    pods_inp = runtime.NodeResult("ok", data=payload["pods"])
+    mapping = {
+        "pod_name": "metadata.name",
+        "ns": "metadata.namespace",
+        "phase": "status.phase",
+        "restarts": "status.restarts",
+    }
+    r_mapped = runtime.data_mapper(None, [pods_inp], mapping=mapping, per_item=True)
+    assert r_mapped.ok
+    assert len(r_mapped.data) == 2
+    assert r_mapped.data[0] == {
+        "pod_name": "auth-api-54b9f",
+        "ns": "security",
+        "phase": "Running",
+        "restarts": 0,
+    }
+    assert r_mapped.data[1]["phase"] == "CrashLoopBackOff"
+
+
+def test_teams_webhook(monkeypatch):
+    recorded = {}
+
+    class FakeTeamsResponse:
+        status_code = 200
+        text = "1"
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def post(self, url, json=None):
+            recorded["url"] = url
+            recorded["json"] = json
+            return FakeTeamsResponse()
+
+    monkeypatch.setattr(runtime.httpx, "Client", FakeClient)
+
+    res = runtime.teams_webhook(
+        None,
+        [],
+        webhook_url="https://outlook.office.com/webhook/test-webhook-url",
+        title="Alerta de Seguridad",
+        text="Se detectó pod en CrashLoopBackOff",
+        theme_color="D83B01",
+        button_text="Ver en Jira",
+        button_url="https://empresa.atlassian.net/browse/SEC-101",
+    )
+    assert res.ok
+    assert res.data["sent"]
+    assert recorded["url"] == "https://outlook.office.com/webhook/test-webhook-url"
+    assert recorded["json"]["@type"] == "MessageCard"
+    assert recorded["json"]["themeColor"] == "D83B01"
+    assert recorded["json"]["title"] == "Alerta de Seguridad"
+    assert len(recorded["json"]["potentialAction"]) == 1
+    assert recorded["json"]["potentialAction"][0]["name"] == "Ver en Jira"
+
+
+
 
 
 

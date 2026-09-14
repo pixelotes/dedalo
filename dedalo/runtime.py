@@ -6325,4 +6325,520 @@ def cve_audit(
     return NodeResult("ok", data=result_data)
 
 
+# ---------------------------------------------------------------------------
+# Monitoreo de Dominios y Red: WHOIS/RDAP y DNS (DoH)
+# ---------------------------------------------------------------------------
+
+
+def whois_rdap(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    domain: str = "",
+    timeout: float = 15.0,
+) -> NodeResult:
+    """Consulta información de registro y caducidad de dominio mediante RDAP (Registration Data Access Protocol)."""
+    inp = Inputs(inputs)
+    target = domain.strip().lower()
+    if not target:
+        target = inp.text().strip().lower()
+    if not target:
+        first = inp.first_data()
+        if isinstance(first, dict):
+            target = str(first.get("domain") or first.get("host") or "").strip().lower()
+
+    if not target:
+        return NodeResult("error", error="Falta el nombre de dominio a consultar en whois_rdap")
+
+    if "://" in target:
+        target = target.split("://", 1)[1]
+    target = target.split("/", 1)[0].split(":", 1)[0].strip()
+
+    rdap_url = f"https://rdap.org/domain/{target}"
+
+    try:
+        with httpx.Client(timeout=float(timeout), follow_redirects=True) as client:
+            resp = client.get(rdap_url, headers={"Accept": "application/rdap+json, application/json"})
+            if resp.status_code == 404:
+                return NodeResult("error", error=f"El dominio '{target}' no se encontró en el registro RDAP (puede no estar registrado o ser TLD no soportado)")
+            if resp.status_code >= 400:
+                return NodeResult("error", error=f"Error en consulta RDAP ({resp.status_code}): {resp.text[:200]}")
+            data = resp.json()
+    except Exception as exc:
+        return NodeResult("error", error=f"Error de conexión RDAP para '{target}': {exc}")
+
+    registrar_name = ""
+    for entity in data.get("entities") or []:
+        if isinstance(entity, dict):
+            roles = entity.get("roles") or []
+            if "registrar" in roles:
+                vcard = entity.get("vcardArray") or []
+                if len(vcard) > 1 and isinstance(vcard[1], list):
+                    for prop in vcard[1]:
+                        if isinstance(prop, list) and prop and prop[0] == "fn":
+                            registrar_name = str(prop[3])
+                            break
+                if not registrar_name and entity.get("handle"):
+                    registrar_name = str(entity["handle"])
+                break
+
+    created_date = ""
+    updated_date = ""
+    expiration_date = ""
+
+    for ev in data.get("events") or []:
+        if isinstance(ev, dict):
+            act = ev.get("eventAction", "").lower()
+            date_str = ev.get("eventDate", "")
+            if "registration" in act or "create" in act:
+                created_date = date_str
+            elif "last changed" in act or "update" in act:
+                updated_date = date_str
+            elif "expiration" in act:
+                expiration_date = date_str
+
+    days_left = None
+    is_expired = False
+    if expiration_date:
+        try:
+            clean_date = expiration_date.split(".")[0].rstrip("Z")
+            if "T" in clean_date:
+                dt_exp = datetime.datetime.fromisoformat(clean_date)
+            else:
+                dt_exp = datetime.datetime.strptime(clean_date, "%Y-%m-%d")
+            delta = dt_exp - datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+            days_left = delta.days
+            is_expired = days_left < 0
+        except Exception:
+            pass
+
+    nameservers = []
+    for ns in data.get("nameservers") or []:
+        if isinstance(ns, dict) and ns.get("ldhName"):
+            nameservers.append(str(ns["ldhName"]).lower())
+
+    statuses = data.get("status") or []
+
+    md_report = [
+        f"## 🌐 Información de Dominio RDAP: `{target}`",
+        f"- **Registrador**: {registrar_name or '*Desconocido*'}",
+        f"- **Fecha de Expiración**: {expiration_date or '*No disponible*'} (Días restantes: **{days_left if days_left is not None else 'N/A'}**)",
+        f"- **Fecha de Creación**: {created_date or 'N/A'}",
+        f"- **Servidores de Nombres (NS)**: {', '.join(nameservers) if nameservers else 'N/A'}",
+        f"- **Estado**: {', '.join(statuses) if statuses else 'N/A'}",
+    ]
+
+    out = {
+        "domain": target,
+        "registrar": registrar_name,
+        "created_date": created_date,
+        "updated_date": updated_date,
+        "expiration_date": expiration_date,
+        "days_until_expiration": days_left,
+        "is_expired": is_expired,
+        "nameservers": nameservers,
+        "status": statuses,
+        "markdown": "\n".join(md_report),
+    }
+    return NodeResult("ok", data=out)
+
+
+def dns_record(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    name: str = "",
+    type: str = "A",
+    provider: str = "cloudflare",
+    timeout: float = 8.0,
+) -> NodeResult:
+    """Resuelve registros DNS (A, AAAA, MX, TXT para SPF/DMARC, CNAME, NS, SOA) usando DNS-over-HTTPS (DoH)."""
+    inp = Inputs(inputs)
+    target = name.strip().lower()
+    if not target:
+        target = inp.text().strip().lower()
+    if not target:
+        first = inp.first_data()
+        if isinstance(first, dict):
+            target = str(first.get("domain") or first.get("host") or first.get("name") or "").strip().lower()
+
+    if not target:
+        return NodeResult("error", error="Falta el nombre de host o dominio a consultar en dns_record")
+
+    if "://" in target:
+        target = target.split("://", 1)[1]
+    target = target.split("/", 1)[0].split(":", 1)[0].strip()
+
+    rec_type = type.strip().upper() or "A"
+
+    if provider.lower() == "google":
+        url = f"https://dns.google/resolve?name={target}&type={rec_type}"
+        headers = {}
+    else:
+        url = f"https://cloudflare-dns.com/dns-query?name={target}&type={rec_type}"
+        headers = {"Accept": "application/dns-json"}
+
+    try:
+        with httpx.Client(timeout=float(timeout)) as client:
+            resp = client.get(url, headers=headers)
+            if resp.status_code >= 400:
+                return NodeResult("error", error=f"Error en DoH ({resp.status_code}): {resp.text[:200]}")
+            dns_json = resp.json()
+    except Exception as exc:
+        return NodeResult("error", error=f"Error en resolución DNS para '{target}': {exc}")
+
+    status_code = dns_json.get("Status", 0)
+    answers = dns_json.get("Answer") or []
+    values = []
+    for a in answers:
+        if isinstance(a, dict) and "data" in a:
+            val = str(a["data"]).strip().strip('"')
+            values.append(val)
+
+    out = {
+        "name": target,
+        "type": rec_type,
+        "status_code": status_code,
+        "is_nxdomain": status_code == 3,
+        "answers": answers,
+        "values": values,
+        "total": len(values),
+    }
+    return NodeResult("ok", data=out)
+
+
+# ---------------------------------------------------------------------------
+# Detección de Fugas de Secretos (DLP) y Entropía de Shannon
+# ---------------------------------------------------------------------------
+
+
+def _shannon_entropy(data: str) -> float:
+    """Calcula la entropía de Shannon en bits por carácter (0.0 a ~6.0 bits)."""
+    if not data:
+        return 0.0
+    length = len(data)
+    counts = Counter(data)
+    return -sum((count / length) * math.log2(count / length) for count in counts.values())
+
+
+_SECRET_PATTERNS = [
+    ("AWS Access Key", re.compile(r"\b(AKIA[0-9A-Z]{16})\b")),
+    ("GitHub Token", re.compile(r"\b((?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{36,255})\b")),
+    ("Slack Token", re.compile(r"\b(xox[baprs]-[0-9a-zA-Z]{10,48})\b")),
+    ("Private Key", re.compile(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----[\s\S]+?-----END (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----")),
+    ("JWT Token", re.compile(r"\b(eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})\b")),
+    ("Generic Bearer/Secret", re.compile(r"(?i)(?:api[_-]?key|bearer|secret|token|password|passwd)\s*[:=]\s*['\"]?([A-Za-z0-9_\-.~+]{20,})['\"]?")),
+    ("Connection String Password", re.compile(r"://[^:\s]+:([^@\s]{6,})@")),
+]
+
+
+def secret_scanner(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    mode: str = "detect_and_redact",
+    min_entropy: float = 4.3,
+    check_patterns: bool = True,
+    check_entropy: bool = True,
+) -> NodeResult:
+    """Escanea textos, logs o estructuras en busca de secretos, credenciales expuestas y cadenas de alta entropía."""
+    inp = Inputs(inputs)
+    raw = inp.first_data()
+    raw_text = inp.text()
+    if not raw_text and raw is not None:
+        raw_text = json.dumps(raw, ensure_ascii=False) if isinstance(raw, (dict, list)) else str(raw)
+
+    if not raw_text:
+        return NodeResult("ok", data={"has_secrets": False, "count": 0, "findings": [], "text": ""})
+
+    findings = []
+    redacted_text = raw_text
+    found_spans: list[tuple[int, int, str, str]] = []
+
+    if check_patterns:
+        for secret_name, pattern in _SECRET_PATTERNS:
+            for match in pattern.finditer(raw_text):
+                val = match.group(1) if match.groups() else match.group(0)
+                span = match.span(1) if match.groups() else match.span(0)
+                found_spans.append((span[0], span[1], secret_name, val))
+
+    if check_entropy:
+        word_pattern = re.compile(r"\b([A-Za-z0-9_/\+=\-]{20,})\b")
+        for match in word_pattern.finditer(raw_text):
+            token = match.group(1)
+            if any(s[0] <= match.start() and s[1] >= match.end() for s in found_spans):
+                continue
+            has_letters = bool(re.search(r"[A-Za-z]", token))
+            has_digits = bool(re.search(r"[0-9]", token))
+            if has_letters and has_digits:
+                ent = _shannon_entropy(token)
+                if ent >= float(min_entropy):
+                    found_spans.append((match.start(), match.end(), f"High Entropy ({ent:.2f} bits)", token))
+
+    found_spans.sort(key=lambda x: x[0], reverse=True)
+    deduped_spans = []
+    last_start = float("inf")
+    for start, end, stype, sval in found_spans:
+        if end <= last_start:
+            deduped_spans.append((start, end, stype, sval))
+            last_start = start
+
+    for start, end, stype, sval in reversed(deduped_spans):
+        line_no = raw_text[:start].count("\n") + 1
+        masked_val = (sval[:2] + "***" + sval[-2:]) if len(sval) > 6 else "***"
+        findings.append({
+            "type": stype,
+            "line": line_no,
+            "entropy": round(_shannon_entropy(sval), 2),
+            "preview": masked_val,
+        })
+
+    if mode == "detect_and_redact":
+        for start, end, stype, sval in deduped_spans:
+            redacted_text = redacted_text[:start] + f"[REDACTED_SECRET: {stype}]" + redacted_text[end:]
+    elif mode == "mask":
+        for start, end, stype, sval in deduped_spans:
+            masked = (sval[:2] + "********" + sval[-2:]) if len(sval) > 6 else "********"
+            redacted_text = redacted_text[:start] + masked + redacted_text[end:]
+
+    has_secrets = len(findings) > 0
+    return NodeResult("ok", data={
+        "has_secrets": has_secrets,
+        "count": len(findings),
+        "findings": findings,
+        "text": redacted_text,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Mapeo y Extracción de JSON (json_path_extract & data_mapper)
+# ---------------------------------------------------------------------------
+
+
+def _resolve_json_path(data: Any, path: str, default: Any = None) -> Any:
+    """Navega por estructuras anidadas (dict/list) con soporte para notación punto, índices [0] y comodín [*]."""
+    if not path or path.strip() in ("", "$"):
+        return data
+
+    clean_path = path.strip().lstrip("$.")
+    tokens: list[Any] = []
+    parts = clean_path.split(".")
+    for part in parts:
+        subparts = re.split(r"\[|\]", part)
+        for sp in subparts:
+            sp = sp.strip()
+            if not sp:
+                continue
+            if sp.isdigit():
+                tokens.append(int(sp))
+            else:
+                tokens.append(sp)
+
+    current: Any = data
+    for i, token in enumerate(tokens):
+        if current is None:
+            return default
+
+        if token == "*":
+            remaining_tokens = tokens[i + 1 :]
+            if not remaining_tokens:
+                return current if isinstance(current, list) else list(current.values()) if isinstance(current, dict) else [current]
+
+            sub_path = ".".join(str(t) for t in remaining_tokens)
+            results = []
+            iterable = current if isinstance(current, list) else current.values() if isinstance(current, dict) else []
+            for item in iterable:
+                res = _resolve_json_path(item, sub_path, default=None)
+                if res is not None:
+                    if isinstance(res, list):
+                        results.extend(res)
+                    else:
+                        results.append(res)
+            return results
+
+        if isinstance(current, dict):
+            if token in current:
+                current = current[token]
+            elif str(token) in current:
+                current = current[str(token)]
+            else:
+                return default
+        elif isinstance(current, list):
+            if isinstance(token, int) and 0 <= token < len(current):
+                current = current[token]
+            else:
+                sub_path = ".".join(str(t) for t in tokens[i:])
+                return [_resolve_json_path(item, sub_path, default=default) for item in current]
+        else:
+            return default
+
+    return current
+
+
+def json_path_extract(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    path: str,
+    default: Any = "",
+    flatten: bool = True,
+) -> NodeResult:
+    """Extrae valores específicos de un JSON o estructura anidada usando sintaxis de ruta."""
+    inp = Inputs(inputs)
+    data = inp.first_data()
+    if data is None:
+        txt = inp.text()
+        if txt:
+            try:
+                data = json.loads(txt)
+            except Exception:
+                data = txt
+
+    if data is None:
+        return NodeResult("error", error="Faltan datos de entrada para json_path_extract")
+
+    result = _resolve_json_path(data, path, default=default)
+    if flatten and isinstance(result, list):
+        flat = []
+        for item in result:
+            if isinstance(item, list):
+                flat.extend(item)
+            else:
+                flat.append(item)
+        result = flat
+
+    return NodeResult("ok", data=result)
+
+
+def data_mapper(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    mapping: Any,
+    per_item: bool = True,
+) -> NodeResult:
+    """Proyecta y reestructura diccionarios o listas de diccionarios según una plantilla declarativa."""
+    inp = Inputs(inputs)
+    data = inp.first_data()
+    if data is None:
+        txt = inp.text()
+        if txt:
+            try:
+                data = json.loads(txt)
+            except Exception:
+                pass
+
+    if data is None:
+        return NodeResult("error", error="Faltan datos de entrada para data_mapper")
+
+    spec = mapping
+    if isinstance(spec, str):
+        try:
+            spec = json.loads(spec)
+        except Exception:
+            spec = {}
+            for line in mapping.splitlines():
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    spec[k.strip()] = v.strip()
+
+    if not isinstance(spec, dict):
+        return NodeResult("error", error="El parámetro 'mapping' debe ser un diccionario o JSON válido (ej: {'nombre': 'metadata.name'})")
+
+    def _map_single_obj(obj: Any) -> dict[str, Any]:
+        mapped = {}
+        for target_key, src_path in spec.items():
+            mapped[target_key] = _resolve_json_path(obj, str(src_path), default=None)
+        return mapped
+
+    if per_item and isinstance(data, list):
+        out = [_map_single_obj(item) for item in data if isinstance(item, (dict, list))]
+    elif isinstance(data, dict):
+        out = _map_single_obj(data)
+    else:
+        out = _map_single_obj(data)
+
+    return NodeResult("ok", data=out)
+
+
+# ---------------------------------------------------------------------------
+# Notificaciones Microsoft Teams (MessageCard / Adaptive Cards)
+# ---------------------------------------------------------------------------
+
+
+def teams_webhook(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    webhook_url: str = "",
+    secret: str = "",
+    title: str = "",
+    text: str = "",
+    theme_color: str = "0076D7",
+    summary: str = "",
+    button_text: str = "",
+    button_url: str = "",
+    timeout: float = 15.0,
+) -> NodeResult:
+    """Envía tarjetas enriquecidas (MessageCard) a Microsoft Teams vía Incoming Webhook."""
+    target_url = webhook_url.strip()
+    if not target_url and secret:
+        target_url = secrets.get(secret).strip()
+
+    if not target_url:
+        return NodeResult("error", error="Falta la URL del Webhook de Microsoft Teams (o secreto asociado)")
+
+    inp = Inputs(inputs)
+    first = inp.first_data()
+    raw_text = inp.text()
+
+    final_text = text.strip()
+    if not final_text:
+        if isinstance(first, dict):
+            if first.get("markdown"):
+                final_text = str(first["markdown"])
+            elif first.get("text"):
+                final_text = str(first["text"])
+            else:
+                final_text = json.dumps(first, ensure_ascii=False, indent=2)
+        elif raw_text:
+            final_text = raw_text
+        else:
+            final_text = "Notificación de Dédalo."
+
+    card_title = title.strip() or (first.get("title") if isinstance(first, dict) else "") or "Aviso de Dédalo"
+    card_summary = summary.strip() or card_title
+
+    payload: dict[str, Any] = {
+        "@type": "MessageCard",
+        "@context": "https://schema.org/extensions",
+        "summary": card_summary,
+        "themeColor": theme_color.lstrip("#") or "0076D7",
+        "title": card_title,
+        "text": final_text,
+    }
+
+    b_text = button_text.strip()
+    b_url = button_url.strip()
+    if b_text and b_url:
+        payload["potentialAction"] = [
+            {
+                "@type": "OpenUri",
+                "name": b_text,
+                "targets": [{"os": "default", "uri": b_url}],
+            }
+        ]
+
+    try:
+        with httpx.Client(timeout=float(timeout)) as client:
+            resp = client.post(target_url, json=payload)
+            if resp.status_code >= 400:
+                return NodeResult("error", error=f"Error en Microsoft Teams Webhook ({resp.status_code}): {resp.text[:200]}")
+    except Exception as exc:
+        return NodeResult("error", error=f"Error de conexión con Microsoft Teams: {exc}")
+
+    return NodeResult("ok", data={"sent": True, "title": card_title, "status_code": resp.status_code})
+
+
+
 
