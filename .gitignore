@@ -38,6 +38,7 @@ ENV/
 *.key
 data/secrets/
 data/secrets.json
+data/llms/
 secrets.json
 
 # Bases de datos SQLite

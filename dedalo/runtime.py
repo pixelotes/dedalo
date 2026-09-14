@@ -42,7 +42,7 @@ from typing import Any, Callable
 
 import httpx
 
-from dedalo import secrets
+from dedalo import llms, secrets
 
 
 def compact_memory() -> None:
@@ -148,30 +148,28 @@ def call_llm(
     prompt: str,
     system: str = "",
     *,
+    llm: str = "",
     url: str = "",
     model: str = "",
     secret_name: str = "",
     tokens: int = DEFAULT_AGENT_TOKENS,
-    temperature: float = 0.7,
+    temperature: float | None = None,
     json_mode: bool = False,
 ) -> str:
     """Llama a un endpoint compatible con OpenAI (/v1/chat/completions)."""
-    base_url = (
-        url
-        or os.environ.get("DEDALO_LLM_URL")
-        or "http://localhost:11434/v1"
-    ).rstrip("/")
-    target_model = (
-        model
-        or os.environ.get("DEDALO_LLM_MODEL")
-        or "llama3"
-    )
+    overrides: dict[str, Any] = {
+        "url": url,
+        "model": model,
+        "secret": secret_name,
+    }
+    if temperature is not None:
+        overrides["temperature"] = temperature
 
-    api_key = ""
-    if secret_name:
-        api_key = secrets.get(secret_name) or ""
-    if not api_key:
-        api_key = os.environ.get("DEDALO_LLM_KEY", "")
+    resolved = llms.resolve(name=llm, overrides=overrides)
+    base_url = resolved["url"].rstrip("/")
+    target_model = resolved["model"]
+    api_key = resolved["api_key"]
+    model_temp = resolved["temperature"]
 
     headers = {"Content-Type": "application/json"}
     if api_key:
@@ -186,7 +184,7 @@ def call_llm(
         "model": target_model,
         "messages": messages,
         "max_tokens": tokens,
-        "temperature": temperature,
+        "temperature": model_temp,
     }
     if json_mode:
         payload["response_format"] = {"type": "json_object"}
@@ -1211,6 +1209,7 @@ def agent(
     inputs: list[NodeResult],
     *,
     prompt: str,
+    llm: str = "",
     per_item: bool = False,
     as_field: str = "",
     tokens: int = DEFAULT_AGENT_TOKENS,
@@ -1218,15 +1217,31 @@ def agent(
     model: str = "",
     url: str = "",
     secret: str = "",
-    temperature: float = 0.7,
+    temperature: float | None = None,
     system_prompt: str = "",
     json_mode: bool = False,
 ) -> NodeResult:
     """Invoca al LLM con un prompt y los datos de entrada."""
     inp = Inputs(inputs)
 
+    overrides: dict[str, Any] = {
+        "url": url,
+        "model": model,
+        "secret": secret,
+        "max_context": max_context,
+    }
+    if temperature is not None:
+        overrides["temperature"] = temperature
+
+    resolved = llms.resolve(name=llm, overrides=overrides)
+    effective_url = resolved["url"]
+    effective_model = resolved["model"]
+    effective_secret = resolved["secret"]
+    effective_temp = resolved["temperature"]
+    effective_ctx = max_context if (max_context and int(max_context) > 0) else resolved["max_context"]
+
     def _compact_if_needed(content_text: str) -> str:
-        ctx_limit = int(max_context) if max_context else 0
+        ctx_limit = int(effective_ctx) if effective_ctx else 0
         if ctx_limit <= 0 or not content_text:
             return content_text
         threshold = int(ctx_limit * 0.90)
@@ -1250,18 +1265,19 @@ def agent(
         field_name = as_field.strip()
         for item in first[:MAX_ITEMS]:
             item_str = json.dumps(item, ensure_ascii=False) if isinstance(item, (dict, list)) else str(item)
-            if max_context and int(max_context) > 0:
+            if effective_ctx and int(effective_ctx) > 0:
                 item_str = _compact_if_needed(item_str)
             user_msg = f"{prompt}\n\nElemento:\n{item_str}"
             try:
                 ans = call_llm(
                     user_msg,
                     system=system_prompt,
-                    model=model,
-                    url=url,
-                    secret_name=secret,
+                    llm=llm,
+                    model=effective_model,
+                    url=effective_url,
+                    secret_name=effective_secret,
                     tokens=tokens,
-                    temperature=float(temperature),
+                    temperature=float(effective_temp),
                     json_mode=bool(json_mode),
                 )
                 if field_name:
@@ -1278,18 +1294,19 @@ def agent(
         return NodeResult("ok", data=results)
 
     input_text = inp.text()
-    if input_text and max_context and int(max_context) > 0:
+    if input_text and effective_ctx and int(effective_ctx) > 0:
         input_text = _compact_if_needed(input_text)
     user_msg = f"{prompt}\n\nEntrada:\n{input_text}" if input_text else prompt
     try:
         ans = call_llm(
             user_msg,
             system=system_prompt,
-            model=model,
-            url=url,
-            secret_name=secret,
+            llm=llm,
+            model=effective_model,
+            url=effective_url,
+            secret_name=effective_secret,
             tokens=tokens,
-            temperature=float(temperature),
+            temperature=float(effective_temp),
             json_mode=bool(json_mode),
         )
         return NodeResult("ok", data=ans)
@@ -1996,6 +2013,7 @@ def coder_agent(
     inputs: list[NodeResult],
     *,
     prompt: str,
+    llm: str = "",
     workspace_dir: str = ".",
     tools_preset: str = "coding",
     custom_tools: str = "",
@@ -2006,7 +2024,7 @@ def coder_agent(
     model: str = "",
     url: str = "",
     secret: str = "",
-    temperature: float = 0.1,
+    temperature: float | None = None,
     system_prompt: str = "",
     timeout: float = 120.0,
 ) -> NodeResult:
@@ -2032,22 +2050,24 @@ def coder_agent(
 
     tools_spec = [CODER_TOOL_DEFINITIONS[name] for name in active_tool_names if name in CODER_TOOL_DEFINITIONS]
 
-    base_url = (
-        url
-        or os.environ.get("DEDALO_LLM_URL")
-        or "http://localhost:11434/v1"
-    ).rstrip("/")
-    target_model = (
-        model
-        or os.environ.get("DEDALO_LLM_MODEL")
-        or "llama3"
-    )
+    overrides: dict[str, Any] = {
+        "url": url,
+        "model": model,
+        "secret": secret,
+        "max_context": max_context,
+    }
+    if temperature is not None:
+        overrides["temperature"] = temperature
 
-    api_key = ""
-    if secret:
-        api_key = secrets.get(secret) or ""
-    if not api_key:
-        api_key = os.environ.get("DEDALO_LLM_KEY", "")
+    resolved = llms.resolve(name=llm, overrides=overrides)
+    base_url = resolved["url"].rstrip("/")
+    target_model = resolved["model"]
+    api_key = resolved["api_key"]
+    if not llm and temperature is None:
+        model_temp = 0.1
+    else:
+        model_temp = resolved["temperature"]
+    explicit_ctx = max_context if (max_context and int(max_context) > 0) else resolved["max_context"]
 
     headers = {"Content-Type": "application/json"}
     if api_key:
@@ -2058,8 +2078,8 @@ def coder_agent(
         base_url=base_url,
         target_model=target_model,
         api_key=api_key,
-        explicit_ctx=int(max_context or 0),
-        timeout=min(5.0, float(timeout or 120.0)),
+        explicit_ctx=explicit_ctx,
+        timeout=min(15.0, timeout),
     )
     compactions_count = 0
 
@@ -2112,7 +2132,7 @@ def coder_agent(
                 payload: dict[str, Any] = {
                     "model": target_model,
                     "messages": messages,
-                    "temperature": float(temperature),
+                    "temperature": float(model_temp),
                 }
                 if tools_spec:
                     payload["tools"] = tools_spec
@@ -2419,6 +2439,7 @@ def summarize_text(
     sentences: int = 0,
     ratio: float = 0.0,
     format: str = "paragraph",
+    llm: str = "",
 ) -> NodeResult:
     """Resume un texto usando Luhn, Luhn+, TextRank o LLM."""
     inp = Inputs(inputs)
@@ -2570,7 +2591,7 @@ def summarize_text(
     else:
         tokens = limits.get(str(length).lower(), 1024)
     try:
-        summary = call_llm(text, system=sys_prompt, tokens=tokens)
+        summary = call_llm(text, system=sys_prompt, tokens=tokens, llm=llm)
         return NodeResult("ok", data=summary)
     except Exception as exc:
         return NodeResult("error", error=f"Fallo en resumen con LLM: {exc}")

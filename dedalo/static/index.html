@@ -198,12 +198,64 @@
       </div>
     </div>
 
-    <!-- Tab 4: Ajustes LLM -->
+    <!-- Tab 5: Ajustes y Endpoints LLM -->
     <div class="tab-pane" id="paneSettings">
       <div class="pane-head">
-        <h3>Ajustes LLM</h3>
+        <h3>Endpoints LLM</h3>
       </div>
-      <p class="hint">Configura el proveedor de inferencia compatible con OpenAI (Ollama, vLLM, OpenRouter, Groq...).</p>
+      <p class="hint">Perfiles de inferencia reutilizables en nodos con soporte LLM.</p>
+      
+      <div class="llm-add-box">
+        <label>Nombre del endpoint:
+          <input id="newProfileName" placeholder="ej. ollama-qwen, openrouter-claude" autocomplete="off" />
+        </label>
+        <div class="form-row-2">
+          <label>Proveedor:
+            <select id="newProfileProvider">
+              <option value="custom">custom</option>
+              <option value="ollama">ollama</option>
+              <option value="vllm">vllm</option>
+              <option value="openrouter">openrouter</option>
+              <option value="openai">openai</option>
+              <option value="groq">groq</option>
+            </select>
+          </label>
+          <label>Modelo:
+            <input id="newProfileModel" placeholder="qwen2.5-coder:7b" autocomplete="off" />
+          </label>
+        </div>
+        <label>URL Base API:
+          <input id="newProfileUrl" placeholder="http://localhost:11434/v1" autocomplete="off" />
+        </label>
+        <div class="form-row-2">
+          <label>Secreto API Key:
+            <select id="newProfileSecret">
+              <option value="">(Sin secreto / Local)</option>
+            </select>
+          </label>
+          <label>Max Context:
+            <input id="newProfileContext" type="number" placeholder="0 (Auto)" min="0" />
+          </label>
+        </div>
+        <label>Temperatura:
+          <input id="newProfileTemp" type="number" step="0.1" min="0" max="2" placeholder="0.7" />
+        </label>
+        <button id="btnSaveLlmProfile" class="btn sm primary">Guardar endpoint LLM</button>
+      </div>
+
+      <div class="pane-subhead">
+        Endpoints guardados
+      </div>
+      <div class="llms-list" id="llmsList">
+        <p class="hint">No hay endpoints LLM guardados.</p>
+      </div>
+
+      <div class="settings-divider"></div>
+
+      <div class="pane-head">
+        <h3>Fallback Global</h3>
+      </div>
+      <p class="hint">Configuración por defecto para nodos sin endpoint especificado.</p>
       <div class="settings-form">
         <label>URL Base API:
           <input id="cfgLlmUrl" placeholder="http://localhost:11434/v1" />
@@ -214,7 +266,7 @@
         <label>API Key global:
           <input id="cfgLlmKey" type="password" placeholder="(Opcional si es local)" />
         </label>
-        <button id="btnSaveConfig" class="btn sm primary">Guardar configuración</button>
+        <button id="btnSaveConfig" class="btn sm secondary">Guardar fallback global</button>
       </div>
     </div>
   </aside>

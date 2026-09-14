@@ -17,7 +17,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from dedalo import compiler, history, runtime, scheduler, secrets, store, templates
+from dedalo import compiler, history, llms, runtime, scheduler, secrets, store, templates
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -29,7 +29,7 @@ sched = scheduler.Scheduler()
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     # Inicializar directorios de datos y base de datos
-    for d in ["data/flows", "data/secrets", "data/state", "data/outputs", "data/logs"]:
+    for d in ["data/flows", "data/secrets", "data/llms", "data/state", "data/outputs", "data/logs"]:
         Path(d).mkdir(parents=True, exist_ok=True)
     history.init_db()
 
@@ -179,6 +179,7 @@ def get_catalog() -> dict[str, Any]:
         "node_types": types_dict,
         "choices": {
             "secrets": [{"value": s, "label": s} for s in secrets.names()],
+            "llms": [{"value": m["name"], "label": f"{m['name']} ({m.get('model', '')})"} for m in llms.list_all()],
         },
     }
 
@@ -227,6 +228,55 @@ def save_config(req: ConfigUpdateRequest) -> dict[str, str]:
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
     CONFIG_FILE.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# API: Gestión de Endpoints LLM
+# ---------------------------------------------------------------------------
+
+
+class LLMSaveRequest(BaseModel):
+    name: str = Field(..., description="Nombre identificador único del endpoint")
+    provider: str = Field(default="custom", description="Proveedor (ollama, vllm, openrouter, etc.)")
+    url: str = Field(default="http://localhost:11434/v1", description="URL base de la API")
+    model: str = Field(default="llama3", description="Nombre del modelo")
+    secret: str = Field(default="", description="Nombre del secreto con la API Key")
+    max_context: int = Field(default=0, description="Límite de ventana de contexto (0 para autodetección)")
+    temperature: float = Field(default=0.7, description="Temperatura por defecto")
+
+
+@app.get("/api/llms")
+def list_llms() -> list[dict[str, Any]]:
+    return llms.list_all()
+
+
+@app.get("/api/llms/{name}")
+def get_llm(name: str) -> dict[str, Any]:
+    conf = llms.get(name)
+    if not conf:
+        raise HTTPException(status_code=404, detail=f"Endpoint LLM no encontrado: '{name}'")
+    return conf
+
+
+@app.post("/api/llms")
+def set_llm(req: LLMSaveRequest) -> dict[str, Any]:
+    try:
+        saved = llms.set_llm(req.name, req.model_dump())
+        return {"status": "ok", "llm": saved}
+    except llms.LLMConfigError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.delete("/api/llms")
+def remove_llm_query(name: str = Query(...)) -> dict[str, Any]:
+    deleted = llms.delete(name)
+    return {"status": "ok", "deleted": deleted}
+
+
+@app.delete("/api/llms/{name}")
+def remove_llm_path(name: str) -> dict[str, Any]:
+    deleted = llms.delete(name)
+    return {"status": "ok", "deleted": deleted}
 
 
 # ---------------------------------------------------------------------------

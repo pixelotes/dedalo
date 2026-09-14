@@ -10,10 +10,11 @@ const state = {
   graph: { name: 'nuevo-flujo', nodes: [], edges: [], version: 1 },
   meta: { name: 'nuevo-flujo', description: '', schedule: '', enabled: true },
   selectedNodeId: null,
-  catalog: { node_types: {}, choices: { secrets: [] } },
+  catalog: { node_types: {}, choices: { secrets: [], llms: [] } },
   templates: [],
   flows: [],
   secrets: [],
+  llms: [],
   isDirty: false,
   activeTab: 'flows',
   // Transformación y navegación 2D del lienzo (Pan y Zoom)
@@ -52,6 +53,7 @@ async function init() {
   await loadTemplates();
   await loadFlows();
   await loadSecrets();
+  await loadLlms();
   await loadConfig();
   render();
 }
@@ -355,6 +357,7 @@ function setupEvents() {
   $('btnUnsavedSave').onclick = onUnsavedSave;
 
   $('btnSaveSecret').onclick = addSecret;
+  if ($('btnSaveLlmProfile')) $('btnSaveLlmProfile').onclick = addLlmProfile;
   $('btnSaveConfig').onclick = saveConfig;
 
   if ($('paletteSearch')) {
@@ -445,7 +448,30 @@ async function loadSecrets() {
     const res = await fetch('/api/secrets');
     state.secrets = await res.json();
     renderSecretsList();
+    populateProfileSecretDropdown();
   } catch (e) {}
+}
+
+async function loadLlms() {
+  try {
+    const res = await fetch('/api/llms');
+    state.llms = await res.json();
+    renderLlmsList();
+  } catch (e) {}
+}
+
+function populateProfileSecretDropdown() {
+  const sel = $('newProfileSecret');
+  if (!sel) return;
+  const currentVal = sel.value;
+  sel.innerHTML = '<option value="">(Sin secreto / Local)</option>';
+  (state.secrets || []).forEach((s) => {
+    const opt = document.createElement('option');
+    opt.value = s;
+    opt.textContent = s;
+    if (s === currentVal) opt.selected = true;
+    sel.appendChild(opt);
+  });
 }
 
 async function loadConfig() {
@@ -792,6 +818,118 @@ async function removeSecret(name) {
     renderInspector();
   } catch (e) {
     toast('Error al eliminar secreto');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Gestión de Endpoints LLM
+// ---------------------------------------------------------------------------
+
+function renderLlmsList() {
+  const list = $('llmsList');
+  if (!list) return;
+  list.innerHTML = '';
+  if (!state.llms || !state.llms.length) {
+    list.innerHTML = '<p class="hint">No hay endpoints LLM guardados.</p>';
+    return;
+  }
+  state.llms.forEach((item) => {
+    const el = document.createElement('div');
+    el.className = 'llm-item';
+
+    const info = document.createElement('div');
+    info.className = 'llm-item-info';
+
+    const title = document.createElement('div');
+    title.className = 'llm-item-title';
+    title.innerHTML = `<span>${escapeHtml(item.name)}</span><span class="llm-item-badge">${escapeHtml(item.provider || 'custom')}</span>`;
+
+    const details = document.createElement('div');
+    details.className = 'llm-item-details';
+    const secLabel = item.secret ? ` [key: ${item.secret}]` : '';
+    const ctxLabel = item.max_context ? ` [ctx: ${item.max_context}]` : '';
+    const tempLabel = item.temperature !== undefined ? ` [T: ${item.temperature}]` : '';
+    details.textContent = `${item.model || 'modelo'} @ ${item.url || ''}${secLabel}${ctxLabel}${tempLabel}`;
+
+    info.appendChild(title);
+    info.appendChild(details);
+
+    const btnDel = document.createElement('button');
+    btnDel.className = 'btn sm icon-btn';
+    btnDel.title = 'Eliminar endpoint';
+    btnDel.innerHTML = '<svg class="ic" width="12" height="12"><use href="#i-trash"/></svg>';
+    btnDel.onclick = () => removeLlmProfile(item.name);
+
+    el.appendChild(info);
+    el.appendChild(btnDel);
+    list.appendChild(el);
+  });
+}
+
+async function addLlmProfile() {
+  const nameInput = $('newProfileName');
+  if (!nameInput) return;
+  const name = nameInput.value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+  const provider = $('newProfileProvider').value.trim();
+  const model = $('newProfileModel').value.trim() || 'llama3';
+  const url = $('newProfileUrl').value.trim() || 'http://localhost:11434/v1';
+  const secret = $('newProfileSecret').value.trim();
+  const maxContext = parseInt($('newProfileContext').value.trim(), 10) || 0;
+  const rawTemp = $('newProfileTemp').value.trim();
+  const temperature = rawTemp !== '' ? parseFloat(rawTemp) : 0.7;
+
+  if (!name) {
+    toast('Nombre del endpoint requerido.');
+    return;
+  }
+
+  const payload = {
+    name,
+    provider,
+    url,
+    model,
+    secret,
+    max_context: maxContext,
+    temperature,
+  };
+
+  try {
+    const res = await fetch('/api/llms', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (res.ok) {
+      $('newProfileName').value = '';
+      $('newProfileModel').value = '';
+      $('newProfileUrl').value = '';
+      $('newProfileContext').value = '';
+      $('newProfileTemp').value = '';
+      toast(`Endpoint «${name}» guardado.`);
+      await loadLlms();
+      await loadCatalog();
+      renderInspector();
+    } else {
+      const err = await res.json();
+      toast(err.detail || 'Error al guardar endpoint LLM');
+    }
+  } catch (e) {
+    toast('Error al guardar endpoint LLM');
+  }
+}
+
+async function removeLlmProfile(name) {
+  if (!confirm(`¿Eliminar endpoint LLM «${name}»?`)) return;
+  try {
+    const res = await fetch(`/api/llms/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    if (res.ok) {
+      toast(`Endpoint «${name}» eliminado.`);
+      await loadLlms();
+      await loadCatalog();
+      renderInspector();
+    }
+  } catch (e) {
+    toast('Error al eliminar endpoint LLM');
   }
 }
 
@@ -2388,7 +2526,7 @@ function renderNodeInspector(node, body) {
       };
     } else if (choicesFrom === 'secrets') {
       inputEl = document.createElement('select');
-      inputEl.innerHTML = '<option value="">— Sin secreto —</option>';
+      inputEl.innerHTML = '<option value="">(Sin secreto)</option>';
       state.secrets.forEach((s) => {
         const opt = document.createElement('option');
         opt.value = s;
@@ -2396,6 +2534,34 @@ function renderNodeInspector(node, body) {
         opt.selected = s === currentVal;
         inputEl.appendChild(opt);
       });
+      inputEl.onchange = (e) => {
+        node.config[key] = e.target.value;
+        markDirty();
+        if (node.type.startsWith('transform.')) triggerLivePreview(node);
+      };
+    } else if (choicesFrom === 'llms') {
+      inputEl = document.createElement('select');
+      inputEl.innerHTML = '<option value="">(Global / Variable de entorno)</option>';
+      const catalogLlms = (state.catalog && state.catalog.choices && state.catalog.choices.llms) || [];
+      if (catalogLlms.length > 0) {
+        catalogLlms.forEach((m) => {
+          const opt = document.createElement('option');
+          opt.value = m.value;
+          opt.textContent = m.label || m.value;
+          opt.selected = String(opt.value) === String(currentVal);
+          inputEl.appendChild(opt);
+        });
+      } else {
+        (state.llms || []).forEach((m) => {
+          const opt = document.createElement('option');
+          const val = typeof m === 'string' ? m : m.name;
+          const label = typeof m === 'string' ? m : `${m.name} (${m.model || ''})`;
+          opt.value = val;
+          opt.textContent = label;
+          opt.selected = String(opt.value) === String(currentVal);
+          inputEl.appendChild(opt);
+        });
+      }
       inputEl.onchange = (e) => {
         node.config[key] = e.target.value;
         markDirty();

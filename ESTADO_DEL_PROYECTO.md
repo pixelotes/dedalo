@@ -326,6 +326,7 @@ dedalo/
 │   ├── cron.py             # Evaluador de cron nativo ultraligero (reemplazo de croniter)
 │   ├── headless.py         # Ejecutor demonio puro sin servidor web (~14-16 MB RAM)
 │   ├── history.py          # Gestor de base de datos SQLite para historial y purga
+│   ├── llms.py             # Gestión multi-endpoint de LLMs y resolución con secretos
 │   ├── runtime.py          # Ejecutor de nodos, sandbox y compact_memory()
 │   ├── scheduler.py        # Planificador de tareas con cron nativo y compactación
 │   ├── secrets.py          # Carga y almacenamiento seguro de secretos
@@ -335,7 +336,7 @@ dedalo/
 │   │   └── index.html
 │   ├── store.py            # Persistencia de flujos en JSON/PY y empaquetado ZIP
 │   └── templates.py        # Plantillas de inicio rápido
-├── tests/                  # Pruebas automatizadas (pytest - 104 tests)
+├── tests/                  # Pruebas automatizadas (pytest - 119 tests)
 │   ├── test_api.py
 │   ├── test_coder.py       # Pruebas de transform.coder, herramientas, sandboxing y Luhn+
 │   ├── test_compiler.py
@@ -344,6 +345,7 @@ dedalo/
 │   ├── test_email_digest.py # Pruebas de sanitización anti prompt-injection y digest
 │   ├── test_git.py         # Pruebas de integración nativa con Git (log, diff, commit, push)
 │   ├── test_history.py
+│   ├── test_llms.py        # Pruebas de gestión multi-endpoint de LLMs y fallback
 │   ├── test_runtime.py
 │   ├── test_secrets.py
 │   └── test_store.py       # Pruebas de exportación/importación ZIP y Zip-Slip
