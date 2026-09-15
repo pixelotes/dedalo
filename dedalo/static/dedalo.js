@@ -20,6 +20,7 @@ const state = {
   // Transformación y navegación 2D del lienzo (Pan y Zoom)
   view: { k: 1, x: 0, y: 0 },
   isPanning: false,
+  isSpacePressed: false,
   panStart: { x: 0, y: 0 },
   panOrigin: { x: 0, y: 0 },
   // Interacción de arrastre y cableado
@@ -122,8 +123,27 @@ function toast(msg) {
   s._timer = setTimeout(() => s.classList.remove('show'), 2500);
 }
 
+function updateDirtyUI() {
+  const badge = $('dirtyBadge');
+  if (badge) {
+    badge.classList.toggle('visible', !!state.isDirty);
+  }
+  const btnSave = $('btnSave');
+  if (btnSave) {
+    btnSave.classList.toggle('is-dirty', !!state.isDirty);
+  }
+  const name = state.graph?.name || 'nuevo-flujo';
+  document.title = (state.isDirty ? '● ' : '') + `${name} — Dédalo`;
+}
+
 function markDirty() {
   state.isDirty = true;
+  updateDirtyUI();
+}
+
+function setClean() {
+  state.isDirty = false;
+  updateDirtyUI();
 }
 
 // ---------------------------------------------------------------------------
@@ -150,7 +170,7 @@ function closeUnsavedModal() {
 }
 
 function onUnsavedDiscard() {
-  state.isDirty = false;
+  setClean();
   $('unsavedSheet').hidden = true;
   const action = unsavedPendingAction;
   unsavedPendingAction = null;
@@ -402,11 +422,116 @@ function setupEvents() {
     const py = e.clientY - rect.top;
     zoomAt(px, py, Math.exp(-e.deltaY * 0.0015));
   }, { passive: false });
+
+  // Atajos de teclado globales y control de lienzo
+  window.addEventListener('keydown', onKeyDown);
+  window.addEventListener('keyup', onKeyUp);
+  window.addEventListener('blur', () => {
+    if (state.isSpacePressed) {
+      state.isSpacePressed = false;
+      document.body.classList.remove('space-active');
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------
-// Carga de Datos desde la API
+// Atajos de Teclado y Ergonomía
 // ---------------------------------------------------------------------------
+
+function isEditingText(target) {
+  if (!target) return false;
+  const tag = target.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+  if (target.isContentEditable) return true;
+  if (target.closest && (target.closest('.CodeMirror') || target.closest('.code-editor-wrap'))) return true;
+  return false;
+}
+
+function onKeyDown(e) {
+  const isCmdOrCtrl = e.metaKey || e.ctrlKey;
+  const key = e.key;
+
+  // 1. Atajo Guardar: Cmd+S / Ctrl+S (funciona siempre, incluso dentro de campos de formulario o editor)
+  if (isCmdOrCtrl && key.toLowerCase() === 's') {
+    e.preventDefault();
+    e.stopPropagation();
+    saveFlow();
+    return;
+  }
+
+  // 2. Escape: cerrar modales, cancelar cableado o deseleccionar nodo
+  if (key === 'Escape') {
+    const unsaved = $('unsavedSheet');
+    if (unsaved && !unsaved.hidden) { closeUnsavedModal(); return; }
+    const dataViewer = $('dataViewerModal');
+    if (dataViewer && !dataViewer.hidden) { dataViewer.hidden = true; return; }
+    const hist = $('historySheet');
+    if (hist && !hist.hidden) { hist.hidden = true; return; }
+    const code = $('codeSheet');
+    if (code && !code.hidden) { code.hidden = true; return; }
+    const sched = $('scheduleSheet');
+    if (sched && !sched.hidden) { sched.hidden = true; return; }
+    const sheet = $('sheet');
+    if (sheet && !sheet.hidden) { sheet.hidden = true; return; }
+
+    // Cancelar cableado en curso
+    if (state.wiring) {
+      state.wiring = null;
+      document.body.classList.remove('is-wiring');
+      renderWires();
+      return;
+    }
+
+    // Deseleccionar nodo activo
+    if (state.selectedNodeId !== null) {
+      state.selectedNodeId = null;
+      state.activeInspector = 'flow';
+      document.querySelectorAll('.node').forEach((n) => n.classList.remove('selected'));
+      renderInspector();
+      return;
+    }
+    return;
+  }
+
+  // Si el foco está dentro de un campo de texto o editor, no procesar atajos del lienzo
+  if (isEditingText(e.target)) return;
+
+  // Si hay algún diálogo o modal abierto, no procesar atajos del lienzo
+  const openSheet = document.querySelector('.sheet:not([hidden])');
+  if (openSheet) return;
+
+  // 3. Suprimir / Backspace: Eliminar nodo seleccionado
+  if ((key === 'Delete' || key === 'Backspace') && !isCmdOrCtrl) {
+    if (state.selectedNodeId) {
+      e.preventDefault();
+      removeNode(state.selectedNodeId);
+      return;
+    }
+  }
+
+  // 4. Duplicar nodo: Cmd+D / Ctrl+D
+  if (isCmdOrCtrl && key.toLowerCase() === 'd') {
+    if (state.selectedNodeId) {
+      e.preventDefault();
+      duplicateNode(state.selectedNodeId);
+      return;
+    }
+  }
+
+  // 5. Barra espaciadora: Activar modo pan en el lienzo
+  if (e.code === 'Space' && !e.repeat) {
+    e.preventDefault();
+    state.isSpacePressed = true;
+    document.body.classList.add('space-active');
+  }
+}
+
+function onKeyUp(e) {
+  if (e.code === 'Space') {
+    state.isSpacePressed = false;
+    document.body.classList.remove('space-active');
+  }
+}
 
 async function loadCatalog() {
   try {
@@ -1229,7 +1354,7 @@ function resetGraph(name = 'nuevo-flujo') {
   state.selectedNodeId = null;
   state.activeInspector = 'flow';
   state.runHighlights = {};
-  state.isDirty = false;
+  setClean();
   state.view = { k: 1, x: 0, y: 0 };
   $('flowName').value = name;
   render();
@@ -1250,7 +1375,7 @@ async function openFlow(flowId) {
     state.selectedNodeId = null;
     state.activeInspector = 'flow';
     state.runHighlights = {};
-    state.isDirty = false;
+    setClean();
     render();
     renderFlowsList();
     centerFlow();
@@ -1306,7 +1431,7 @@ async function saveFlow() {
       alert('Error de validación:\n' + (Array.isArray(data.detail) ? data.detail.join('\n') : data.detail));
       return false;
     }
-    state.isDirty = false;
+    setClean();
     toast(`Flujo «${id}» guardado correctamente.`);
     await loadFlows();
     render();
@@ -1324,7 +1449,7 @@ async function deleteFlow(flowId) {
     if (!res.ok) throw new Error();
     toast(`Flujo «${flowId}» eliminado.`);
     if (state.graph.name === flowId) {
-      state.isDirty = false;
+      setClean();
       state.activeInspector = null;
       resetGraph('nuevo-flujo');
     }
@@ -1480,6 +1605,28 @@ function removeEdge(source, target, port) {
   render();
 }
 
+function duplicateNode(nodeId) {
+  const orig = state.graph.nodes.find((n) => n.id === nodeId);
+  if (!orig) return;
+  const baseId = orig.id.replace(/_\d+$/, '');
+  let n = 2;
+  let newId = `${baseId}_${n}`;
+  while (state.graph.nodes.some((x) => x.id === newId)) {
+    n++;
+    newId = `${baseId}_${n}`;
+  }
+  const newNode = JSON.parse(JSON.stringify(orig));
+  newNode.id = newId;
+  newNode.x = (newNode.x || 0) + 40;
+  newNode.y = (newNode.y || 0) + 40;
+  state.graph.nodes.push(newNode);
+  state.selectedNodeId = newId;
+  state.activeInspector = 'node';
+  markDirty();
+  render();
+  toast(`Nodo duplicado: «${newId}».`);
+}
+
 // ---------------------------------------------------------------------------
 // Renderizado del Lienzo y Cables SVG
 // ---------------------------------------------------------------------------
@@ -1513,6 +1660,7 @@ function render() {
   renderWires();
   renderInspector();
   updateTransform();
+  updateDirtyUI();
 }
 
 function renderNodes() {
@@ -1625,6 +1773,7 @@ function renderNodes() {
 
     // Selección y Arrastre del nodo
     el.onmousedown = (e) => {
+      if (state.isSpacePressed) return;
       if (e.target.classList.contains('port')) return;
       if (e.target.closest('.node-btn-del')) return;
       if (e.target.closest('.node-btn-edit-code')) return;
@@ -1673,17 +1822,59 @@ function renderWires() {
 
     const d = curve(from, to);
 
+    // Grupo contenedor del cable interactivo
+    const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    group.setAttribute('class', `wire-group wire-${edge.port} ${edge.port === 'error' ? 'error' : 'ok'}`);
+
+    // Hitbox transparente ancha (16px) para facilitar detección del cursor
+    const hitbox = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    hitbox.setAttribute('d', d);
+    hitbox.setAttribute('class', 'wire-hitbox');
+
+    // Trazado visual del cable
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     path.setAttribute('d', d);
     path.setAttribute('class', `wire wire-${edge.port} ${edge.port === 'error' ? 'error' : 'ok'}`);
-    path.style.pointerEvents = 'stroke';
-    path.style.cursor = 'pointer';
-    path.title = 'Haz clic derecho para desconectar';
-    path.oncontextmenu = (e) => {
+
+    // Botón flotante para desconectar en el punto medio de la curva
+    const midX = Math.round((from.x + to.x) / 2);
+    const midY = Math.round((from.y + to.y) / 2);
+
+    const delWrap = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    delWrap.setAttribute('class', 'wire-del-wrap');
+    delWrap.setAttribute('transform', `translate(${midX}, ${midY})`);
+    delWrap.innerHTML = `
+      <g class="wire-del-btn">
+        <circle r="10" class="wire-del-circle"></circle>
+        <path d="M -3.5 -3.5 L 3.5 3.5 M 3.5 -3.5 L -3.5 3.5" class="wire-del-cross"></path>
+        <title>Desconectar cable</title>
+      </g>
+    `;
+
+    // Tooltip nativo
+    const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+    title.textContent = `Conexión ${edge.port.toUpperCase()} (${edge.source} → ${edge.target})\nHaz clic en × o clic derecho para desconectar`;
+    group.appendChild(title);
+
+    group.appendChild(hitbox);
+    group.appendChild(path);
+    group.appendChild(delWrap);
+
+    // Clic derecho para desconectar en cualquier punto
+    group.oncontextmenu = (e) => {
       e.preventDefault();
+      e.stopPropagation();
       removeEdge(edge.source, edge.target, edge.port);
     };
-    svg.appendChild(path);
+
+    // Clic izquierdo sobre el botón × de desconexión
+    delWrap.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      removeEdge(edge.source, edge.target, edge.port);
+    };
+
+    svg.appendChild(group);
   });
 
   // Cable temporal durante arrastre
@@ -1703,6 +1894,19 @@ function renderWires() {
 // ---------------------------------------------------------------------------
 
 function onCanvasMouseDown(e) {
+  // Paneo con barra espaciadora en cualquier punto del lienzo
+  if (state.isSpacePressed) {
+    if (e.button === 0 || e.button === 1) {
+      state.isPanning = true;
+      state.panStart = { x: e.clientX, y: e.clientY };
+      state.panOrigin = { x: state.view.x, y: state.view.y };
+      $('canvasWrap').classList.add('panning');
+      document.body.classList.add('panning');
+      e.preventDefault();
+      return;
+    }
+  }
+
   if (e.target.closest('.node') || e.target.closest('.port') || e.target.closest('.zoombar')) {
     return;
   }
@@ -1758,6 +1962,7 @@ function onCanvasMouseUp(e) {
   if (state.isPanning) {
     state.isPanning = false;
     $('canvasWrap').classList.remove('panning');
+    document.body.classList.remove('panning');
   }
   if (state.dragNode) state.dragNode = null;
   if (state.wiring) {

@@ -107,12 +107,21 @@ A continuación se detallan las mejoras realizadas sobre la base standalone:
   - Paneo fluido arrastrando el fondo del lienzo (con botón izquierdo o central).
   - Zoom mediante rueda del ratón centrado en el cursor.
   - Barra de herramientas con botones de Zoom In, Zoom Out, 100% y Centrar Flujo en pantalla.
-- **Gestión de Cambios sin Guardar**:
-  - Indicador de estado modificado (`isDirty`).
+- **Gestión de Cambios sin Guardar (Estado Dirty)**:
+  - Indicador de estado modificado (`isDirty`) con badge visual pulsante (`● Sin guardar`) en la barra superior junto al nombre del flujo.
+  - Actualización reactiva del título de la pestaña (`● nombre-del-flujo — Dédalo`) y resplandor contextual en el botón de guardar (`#btnSave.is-dirty`).
   - Diálogo modal de confirmación antes de cambiar a otro flujo o crear uno nuevo si hay cambios pendientes.
-- **Desvinculación y Selección Contextual**:
-  - Al hacer clic en un nodo se abren sus ajustes; al hacer clic en el fondo vacío se limpian las selecciones.
-  - Desconexión de cables mediante clic derecho con eliminación instantánea del enlace.
+- **Atajos de Teclado y Ergonomía Nativa**:
+  - `Cmd+S` / `Ctrl+S`: Guardar flujo desde cualquier contexto (incluso editando texto o código).
+  - `Delete` / `Backspace`: Eliminar el nodo seleccionado directamente (respetando inputs y modales).
+  - `Cmd+D` / `Ctrl+D`: Duplicar el nodo seleccionado con desplazamiento automático y configuración clonada.
+  - `Escape`: Deseleccionar nodo, cancelar cableado en curso o cerrar cualquier modal abierto.
+  - `Barra Espaciadora (Space + Arrastre)`: Paneo libre y fluido del lienzo con cursor de mano (`grab` / `grabbing`).
+- **Cables Interactivos con Detección Ampliada y Hover**:
+  - Trazado invisible de hitbox (16px) para facilitar la selección de cables con el puntero sin frustración.
+  - Efecto hover con engrosamiento (de 2.5px a 5px) y resplandor coloreado (*glow*) según el tipo de puerto (`ok` esmeralda o `error` coral).
+  - Botón flotante `×` centrado en la curva del cable para desconexión inmediata con un solo clic izquierdo.
+  - Soporte continuado de clic derecho en cualquier punto del cable para desconectar.
 
 ### B. Historial de Ejecuciones
 - Pestaña dedicada en la barra lateral con listado histórico de ejecuciones, fecha/hora, duración y estado (`OK`, `ERR`, `RUN`).

@@ -84,7 +84,13 @@
     <span class="badge">Standalone</span>
   </div>
 
-  <input id="flowName" class="name-input" placeholder="nombre-del-flujo" autocomplete="off" spellcheck="false" />
+  <div class="flow-name-wrap">
+    <input id="flowName" class="name-input" placeholder="nombre-del-flujo" autocomplete="off" spellcheck="false" />
+    <span id="dirtyBadge" class="dirty-badge" title="Cambios pendientes de guardar (Ctrl+S / ⌘S)">
+      <span class="dirty-dot"></span>
+      <span class="dirty-text">Sin guardar</span>
+    </span>
+  </div>
 
   <span class="spacer"></span>
 
@@ -97,7 +103,7 @@
   <button id="btnCompile" class="btn secondary" title="Ver código generado"><svg class="ic" width="14" height="14"><use href="#i-code"/></svg> Ver código</button>
   <button id="btnRun" class="btn secondary" title="Probar flujo completo ahora"><svg class="ic" width="14" height="14"><use href="#i-play"/></svg> Probar</button>
   <button id="btnDebugFlow" class="btn secondary" title="Depurar paso a paso en el lienzo visual"><svg class="ic" width="14" height="14"><use href="#i-bug"/></svg> Depurar</button>
-  <button id="btnSave" class="btn primary" title="Guardar flujo"><svg class="ic" width="14" height="14"><use href="#i-save"/></svg> Guardar</button>
+  <button id="btnSave" class="btn primary" title="Guardar flujo (Ctrl+S / ⌘S)"><svg class="ic" width="14" height="14"><use href="#i-save"/></svg> Guardar</button>
   <button id="btnToggleInspector" class="btn icon-btn" title="Alternar panel derecho" aria-label="Alternar panel de ajustes"><svg class="ic" width="16" height="16"><use href="#i-sidebar-right"/></svg></button>
   <button id="btnTheme" class="btn icon-btn" title="Cambiar tema" aria-label="Cambiar tema"><svg class="ic" width="16" height="16"><use href="#i-theme"/></svg></button>
 </header>

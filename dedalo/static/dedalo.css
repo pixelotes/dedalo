@@ -99,6 +99,12 @@ body {
   color: var(--text-muted);
   text-transform: uppercase;
 }
+.flow-name-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+}
 .name-input {
   background: var(--bg-input);
   border: 1px solid var(--border);
@@ -108,8 +114,57 @@ body {
   font-size: 0.9rem;
   font-family: var(--mono);
   width: 220px;
+  transition: border-color 0.15s ease;
 }
 .name-input:focus { outline: none; border-color: var(--border-focus); }
+
+/* Indicador visual de cambios sin guardar */
+.dirty-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.32);
+  padding: 3px 8px;
+  border-radius: 12px;
+  user-select: none;
+  opacity: 0;
+  transform: scale(0.92);
+  pointer-events: none;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  white-space: nowrap;
+}
+.dirty-badge.visible {
+  opacity: 1;
+  transform: scale(1);
+  pointer-events: auto;
+}
+.dirty-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: #f59e0b;
+  box-shadow: 0 0 6px rgba(245, 158, 11, 0.8);
+  animation: pulseDirty 2s infinite ease-in-out;
+}
+@keyframes pulseDirty {
+  0%, 100% { transform: scale(1); opacity: 0.8; }
+  50% { transform: scale(1.3); opacity: 1; }
+}
+
+[data-theme="light"] .dirty-badge {
+  color: #b45309;
+  background: rgba(217, 119, 6, 0.12);
+  border-color: rgba(217, 119, 6, 0.32);
+}
+[data-theme="light"] .dirty-dot {
+  background-color: #d97706;
+  box-shadow: 0 0 6px rgba(217, 119, 6, 0.7);
+}
+
 .spacer { flex: 1; }
 
 .btn {
@@ -126,8 +181,22 @@ body {
   transition: all 0.15s ease;
 }
 .btn:hover { background: var(--border); }
-.btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 500; }
+.btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 500; position: relative; }
 .btn.primary:hover { background: var(--primary-hover); }
+.btn.primary.is-dirty {
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.35);
+}
+.btn.primary.is-dirty::after {
+  content: '';
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: #f59e0b;
+  box-shadow: 0 0 6px rgba(245, 158, 11, 0.9);
+}
 .btn.sm { padding: 4px 8px; font-size: 0.75rem; }
 .btn.icon-btn { padding: 6px; }
 select {
@@ -432,6 +501,23 @@ select {
   outline-offset: -3px;
   background-color: var(--bg-subtle);
 }
+
+/* Modo Paneo con Barra Espaciadora */
+body.space-active,
+body.space-active .canvas-wrap,
+body.space-active .node,
+body.space-active .node-header,
+body.space-active .node-body {
+  cursor: grab !important;
+}
+body.space-active.panning,
+body.space-active.panning .canvas-wrap,
+body.space-active.panning .node,
+body.space-active.panning .node-header,
+body.space-active.panning .node-body {
+  cursor: grabbing !important;
+}
+
 .canvas-content {
   position: absolute;
   top: 0;
@@ -450,14 +536,90 @@ select {
   overflow: visible;
   z-index: 1;
 }
+
+/* Cableado SVG interactivo */
+.wire-group {
+  cursor: pointer;
+}
+.wire-hitbox {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 16px;
+  stroke-linecap: round;
+  pointer-events: stroke;
+  cursor: pointer;
+}
 .wire {
   fill: none;
   stroke-width: 2.5px;
-  transition: stroke 0.15s;
+  pointer-events: none;
+  transition: stroke-width 0.16s ease, stroke 0.16s ease, filter 0.16s ease;
 }
 .wire-ok, .wire.ok { stroke: var(--port-ok); }
 .wire-error, .wire.error { stroke: var(--port-err); stroke-dasharray: 4 2; }
-.wire-draft, .wire.dragging { stroke: var(--primary); stroke-width: 2px; stroke-dasharray: 4 4; }
+.wire-draft, .wire.dragging { stroke: var(--primary); stroke-width: 2px; stroke-dasharray: 4 4; pointer-events: none; }
+
+/* Efecto hover interactivo en cables */
+.wire-group:hover .wire {
+  stroke-width: 5px;
+}
+.wire-group.wire-ok:hover .wire,
+.wire-group.ok:hover .wire {
+  stroke: #34d399;
+  filter: drop-shadow(0 0 6px rgba(16, 185, 129, 0.75));
+}
+.wire-group.wire-error:hover .wire,
+.wire-group.error:hover .wire {
+  stroke: #f87171;
+  filter: drop-shadow(0 0 6px rgba(239, 68, 68, 0.85));
+}
+
+/* Botón flotante para desconectar cable al hacer hover */
+.wire-del-wrap {
+  pointer-events: auto;
+  cursor: pointer;
+}
+.wire-del-btn {
+  opacity: 0;
+  pointer-events: auto;
+  cursor: pointer;
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: opacity 0.16s ease, transform 0.16s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transform: scale(0.5);
+}
+.wire-group:hover .wire-del-btn {
+  opacity: 1;
+  transform: scale(1);
+}
+.wire-del-circle {
+  fill: var(--bg-panel);
+  stroke: var(--port-err);
+  stroke-width: 1.6px;
+  transition: all 0.15s ease;
+}
+.wire-del-cross {
+  stroke: var(--port-err);
+  stroke-width: 1.8px;
+  stroke-linecap: round;
+  transition: stroke 0.15s ease;
+}
+.wire-del-wrap:hover .wire-del-circle,
+.wire-del-btn:hover .wire-del-circle {
+  fill: var(--port-err);
+  stroke: var(--port-err);
+  filter: drop-shadow(0 0 6px rgba(239, 68, 68, 0.8));
+}
+.wire-del-wrap:hover .wire-del-cross,
+.wire-del-btn:hover .wire-del-cross {
+  stroke: #ffffff;
+}
+
+/* Ocultar botones de desconexión durante el arrastre de un nuevo cable */
+body.is-wiring .wire-del-wrap,
+body.is-wiring .wire-del-btn {
+  display: none !important;
+}
 
 .nodes {
   position: absolute;
