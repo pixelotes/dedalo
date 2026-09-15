@@ -3681,7 +3681,7 @@ def jira_issue_output(
 
             lbls = (labels.strip() or str(item_data.get("labels") or "")).strip()
             if lbls:
-                fields_to_update["labels"] = [l.strip().replace(" ", "-") for l in lbls.split(",") if l.strip()]
+                fields_to_update["labels"] = [lbl.strip().replace(" ", "-") for lbl in lbls.split(",") if lbl.strip()]
 
             if summary.strip():
                 fields_to_update["summary"] = summary.strip()[:250]
@@ -3746,7 +3746,7 @@ def jira_issue_output(
 
             lbls = (labels.strip() or str(item_data.get("labels") or "")).strip()
             if lbls:
-                lbl_list = [l.strip().replace(" ", "-") for l in lbls.split(",") if l.strip()]
+                lbl_list = [lbl.strip().replace(" ", "-") for lbl in lbls.split(",") if lbl.strip()]
                 if lbl_list:
                     fields_payload["labels"] = lbl_list
 

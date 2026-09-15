@@ -816,7 +816,6 @@ def test_coder_agent_custom_tools_permissions(tmp_path: Path):
     assert "no está disponible o no está autorizada" in tool_hist[0]["output_preview"]
 
     # 3. Verificar que custom_tools acepta lista de strings: ['read', 'grep']
-    recorded_list_requests = []
     with patch("httpx.Client.post", side_effect=[
         MagicMock(status_code=200, json=lambda: {
             "choices": [{"message": {"role": "assistant", "content": "Listo", "tool_calls": None}}]
