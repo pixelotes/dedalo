@@ -17,6 +17,8 @@ const state = {
   llms: [],
   isDirty: false,
   activeTab: 'flows',
+  paletteFilter: 'all',
+  paletteCollapsed: { input: false, transform: false, output: false },
   // Transformación y navegación 2D del lienzo (Pan y Zoom)
   view: { k: 1, x: 0, y: 0 },
   isPanning: false,
@@ -324,7 +326,7 @@ function setupEvents() {
   $('btnSchedule').onclick = () => openScheduleModal(state.graph.name);
   $('btnCompile').onclick = compileGraph;
   $('btnRun').onclick = runPreview;
-  if ($('btnDebugFlow')) $('btnDebugFlow').onclick = startDebugFlow;
+  if ($('btnDebugFlow')) $('btnDebugFlow').onclick = toggleDebugFlow;
   if ($('btnDebugReset')) $('btnDebugReset').onclick = resetDebugFlow;
   if ($('btnDebugNext')) $('btnDebugNext').onclick = stepDebugNext;
   if ($('btnDebugContinue')) $('btnDebugContinue').onclick = continueDebugFlow;
@@ -382,6 +384,15 @@ function setupEvents() {
 
   if ($('paletteSearch')) {
     $('paletteSearch').addEventListener('input', () => renderPalette());
+  }
+
+  if ($('paletteChips')) {
+    $('paletteChips').onclick = (e) => {
+      const chipBtn = e.target.closest('.chip');
+      if (!chipBtn) return;
+      state.paletteFilter = chipBtn.dataset.chip || 'all';
+      renderPalette();
+    };
   }
 
   // Eventos globales de arrastre y clic en el canvas
@@ -832,21 +843,41 @@ async function runScheduleModalNow() {
   }
 }
 
+const NODE_CHIP_TAGS = {
+  net: ['http', 'web', 'rss', 'imap', 'mqtt', 'ping', 'dns', 'ssl', 'webhook', 'weather', 'ntfy', 'telegram', 'discord', 'slack', 'email'],
+  data: ['html', 'regex', 'template', 'array', 'filter', 'diff', 'dedup', 'summarize', 'clean_email', 'datetime', 'sqlite', 'file', 'json'],
+  ai: ['coder', 'agent', 'summarize'],
+  git: ['git'],
+  sys: ['pi_health', 'disk_free', 'command', 'healthcheck', 'script', 'threshold', 'router'],
+};
+
+function nodeMatchesChip(typeKey, spec, chip) {
+  if (!chip || chip === 'all') return true;
+  const sub = typeKey.split('.')[1] || '';
+  const hay = `${typeKey} ${spec.label || ''} ${spec.output || ''}`.toLowerCase();
+  const tags = NODE_CHIP_TAGS[chip] || [];
+  return tags.some((t) => hay.includes(t) || sub.includes(t));
+}
+
 function renderPalette() {
   const p = $('palette');
   p.innerHTML = '';
   const categories = { input: 'Entrada', transform: 'Transformación', output: 'Salida' };
   const query = ($('paletteSearch') && $('paletteSearch').value || '').trim().toLowerCase();
+  const activeChip = state.paletteFilter || 'all';
   let totalMatched = 0;
 
+  // Sincronizar estado visual de los chips
+  document.querySelectorAll('#paletteChips .chip').forEach((c) => {
+    c.classList.toggle('active', c.dataset.chip === activeChip);
+  });
+
   Object.entries(categories).forEach(([catKey, catTitle]) => {
-    const block = document.createElement('div');
-    block.className = `category-block cat-${catKey}`;
-    block.innerHTML = `<h4>${catTitle}</h4>`;
-    let catMatched = 0;
+    const matchingSpecs = [];
 
     Object.entries(state.catalog.node_types || {}).forEach(([typeKey, spec]) => {
       if (spec.category !== catKey) return;
+      if (!nodeMatchesChip(typeKey, spec, activeChip)) return;
       if (query) {
         const sub = typeKey.split('.')[1] || '';
         const label = (spec.label || '').toLowerCase();
@@ -857,9 +888,40 @@ function renderPalette() {
                         out.includes(query);
         if (!matches) return;
       }
-      catMatched++;
-      totalMatched++;
+      matchingSpecs.push({ typeKey, spec });
+    });
 
+    totalMatched += matchingSpecs.length;
+
+    if (matchingSpecs.length === 0 && (query || activeChip !== 'all')) {
+      return;
+    }
+
+    const isCollapsed = !query && activeChip === 'all' && !!state.paletteCollapsed[catKey];
+
+    const block = document.createElement('div');
+    block.className = `category-block cat-${catKey}${isCollapsed ? ' collapsed' : ''}`;
+
+    const head = document.createElement('div');
+    head.className = 'category-head';
+    head.title = isCollapsed ? 'Expandir categoría' : 'Colapsar categoría';
+    head.innerHTML = `
+      <div class="category-head-title">
+        <svg class="category-chevron ic" width="12" height="12"><use href="#i-chevron-down"/></svg>
+        <span>${catTitle}</span>
+      </div>
+      <span class="category-badge-count">${matchingSpecs.length}</span>
+    `;
+    head.onclick = () => {
+      state.paletteCollapsed[catKey] = !state.paletteCollapsed[catKey];
+      renderPalette();
+    };
+    block.appendChild(head);
+
+    const content = document.createElement('div');
+    content.className = 'category-content';
+
+    matchingSpecs.forEach(({ typeKey, spec }) => {
       const pill = document.createElement('div');
       pill.className = `node-pill cat-${catKey}`;
       pill.draggable = true;
@@ -874,16 +936,20 @@ function renderPalette() {
       pill.ondragend = () => {
         pill.classList.remove('dragging-pill');
       };
-      block.appendChild(pill);
+      content.appendChild(pill);
     });
 
-    if (catMatched > 0 || !query) {
-      p.appendChild(block);
-    }
+    block.appendChild(content);
+    p.appendChild(block);
   });
 
-  if (query && totalMatched === 0) {
-    p.innerHTML = `<p class="hint" style="text-align: center; padding: 1.5rem 0.5rem;">No hay nodos que coincidan con «${escapeHtml(query)}»</p>`;
+  const countHint = $('nodesCountHint');
+  if (countHint) {
+    countHint.textContent = `${totalMatched} nodo${totalMatched === 1 ? '' : 's'}`;
+  }
+
+  if (totalMatched === 0) {
+    p.innerHTML = `<p class="hint" style="text-align: center; padding: 1.5rem 0.5rem;">No hay nodos que coincidan con «${escapeHtml(query || activeChip)}»</p>`;
   }
 }
 
@@ -1316,6 +1382,21 @@ function highlightRunOnCanvas(steps) {
   renderNodes();
 }
 
+function selectNode(node) {
+  if (!node) return;
+  state.selectedNodeId = node.id;
+  state.activeInspector = 'node';
+  document.querySelectorAll('.node').forEach((n) => {
+    if (n.dataset.id === node.id) {
+      n.classList.add('selected');
+    } else {
+      n.classList.remove('selected');
+    }
+  });
+  document.querySelectorAll('.flow-card').forEach((c) => c.classList.remove('active'));
+  renderInspector();
+}
+
 function highlightNodeOnCanvas(nodeId) {
   const node = state.graph.nodes.find((n) => n.id === nodeId);
   if (node) {
@@ -1349,6 +1430,7 @@ async function purgeHistory() {
 // ---------------------------------------------------------------------------
 
 function resetGraph(name = 'nuevo-flujo') {
+  if (state.debug && state.debug.active) stopDebugFlow();
   state.graph = { name, nodes: [], edges: [], version: 1 };
   state.meta = { name, description: '', schedule: '', enabled: true };
   state.selectedNodeId = null;
@@ -1369,6 +1451,7 @@ async function openFlow(flowId) {
     const res = await fetch(`/api/flow?id=${encodeURIComponent(flowId)}`);
     if (!res.ok) throw new Error();
     const data = await res.json();
+    if (state.debug && state.debug.active) stopDebugFlow();
     state.graph = data.graph;
     state.meta = data.meta || { name: flowId };
     $('flowName').value = state.graph.name;
@@ -1760,17 +1843,6 @@ function renderNodes() {
     errPort.onmousedown = (e) => startWire(e, node.id, 'error');
     el.appendChild(errPort);
 
-    // Etiquetas de puerto en borde derecho (ok / error)
-    const tagOk = document.createElement('span');
-    tagOk.className = 'port-tag ok';
-    tagOk.textContent = 'ok';
-    el.appendChild(tagOk);
-
-    const tagErr = document.createElement('span');
-    tagErr.className = 'port-tag error';
-    tagErr.textContent = 'error';
-    el.appendChild(tagErr);
-
     // Selección y Arrastre del nodo
     el.onmousedown = (e) => {
       if (state.isSpacePressed) return;
@@ -1780,17 +1852,10 @@ function renderNodes() {
       if (e.button !== 0) return;
       e.stopPropagation();
 
-      state.selectedNodeId = node.id;
-      state.activeInspector = 'node';
+      selectNode(node);
       state.dragNode = node;
       const mouseWorld = screenToWorld(e.clientX, e.clientY);
       state.dragOffset = { x: mouseWorld.x - node.x, y: mouseWorld.y - node.y };
-
-      // Actualizar selección visual sin destruir elementos del DOM
-      document.querySelectorAll('.node').forEach((n) => n.classList.remove('selected'));
-      el.classList.add('selected');
-      document.querySelectorAll('.flow-card').forEach((c) => c.classList.remove('active'));
-      renderInspector();
     };
 
     // Soltar cable en cualquier parte del nodo para conectarlo
@@ -2138,6 +2203,14 @@ function getTopologicalOrder() {
   return ordered;
 }
 
+function toggleDebugFlow() {
+  if (state.debug && state.debug.active) {
+    stopDebugFlow();
+  } else {
+    startDebugFlow();
+  }
+}
+
 function startDebugFlow() {
   if (!state.graph.nodes.length) {
     toast('El flujo no tiene nodos para depurar.');
@@ -2158,6 +2231,7 @@ function startDebugFlow() {
   };
 
   $('debugToolbar').hidden = false;
+  if ($('btnDebugFlow')) $('btnDebugFlow').classList.add('active');
   updateDebugToolbar();
   highlightActiveDebugNode();
   toast('Modo depuración activo. Pulsa «Siguiente paso» para comenzar.');
@@ -2174,21 +2248,20 @@ function updateDebugToolbar() {
   if (idx < total) {
     const node = state.debug.stepsOrder[idx];
     $('debugStepNum').textContent = idx + 1;
-    $('debugStepNodeName').textContent = `${node.label || node.id} (${node.type})`;
+    const fullName = `${node.label || node.id} (${node.type})`;
+    $('debugStepNodeName').textContent = fullName;
+    $('debugStepNodeName').title = fullName;
     $('btnDebugNext').disabled = false;
   } else {
     $('debugStepNum').textContent = total;
     $('debugStepNodeName').textContent = 'Completado';
+    $('debugStepNodeName').title = 'Flujo completado';
     $('btnDebugNext').disabled = true;
   }
 }
 
 function highlightActiveDebugNode() {
   renderNodes();
-  if (state.debug.active && state.debug.currentStepIndex < state.debug.stepsOrder.length) {
-    const node = state.debug.stepsOrder[state.debug.currentStepIndex];
-    selectNode(node);
-  }
 }
 
 async function stepDebugNext() {
@@ -2231,8 +2304,8 @@ async function stepDebugNext() {
 
     state.debug.currentStepIndex++;
     updateDebugToolbar();
-    highlightActiveDebugNode();
-    renderInspector();
+    renderNodes();
+    selectNode(node);
   } catch (e) {
     state.debug.running = false;
     $('btnDebugNext').disabled = false;
@@ -2265,6 +2338,7 @@ async function runToNode(targetNodeId) {
         state.debug.active = true;
         state.debug.stepsOrder = order;
         $('debugToolbar').hidden = false;
+        if ($('btnDebugFlow')) $('btnDebugFlow').classList.add('active');
       }
     }
 
@@ -2319,6 +2393,7 @@ function resetDebugFlow() {
 function stopDebugFlow() {
   state.debug.active = false;
   $('debugToolbar').hidden = true;
+  if ($('btnDebugFlow')) $('btnDebugFlow').classList.remove('active');
   renderNodes();
   toast('Depuración finalizada.');
 }

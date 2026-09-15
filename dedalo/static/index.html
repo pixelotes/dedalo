@@ -76,6 +76,15 @@
   <symbol id="i-step-forward" viewBox="0 0 24 24">
     <polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/>
   </symbol>
+  <symbol id="i-chevron-down" viewBox="0 0 24 24">
+    <polyline points="6 9 12 15 18 9"/>
+  </symbol>
+  <symbol id="i-rotate-ccw" viewBox="0 0 24 24">
+    <path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+  </symbol>
+  <symbol id="i-square" viewBox="0 0 24 24">
+    <rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor"/>
+  </symbol>
 </svg>
 
 <header class="bar">
@@ -94,18 +103,42 @@
 
   <span class="spacer"></span>
 
-  <select id="templatePicker" title="Empezar desde una plantilla">
-    <option value="">— Cargar plantilla —</option>
-  </select>
+  <!-- Grupo 1: Flujo y Plantillas -->
+  <div class="header-group header-group-flow">
+    <button id="btnNew" class="btn secondary sm" title="Crear lienzo en blanco (limpiar)"><svg class="ic" width="13" height="13"><use href="#i-trash"/></svg> Vaciar</button>
+    <select id="templatePicker" class="template-select" title="Cargar desde una plantilla">
+      <option value="">Plantillas...</option>
+    </select>
+  </div>
 
-  <button id="btnNew" class="btn secondary" title="Lienzo en blanco">Vacío</button>
-  <button id="btnSchedule" class="btn secondary" title="Programar ejecución automática"><svg class="ic" width="14" height="14"><use href="#i-clock"/></svg> Programar</button>
-  <button id="btnCompile" class="btn secondary" title="Ver código generado"><svg class="ic" width="14" height="14"><use href="#i-code"/></svg> Ver código</button>
-  <button id="btnRun" class="btn secondary" title="Probar flujo completo ahora"><svg class="ic" width="14" height="14"><use href="#i-play"/></svg> Probar</button>
-  <button id="btnDebugFlow" class="btn secondary" title="Depurar paso a paso en el lienzo visual"><svg class="ic" width="14" height="14"><use href="#i-bug"/></svg> Depurar</button>
-  <button id="btnSave" class="btn primary" title="Guardar flujo (Ctrl+S / ⌘S)"><svg class="ic" width="14" height="14"><use href="#i-save"/></svg> Guardar</button>
-  <button id="btnToggleInspector" class="btn icon-btn" title="Alternar panel derecho" aria-label="Alternar panel de ajustes"><svg class="ic" width="16" height="16"><use href="#i-sidebar-right"/></svg></button>
-  <button id="btnTheme" class="btn icon-btn" title="Cambiar tema" aria-label="Cambiar tema"><svg class="ic" width="16" height="16"><use href="#i-theme"/></svg></button>
+  <div class="header-sep"></div>
+
+  <!-- Grupo 2: Herramientas y Programación -->
+  <div class="header-group header-group-tools">
+    <button id="btnCompile" class="btn secondary sm" title="Ver código generado en Python plano"><svg class="ic" width="13" height="13"><use href="#i-code"/></svg> Código</button>
+    <button id="btnSchedule" class="btn secondary sm" title="Programar ejecución periódica"><svg class="ic" width="13" height="13"><use href="#i-clock"/></svg> Programar</button>
+  </div>
+
+  <div class="header-sep"></div>
+
+  <!-- Grupo 3: Ejecución y Pruebas -->
+  <div class="header-group header-group-exec">
+    <button id="btnRun" class="btn secondary sm btn-run" title="Probar flujo completo ahora"><svg class="ic" width="13" height="13"><use href="#i-play"/></svg> Probar</button>
+    <button id="btnDebugFlow" class="btn secondary sm btn-debug" title="Depurar paso a paso en el lienzo visual"><svg class="ic" width="13" height="13"><use href="#i-bug"/></svg> Depurar</button>
+  </div>
+
+  <div class="header-sep"></div>
+
+  <!-- Grupo 4: Acción Principal -->
+  <button id="btnSave" class="btn primary sm" title="Guardar flujo (Ctrl+S / ⌘S)"><svg class="ic" width="13" height="13"><use href="#i-save"/></svg> Guardar</button>
+
+  <div class="header-sep"></div>
+
+  <!-- Grupo 5: Ajustes y Tema -->
+  <div class="header-group header-group-view">
+    <button id="btnToggleInspector" class="btn icon-btn sm" title="Alternar panel derecho de ajustes" aria-label="Alternar panel de ajustes"><svg class="ic" width="15" height="15"><use href="#i-sidebar-right"/></svg></button>
+    <button id="btnTheme" class="btn icon-btn sm" title="Cambiar tema (oscuro/claro)" aria-label="Cambiar tema"><svg class="ic" width="15" height="15"><use href="#i-theme"/></svg></button>
+  </div>
 </header>
 
 <main class="workspace">
@@ -152,14 +185,22 @@
       </div>
     </div>
 
-    <!-- Tab 2: Nodos (Paleta tradicional) -->
+    <!-- Tab 2: Nodos (Paleta organizada) -->
     <div class="tab-pane" id="paneNodes">
       <div class="pane-head">
         <h3>Nodos</h3>
-        <span class="hint-inline">Arrastra o haz clic</span>
+        <span class="hint-inline" id="nodesCountHint">56 nodos</span>
       </div>
       <div class="palette-search-wrap">
         <input id="paletteSearch" type="search" placeholder="Buscar nodo (diff, tabla, mqtt...)" autocomplete="off" />
+      </div>
+      <div class="palette-chips" id="paletteChips">
+        <button class="chip active" data-chip="all">Todos</button>
+        <button class="chip" data-chip="net">Red/Web</button>
+        <button class="chip" data-chip="data">Datos</button>
+        <button class="chip" data-chip="ai">IA</button>
+        <button class="chip" data-chip="git">Git</button>
+        <button class="chip" data-chip="sys">Sistema</button>
       </div>
       <div class="palette-categories" id="palette"></div>
     </div>
@@ -290,18 +331,18 @@
 
     <!-- Barra flotante de control de depuración -->
     <div class="debug-toolbar" id="debugToolbar" hidden>
-      <div class="debug-toolbar-drag">
-        <svg class="ic" width="14" height="14" style="color: var(--primary);"><use href="#i-bug"/></svg>
-        <span class="debug-title">Depuración paso a paso</span>
+      <div class="debug-toolbar-drag" title="Depuración paso a paso">
+        <svg class="ic" width="15" height="15" style="color: var(--primary);"><use href="#i-bug"/></svg>
       </div>
       <div class="debug-step-indicator" id="debugStepIndicator">
-        Paso <b id="debugStepNum">1</b> de <span id="debugStepTotal">1</span>: <code id="debugStepNodeName">-</code>
+        <span>Paso <b id="debugStepNum">1</b>/<span id="debugStepTotal">1</span>:</span>
+        <code id="debugStepNodeName" title="">-</code>
       </div>
       <div class="debug-actions">
-        <button id="btnDebugReset" class="btn sm secondary" title="Reiniciar depuración al inicio">⏮ Reiniciar</button>
-        <button id="btnDebugNext" class="btn sm primary" title="Ejecutar paso activo"><svg class="ic" width="12" height="12"><use href="#i-step-forward"/></svg> Siguiente paso</button>
-        <button id="btnDebugContinue" class="btn sm secondary" title="Continuar ejecución completa hasta el final">▶ Continuar</button>
-        <button id="btnDebugStop" class="btn sm" style="color: var(--port-err);" title="Detener y salir de la depuración">⏹ Salir</button>
+        <button id="btnDebugReset" class="btn sm icon-btn secondary" title="Reiniciar depuración al inicio" aria-label="Reiniciar"><svg class="ic" width="13" height="13"><use href="#i-rotate-ccw"/></svg></button>
+        <button id="btnDebugNext" class="btn sm icon-btn primary" title="Ejecutar paso activo" aria-label="Paso siguiente"><svg class="ic" width="13" height="13"><use href="#i-step-forward"/></svg></button>
+        <button id="btnDebugContinue" class="btn sm icon-btn secondary" title="Continuar ejecución completa hasta el final" aria-label="Continuar"><svg class="ic" width="13" height="13"><use href="#i-play"/></svg></button>
+        <button id="btnDebugStop" class="btn sm icon-btn" style="color: var(--port-err);" title="Detener y salir de la depuración" aria-label="Detener y salir"><svg class="ic" width="13" height="13"><use href="#i-square"/></svg></button>
       </div>
     </div>
 

@@ -117,11 +117,21 @@ A continuación se detallan las mejoras realizadas sobre la base standalone:
   - `Cmd+D` / `Ctrl+D`: Duplicar el nodo seleccionado con desplazamiento automático y configuración clonada.
   - `Escape`: Deseleccionar nodo, cancelar cableado en curso o cerrar cualquier modal abierto.
   - `Barra Espaciadora (Space + Arrastre)`: Paneo libre y fluido del lienzo con cursor de mano (`grab` / `grabbing`).
-- **Cables Interactivos con Detección Ampliada y Hover**:
-  - Trazado invisible de hitbox (16px) para facilitar la selección de cables con el puntero sin frustración.
-  - Efecto hover con engrosamiento (de 2.5px a 5px) y resplandor coloreado (*glow*) según el tipo de puerto (`ok` esmeralda o `error` coral).
-  - Botón flotante `×` centrado en la curva del cable para desconexión inmediata con un solo clic izquierdo.
-  - Soporte continuado de clic derecho en cualquier punto del cable para desconectar.
+- **Jerarquía y Reorganización de la Barra Superior (Header)**:
+  - Agrupación funcional por bloques semánticos con separadores sutiles: *Flujo* (`[Vaciar 🗑 | Plantillas... ▾]`), *Herramientas* (`[Código] [Programar]`), *Ejecución* (`[Probar ▶ | Depurar 🪲]`), *Acción Principal* (`[Guardar]`) y *Entorno* (`[Inspector] [Tema]`).
+  - Campo de nombre de flujo responsivo con ancho adaptativo para evitar truncado de nombres descriptivos.
+- **Paleta de Nodos Optimizada (Chips + Acordeón)**:
+  - Chips de filtrado rápido superior (`Todos`, `Red/Web`, `Datos`, `IA`, `Git`, `Sistema`) para filtrar al instante los 56 nodos.
+  - Bloques de categoría colapsables (Entrada, Transformación, Salida) con contador dinámico de nodos y chevron interactivo.
+  - Despliegue automático de secciones al realizar búsquedas en tiempo real.
+- **Nodos Limpios sin Ruido Visual**:
+  - Eliminadas las etiquetas de texto flotantes `ok` y `error` del borde derecho de los nodos para evitar solapamientos con cables vecinos; la semántica se comunica de forma intuitiva por el color del puerto (esmeralda para éxito, rojo para fallo) y tooltips nativos.
+- **Corrección de Visibilidad y Comportamiento Toggle en Barra de Depuración**:
+  - Resuelto conflicto de especificidad CSS con el atributo `[hidden]`, garantizando que la barra de depuración paso a paso y el visor modal de datos permanezcan ocultos por defecto hasta que el usuario los invoque deliberadamente.
+  - El botón superior **Depurar** (`#btnDebugFlow`) funciona ahora como un interruptor (*toggle*): un primer clic activa el modo depuración y abre la barra, mientras que un segundo clic cierra la barra y finaliza la sesión.
+  - El botón adopta un estado activo persistente en color azul primario (`.active`) mientras el modo de depuración está activo en el lienzo, recuperando su estilo secundario habitual al cerrarse o reiniciarse el lienzo.
+  - Barra de depuración compacta basada exclusivamente en iconos (`icon-btn` con SVG nativos para Reiniciar, Siguiente paso, Continuar y Detener) y nombre de nodo adaptable con truncado elíptico.
+  - Al avanzar con **Siguiente paso**, el inspector lateral muestra automáticamente los datos del último nodo recién ejecutado (entradas, salidas y tiempo de ejecución). Al mismo tiempo, el usuario tiene plena libertad para hacer clic en cualquier otro nodo del flujo y examinar sus datos sin que el depurador fuerce la vista.
 
 ### B. Historial de Ejecuciones
 - Pestaña dedicada en la barra lateral con listado histórico de ejecuciones, fecha/hora, duración y estado (`OK`, `ERR`, `RUN`).
