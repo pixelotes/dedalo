@@ -352,6 +352,39 @@ def test_approval_node_compilation():
     assert "def run(ctx):" in standalone
 
 
+def test_coder_compilation_with_web_search_and_permissions():
+    g = compiler.Graph(
+        name="pipeline_coder_custom",
+        nodes=[
+            _node("hook", "input.webhook"),
+            _node("coder", "transform.coder", {
+                "prompt": "Escribe un scraper",
+                "tools_preset": "custom",
+                "custom_tools": "read,web_search",
+            }),
+            _node("alert", "output.alert", {"text": "Completado"}),
+        ],
+        edges=[
+            _edge("hook", "coder", "ok"),
+            _edge("coder", "alert", "ok"),
+        ],
+    )
+    src = compiler.compile(g)
+    assert "def run(ctx):" in src
+    assert "runtime.coder_agent" in src
+
+    ns = {}
+    exec(src, ns)
+    assert callable(ns["run"])
+
+    standalone = compiler.compile_standalone(g)
+    assert "def coder_agent(" in standalone
+    assert "def _tool_web_search(" in standalone
+    assert "def web_search(" in standalone
+    assert "def run(ctx):" in standalone
+
+
+
 
 
 

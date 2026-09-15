@@ -2674,6 +2674,247 @@ function renderInspector() {
   `;
 }
 
+// ---------------------------------------------------------------------------
+// Panel de Herramientas y Permisos para transform.coder
+// ---------------------------------------------------------------------------
+
+const CODER_TOOLS_SPEC = [
+  {
+    category: 'Lectura y Navegación (Seguro)',
+    icon: '📂',
+    tools: [
+      { id: 'read', name: 'Lectura de archivos (read)', desc: 'Leer archivos del workspace con numeración de líneas.' },
+      { id: 'grep', name: 'Búsqueda en código (grep)', desc: 'Búsqueda por patrones regex en archivos del proyecto.' },
+      { id: 'find', name: 'Localizar archivos (find)', desc: 'Búsqueda de archivos y directorios por patrón glob.' },
+      { id: 'ls', name: 'Listar carpetas (ls)', desc: 'Listar contenido y tamaños de archivos en directorios.' },
+    ],
+  },
+  {
+    category: 'Modificación en Disco (Escritura)',
+    icon: '✏️',
+    tools: [
+      { id: 'edit', name: 'Edición quirúrgica (edit)', desc: 'Reemplazar cadenas exactas y únicas en archivos existentes.' },
+      { id: 'write', name: 'Escritura de archivos (write)', desc: 'Crear o sobreescribir archivos completos en el workspace.' },
+    ],
+  },
+  {
+    category: 'Ejecución en Consola (Bash)',
+    icon: '💻',
+    tools: [
+      { id: 'bash', name: 'Terminal / Shell (bash)', desc: 'Ejecutar comandos de consola, scripts y pruebas automáticas.' },
+    ],
+  },
+  {
+    category: 'Acceso a Red / Internet',
+    icon: '🌐',
+    tools: [
+      { id: 'web_search', name: 'Búsqueda Web (web_search)', desc: 'Buscar documentación e información en internet vía DuckDuckGo.' },
+    ],
+  },
+];
+
+const CODER_PRESETS = {
+  coding: ['read', 'bash', 'edit', 'write'],
+  read_only: ['read', 'grep', 'find', 'ls'],
+  all: ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'web_search'],
+};
+
+function setsEqual(setA, arrayB) {
+  if (setA.size !== arrayB.length) return false;
+  for (const item of arrayB) {
+    if (!setA.has(item)) return false;
+  }
+  return true;
+}
+
+function createCoderToolsSection(node) {
+  const container = document.createElement('div');
+  container.className = 'field-group';
+  container.style.marginBottom = '14px';
+
+  const activeTools = new Set();
+  const currentPreset = (node.config.tools_preset || 'coding').toLowerCase().trim();
+
+  if (currentPreset === 'all') {
+    CODER_PRESETS.all.forEach((t) => activeTools.add(t));
+  } else if (currentPreset === 'read_only') {
+    CODER_PRESETS.read_only.forEach((t) => activeTools.add(t));
+  } else if (currentPreset === 'custom') {
+    const raw = typeof node.config.custom_tools === 'string'
+      ? node.config.custom_tools
+      : (Array.isArray(node.config.custom_tools) ? node.config.custom_tools.join(',') : '');
+    raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean).forEach((t) => activeTools.add(t));
+  } else {
+    CODER_PRESETS.coding.forEach((t) => activeTools.add(t));
+  }
+
+  const lbl = document.createElement('label');
+  lbl.innerHTML = '<span>🛠️ Herramientas y Permisos</span>';
+  container.appendChild(lbl);
+
+  const presetsBox = document.createElement('div');
+  presetsBox.style.display = 'flex';
+  presetsBox.style.gap = '4px';
+  presetsBox.style.flexWrap = 'wrap';
+  presetsBox.style.margin = '4px 0 8px 0';
+
+  const presetOptions = [
+    { id: 'coding', label: 'Programación' },
+    { id: 'read_only', label: 'Solo Lectura' },
+    { id: 'all', label: 'Todas' },
+    { id: 'custom', label: 'A Medida' },
+  ];
+
+  const presetButtons = {};
+
+  function updatePresetButtons() {
+    let matchedPreset = 'custom';
+    if (setsEqual(activeTools, CODER_PRESETS.coding)) matchedPreset = 'coding';
+    else if (setsEqual(activeTools, CODER_PRESETS.read_only)) matchedPreset = 'read_only';
+    else if (setsEqual(activeTools, CODER_PRESETS.all)) matchedPreset = 'all';
+
+    presetOptions.forEach((opt) => {
+      const btn = presetButtons[opt.id];
+      if (!btn) return;
+      const isActive = opt.id === matchedPreset;
+      btn.style.background = isActive ? 'var(--primary)' : 'var(--bg-subtle)';
+      btn.style.color = isActive ? '#fff' : 'var(--text-muted)';
+      btn.style.borderColor = isActive ? 'var(--primary)' : 'var(--border)';
+      btn.style.fontWeight = isActive ? '600' : '400';
+    });
+
+    node.config.tools_preset = matchedPreset;
+    if (matchedPreset === 'custom') {
+      node.config.custom_tools = Array.from(activeTools).join(',');
+    } else {
+      node.config.custom_tools = '';
+    }
+  }
+
+  const toolsBox = document.createElement('div');
+  toolsBox.style.background = 'var(--bg-subtle)';
+  toolsBox.style.border = '1px solid var(--border)';
+  toolsBox.style.borderRadius = '6px';
+  toolsBox.style.padding = '8px 10px';
+
+  presetOptions.forEach((opt) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = opt.label;
+    btn.style.fontSize = '0.72rem';
+    btn.style.padding = '3px 8px';
+    btn.style.borderRadius = '12px';
+    btn.style.border = '1px solid var(--border)';
+    btn.style.cursor = 'pointer';
+    btn.style.transition = 'all 0.15s ease';
+
+    btn.onclick = () => {
+      if (opt.id === 'coding') {
+        activeTools.clear();
+        CODER_PRESETS.coding.forEach((t) => activeTools.add(t));
+      } else if (opt.id === 'read_only') {
+        activeTools.clear();
+        CODER_PRESETS.read_only.forEach((t) => activeTools.add(t));
+      } else if (opt.id === 'all') {
+        activeTools.clear();
+        CODER_PRESETS.all.forEach((t) => activeTools.add(t));
+      }
+      toolsBox.querySelectorAll('input[type="checkbox"][data-tool]').forEach((cb) => {
+        cb.checked = activeTools.has(cb.dataset.tool);
+      });
+      updatePresetButtons();
+      markDirty();
+      if (node.type.startsWith('transform.')) triggerLivePreview(node);
+    };
+
+    presetButtons[opt.id] = btn;
+    presetsBox.appendChild(btn);
+  });
+
+  container.appendChild(presetsBox);
+
+  CODER_TOOLS_SPEC.forEach((cat, catIdx) => {
+    const catHead = document.createElement('div');
+    catHead.style.fontSize = '0.72rem';
+    catHead.style.fontWeight = '600';
+    catHead.style.textTransform = 'uppercase';
+    catHead.style.letterSpacing = '0.04em';
+    catHead.style.color = 'var(--text-muted)';
+    catHead.style.margin = catIdx === 0 ? '2px 0 4px' : '10px 0 4px';
+    catHead.style.display = 'flex';
+    catHead.style.alignItems = 'center';
+    catHead.style.justifyContent = 'space-between';
+
+    const catTitle = document.createElement('span');
+    catTitle.textContent = `${cat.icon} ${cat.category}`;
+    catHead.appendChild(catTitle);
+
+    const catToggle = document.createElement('button');
+    catToggle.type = 'button';
+    catToggle.textContent = 'Alternar';
+    catToggle.style.background = 'none';
+    catToggle.style.border = 'none';
+    catToggle.style.color = 'var(--primary)';
+    catToggle.style.fontSize = '0.68rem';
+    catToggle.style.cursor = 'pointer';
+    catToggle.style.padding = '0';
+    catToggle.onclick = () => {
+      const allInCatChecked = cat.tools.every((t) => activeTools.has(t.id));
+      cat.tools.forEach((t) => {
+        if (allInCatChecked) activeTools.delete(t.id);
+        else activeTools.add(t.id);
+      });
+      toolsBox.querySelectorAll('input[type="checkbox"][data-tool]').forEach((cb) => {
+        if (cat.tools.some((t) => t.id === cb.dataset.tool)) {
+          cb.checked = activeTools.has(cb.dataset.tool);
+        }
+      });
+      updatePresetButtons();
+      markDirty();
+      if (node.type.startsWith('transform.')) triggerLivePreview(node);
+    };
+    catHead.appendChild(catToggle);
+    toolsBox.appendChild(catHead);
+
+    cat.tools.forEach((tool) => {
+      const row = document.createElement('label');
+      row.style.display = 'flex';
+      row.style.alignItems = 'flex-start';
+      row.style.gap = '8px';
+      row.style.padding = '3px 0';
+      row.style.fontSize = '0.78rem';
+      row.style.cursor = 'pointer';
+
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.dataset.tool = tool.id;
+      cb.checked = activeTools.has(tool.id);
+      cb.style.marginTop = '2px';
+      cb.onchange = (e) => {
+        if (e.target.checked) activeTools.add(tool.id);
+        else activeTools.delete(tool.id);
+        updatePresetButtons();
+        markDirty();
+        if (node.type.startsWith('transform.')) triggerLivePreview(node);
+      };
+
+      const info = document.createElement('div');
+      info.innerHTML = `
+        <div style="font-weight: 500; line-height: 1.2;">${escapeHtml(tool.name)}</div>
+        <div style="font-size: 0.70rem; color: var(--text-muted); line-height: 1.2;">${escapeHtml(tool.desc)}</div>
+      `;
+
+      row.appendChild(cb);
+      row.appendChild(info);
+      toolsBox.appendChild(row);
+    });
+  });
+
+  container.appendChild(toolsBox);
+  updatePresetButtons();
+  return container;
+}
+
 function renderNodeInspector(node, body) {
   const spec = state.catalog.node_types[node.type] || { required: [], optional: {}, help: {} };
   body.innerHTML = '';
@@ -2768,6 +3009,13 @@ function renderNodeInspector(node, body) {
 
   Object.entries(allFields).forEach(([key, defaultVal]) => {
     if (key === 'fan_in' || key === codeField || (codeField && key === 'code')) return;
+
+    if (node.type === 'transform.coder' && (key === 'tools_preset' || key === 'custom_tools')) {
+      if (key === 'tools_preset') {
+        body.appendChild(createCoderToolsSection(node));
+      }
+      return;
+    }
 
     // Comprobar show_when
     if (spec.show_when && spec.show_when[key]) {

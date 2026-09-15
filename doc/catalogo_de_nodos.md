@@ -109,8 +109,13 @@ Dédalo cuenta con **72 nodos modulares** categorizados en tres familias:
 
 ### `transform.coder`
 - **Etiqueta**: Agente Programador (Coder).
-- **Descripción**: Microarnés de programación iterativa con bucle ReAct multi-turno.
-- **Herramientas disponibles**: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`.
+- **Descripción**: Microarnés de programación iterativa con bucle ReAct multi-turno, control de sandboxing y selección granular de herramientas y permisos en el inspector.
+- **Herramientas disponibles**:
+  - `read`, `grep`, `find`, `ls`: Exploración y lectura segura del workspace.
+  - `edit`, `write`: Modificación atómica y creación de ficheros en disco.
+  - `bash`: Ejecución de comandos de terminal, pruebas y linters en el entorno de trabajo.
+  - `web_search`: Búsqueda web en internet (DuckDuckGo, sin API key) para consultar documentación, librerías y errores técnicos.
+- **Panel de Inspección Interactivo**: Permite activar o revocar herramientas individualmente con checkboxes agrupados por categoría de permiso (Lectura, Escritura, Shell y Red), o seleccionar perfiles rápidos (`Programación`, `Solo Lectura`, `Todas`, `A Medida`).
 - **Compactación**: Si el contexto alcanza el 90% de la ventana del modelo, compacta el historial automáticamente mediante los algoritmos **Blackhole** o **Luhn+**.
 
 ### `transform.agent`

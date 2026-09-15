@@ -260,3 +260,23 @@ def test_standalone_approval_flags(tmp_path):
     assert data_non_interactive["tmpl"]["status"] == "ok"
     assert data_non_interactive["tmpl"]["data"] == "Aprobado: deploy_prod"
 
+
+def test_standalone_coder_with_web_search():
+    g = compiler.Graph(
+        name="flujo_coder_web",
+        nodes=[
+            _node("n1", "input.webhook"),
+            _node("coder", "transform.coder", {"prompt": "Investiga y codifica", "tools_preset": "all"}),
+        ],
+        edges=[_edge("n1", "coder")],
+    )
+    src = compiler.compile_standalone(g)
+    tree = ast.parse(src)
+    assert tree is not None
+    assert "def coder_agent(" in src
+    assert "def _tool_web_search(" in src
+    assert "def web_search(" in src
+    assert '"httpx>=0.27.0"' in src
+    assert "--llm-url" in src
+
+

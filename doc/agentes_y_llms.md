@@ -47,14 +47,22 @@ Dédalo ofrece cuatro nodos especializados según la tarea requerida:
 
 El nodo `transform.coder` no es un simple generador de texto; es un **agente autónomo interactivo** diseñado para resolver problemas de código y administración de sistemas:
 
-### 3.1. Herramientas Disponibles
-El agente dispone de una lista de herramientas nativas según el `tools_preset`:
+### 3.1. Herramientas Disponibles y Gestión de Permisos
+El agente dispone de una lista de herramientas nativas según el `tools_preset` o la configuración personalizada de permisos en el inspector:
 - **`read`**: Lee archivos completos o rangos específicos de líneas con numeración clara.
 - **`bash`**: Ejecuta comandos reales en la consola del servidor (dentro del `workspace_dir`) con límite de tiempo y captura de stdout/stderr.
 - **`edit`**: Realiza reemplazos atómicos de cadenas (`old_str` -> `new_str`) exigiendo que la ocurrencia sea única para evitar ediciones ambiguas.
 - **`write`**: Escribe ficheros nuevos en disco.
 - **`grep`**: Búsqueda rápida de expresiones o patrones dentro del árbol de trabajo.
 - **`find` / `ls`**: Exploración rápida de la jerarquía de ficheros y directorios.
+- **`web_search`**: Búsqueda de documentación y soluciones en internet mediante DuckDuckGo (sin necesidad de API keys).
+
+#### Gestión Granular de Permisos desde el Inspector
+En el panel lateral de ajustes del nodo, el operador puede seleccionar perfiles predefinidos (`Programación`, `Solo Lectura`, `Todas`, `A Medida`) o activar/desactivar permisos concretos agrupados por nivel de riesgo:
+- **Lectura y Navegación** (Seguro): `read`, `grep`, `find`, `ls`.
+- **Modificación en Disco** (Escritura): `edit`, `write`.
+- **Ejecución en Consola** (Shell): `bash`.
+- **Acceso a Red / Internet**: `web_search`.
 
 ### 3.2. Compactación de Contexto (Blackhole y Luhn+)
 Cuando un agente interactúa durante múltiples turnos, el historial de mensajes crece rápidamente y puede desbordar la ventana de contexto del modelo.

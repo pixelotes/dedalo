@@ -2246,7 +2246,7 @@ def _detect_context_window(
 # Microarnés de Agente Programador (transform.coder) y Herramientas
 # ---------------------------------------------------------------------------
 
-ALL_TOOL_NAMES: tuple[str, ...] = ("read", "bash", "edit", "write", "grep", "find", "ls")
+ALL_TOOL_NAMES: tuple[str, ...] = ("read", "bash", "edit", "write", "grep", "find", "ls", "web_search")
 CODING_TOOL_NAMES: tuple[str, ...] = ("read", "bash", "edit", "write")
 READ_ONLY_TOOL_NAMES: tuple[str, ...] = ("read", "grep", "find", "ls")
 
@@ -2501,6 +2501,20 @@ def _tool_ls(base_dir: Path, path: str = ".") -> str:
     return "\n".join(entries) if entries else "(directorio vacío)"
 
 
+def _tool_web_search(query: str, limit: int = 5, timeout: float = 30.0) -> str:
+    """Busca en internet usando DuckDuckGo (sin API key) y devuelve los resultados formateados en Markdown."""
+    if not query or not query.strip():
+        return "Error: Debes especificar el parámetro 'query'."
+    try:
+        max_l = max(1, min(int(limit or 5), 10))
+        res = web_search(None, [], query=query.strip(), engine="duckduckgo", limit=max_l, output_format="markdown", timeout=timeout)
+        if res.ok:
+            return str(res.data) if res.data else "Sin resultados encontrados para la búsqueda."
+        return f"Error en búsqueda web: {res.error}"
+    except Exception as exc:
+        return f"Error al ejecutar búsqueda web: {exc}"
+
+
 CODER_TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "read": {
         "type": "function",
@@ -2651,6 +2665,27 @@ CODER_TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
             },
         },
     },
+    "web_search": {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Busca información o documentación técnica en internet mediante DuckDuckGo sin necesidad de API key. Devuelve títulos, URLs y resúmenes de resultados.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Consulta o términos de búsqueda a consultar en la web.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Número máximo de resultados a recuperar (por defecto 5, máximo 10).",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
 }
 
 
@@ -2690,7 +2725,10 @@ def coder_agent(
     elif preset == "read_only":
         active_tool_names = list(READ_ONLY_TOOL_NAMES)
     elif preset == "custom":
-        custom_list = [t.strip().lower() for t in custom_tools.split(",") if t.strip()]
+        if isinstance(custom_tools, (list, tuple, set)):
+            custom_list = [str(t).strip().lower() for t in custom_tools if str(t).strip()]
+        else:
+            custom_list = [t.strip().lower() for t in str(custom_tools or "").split(",") if t.strip()]
         active_tool_names = [t for t in custom_list if t in CODER_TOOL_DEFINITIONS]
     else:  # coding
         active_tool_names = list(CODING_TOOL_NAMES)
@@ -2750,6 +2788,7 @@ def coder_agent(
         "grep": lambda args: _tool_grep(base_path, args.get("pattern", ""), args.get("path", "."), args.get("case_insensitive", False)),
         "find": lambda args: _tool_find(base_path, args.get("pattern", "*"), args.get("path", ".")),
         "ls": lambda args: _tool_ls(base_path, args.get("path", ".")),
+        "web_search": lambda args: _tool_web_search(args.get("query", ""), args.get("limit", 5), timeout=min(30.0, timeout)),
     }
 
     endpoint = f"{base_url}/chat/completions"

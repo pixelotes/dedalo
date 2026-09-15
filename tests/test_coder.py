@@ -18,8 +18,11 @@ from dedalo.runtime import (
     _tool_grep,
     _tool_ls,
     _tool_read,
+    _tool_web_search,
     _tool_write,
     coder_agent,
+    ALL_TOOL_NAMES,
+    CODER_TOOL_DEFINITIONS,
 )
 
 
@@ -656,4 +659,182 @@ def test_coder_agent_loop_detection_consecutive_failures(tmp_path: Path):
     user_alerts = [m["content"] for m in turn4_messages if m.get("role") == "user" and "[Aviso de bucle del sistema]" in m.get("content", "")]
     assert len(user_alerts) >= 1
     assert "La herramienta 'edit' ha fallado 3 veces consecutivas" in user_alerts[0]
+
+
+def test_tool_web_search_mocked():
+    # 1. Validación de query vacía
+    err_res = _tool_web_search("")
+    assert "Debes especificar el parámetro 'query'" in err_res
+
+    # 2. Mock de runtime.web_search
+    with patch("dedalo.runtime.web_search") as mock_ws:
+        from dedalo.runtime import NodeResult
+        mock_ws.return_value = NodeResult("ok", data="- [Python](https://python.org): Lenguaje de programación.")
+        res = _tool_web_search("python docs", limit=3)
+        assert "- [Python](https://python.org)" in res
+        mock_ws.assert_called_once()
+        call_kwargs = mock_ws.call_args.kwargs
+        assert call_kwargs["query"] == "python docs"
+        assert call_kwargs["limit"] == 3
+        assert call_kwargs["engine"] == "duckduckgo"
+        assert call_kwargs["output_format"] == "markdown"
+
+    # 3. Simulación de fallo en web_search
+    with patch("dedalo.runtime.web_search") as mock_err:
+        from dedalo.runtime import NodeResult
+        mock_err.return_value = NodeResult("error", error="Timeout de conexión")
+        res_fail = _tool_web_search("error query")
+        assert "Error en búsqueda web: Timeout de conexión" in res_fail
+
+
+def test_coder_agent_react_loop_with_web_search(tmp_path: Path):
+    responses = [
+        # Turno 1: el modelo llama a web_search
+        MagicMock(
+            status_code=200,
+            json=lambda: {
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "Voy a buscar información en la web",
+                        "tool_calls": [{
+                            "id": "call_ws",
+                            "type": "function",
+                            "function": {
+                                "name": "web_search",
+                                "arguments": json.dumps({"query": "fastapi lifespans"}),
+                            },
+                        }],
+                    },
+                }],
+            },
+        ),
+        # Turno 2: el modelo responde con la información encontrada
+        MagicMock(
+            status_code=200,
+            json=lambda: {
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "Encontré que los lifespans en FastAPI se definen con asynccontextmanager.",
+                        "tool_calls": None,
+                    },
+                }],
+            },
+        ),
+    ]
+
+    with patch("dedalo.runtime._tool_web_search", return_value="- [FastAPI](https://fastapi.tiangolo.com): Lifespans guide") as mock_search, \
+         patch("httpx.Client.post", side_effect=responses):
+        res = coder_agent(
+            None,
+            [],
+            prompt="Investiga cómo funcionan los lifespans en FastAPI",
+            workspace_dir=str(tmp_path),
+            tools_preset="all",
+            max_turns=3,
+            max_context=32768,
+            model="qwen2.5-coder",
+        )
+
+    assert res.ok is True
+    assert res.data["completed"] is True
+    assert res.data["turns_used"] == 2
+    mock_search.assert_called_once_with("fastapi lifespans", 5, timeout=30.0)
+    tool_names = [item["tool"] for item in res.data["tool_history"]]
+    assert "web_search" in tool_names
+    assert "lifespans" in res.data["response"]
+
+
+def test_coder_agent_custom_tools_permissions(tmp_path: Path):
+    # 1. Comprobar que "web_search" está en ALL_TOOL_NAMES y CODER_TOOL_DEFINITIONS
+    assert "web_search" in ALL_TOOL_NAMES
+    assert "web_search" in CODER_TOOL_DEFINITIONS
+
+    # 2. Configurar custom_tools con "read,web_search" (excluyendo "bash")
+    recorded_requests = []
+
+    def mock_post(url, headers, json):
+        recorded_requests.append(json)
+        # El modelo intenta llamar a bash (no autorizada)
+        return MagicMock(
+            status_code=200,
+            json=lambda: {
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "Intento ejecutar bash",
+                        "tool_calls": [{
+                            "id": "call_unauth",
+                            "type": "function",
+                            "function": {
+                                "name": "bash",
+                                "arguments": '{"command": "ls"}',
+                            },
+                        }],
+                    },
+                }],
+            },
+        ) if len(recorded_requests) == 1 else MagicMock(
+            status_code=200,
+            json=lambda: {
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "Entendido, no tengo permiso para bash.",
+                        "tool_calls": None,
+                    },
+                }],
+            },
+        )
+
+    with patch("httpx.Client.post", side_effect=mock_post):
+        res = coder_agent(
+            None,
+            [],
+            prompt="Ejecuta un comando",
+            workspace_dir=str(tmp_path),
+            tools_preset="custom",
+            custom_tools="read,web_search",  # bash denegado
+            max_turns=3,
+            max_context=32768,
+            model="qwen2.5-coder",
+        )
+
+    assert res.ok is True
+    # Verificar que en el payload enviado al LLM solo están "read" y "web_search"
+    req_tools = recorded_requests[0].get("tools", [])
+    req_tool_names = [t["function"]["name"] for t in req_tools]
+    assert "read" in req_tool_names
+    assert "web_search" in req_tool_names
+    assert "bash" not in req_tool_names
+
+    # Verificar que el intento de llamar a 'bash' fue bloqueado con error de autorización
+    tool_hist = res.data["tool_history"]
+    assert len(tool_hist) >= 1
+    assert tool_hist[0]["tool"] == "bash"
+    assert "no está disponible o no está autorizada" in tool_hist[0]["output_preview"]
+
+    # 3. Verificar que custom_tools acepta lista de strings: ['read', 'grep']
+    recorded_list_requests = []
+    with patch("httpx.Client.post", side_effect=[
+        MagicMock(status_code=200, json=lambda: {
+            "choices": [{"message": {"role": "assistant", "content": "Listo", "tool_calls": None}}]
+        })
+    ]) as mock_list_post:
+        coder_agent(
+            None,
+            [],
+            prompt="Consulta código",
+            workspace_dir=str(tmp_path),
+            tools_preset="custom",
+            custom_tools=["read", "grep"],
+            max_turns=2,
+            max_context=32768,
+            model="qwen2.5-coder",
+        )
+        first_call = mock_list_post.call_args_list[0]
+        passed_tools = [t["function"]["name"] for t in first_call.kwargs["json"]["tools"]]
+        assert passed_tools == ["read", "grep"]
+
 
