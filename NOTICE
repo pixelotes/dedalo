@@ -1,0 +1,8 @@
+Dédalo
+Copyright (c) 2026 Raúl Pastor
+
+Licensed under the Elastic License 2.0 (see LICENSE).
+
+This product bundles CodeMirror (https://codemirror.net/), MIT License,
+Copyright (C) 2017 by Marijn Haverbeke <marijn@haverbeke.berlin> and others,
+in dedalo/static/vendor/.
