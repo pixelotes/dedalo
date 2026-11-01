@@ -1,43 +1,43 @@
-# Documentación de Dédalo
+# Dédalo Documentation
 
-Bienvenido a la documentación técnica y guía de arquitectura de **Dédalo**, el orquestador visual y compilador de flujos de trabajo ultraligero diseñado para ejecutarse de forma continua en hardware de recursos restringidos (como una Raspberry Pi con 15–35 MB de RAM).
+Welcome to the technical documentation and architecture guide for **Dédalo**, the ultralight visual orchestrator and workflow compiler designed to run continuously on resource-constrained hardware (such as a Raspberry Pi with 15–35 MB of RAM).
 
 ---
 
-## 📚 Índice de la Documentación
+## 📚 Documentation Index
 
-1. **[Filosofía y Arquitectura](filosofia_y_arquitectura.md)**
-   - Misión y motivación del proyecto.
-   - Por qué compilamos a Python plano en lugar de usar motores reactivos o colas pesadas.
-   - Decisiones técnicas clave: ausencia de empaquetadores en frontend, modelo de ejecución determinista, gestión de secretos en disco (`0600`) y centinelas de omisión (`SKIPPED`).
+1. **[Philosophy and Architecture](philosophy_and_architecture.md)**
+   - The project's mission and motivation.
+   - Why we compile to plain Python instead of using reactive engines or heavy queues.
+   - Key technical decisions: no frontend bundlers, a deterministic execution model, on-disk secret management (`0600`) and skip sentinels (`SKIPPED`).
 
-2. **[Catálogo Completo de Nodos](catalogo_de_nodos.md)**
-   - Catálogo exhaustivo de los **72 nodos disponibles**:
-     - **27 Nodos de Entrada (`input.*`)**: Webhooks, llamadas API, Git, telemetría de incidentes, Jira, Confluence, WHOIS/RDAP, DNS DoH, sensores Pi/Linux, RSS, IMAP, etc.
-     - **28 Nodos de Transformación (`transform.*`)**: Agentes LLM, Coder con ReAct, Analizador y Planificador SecOps, Auditoría CVE/SBOM, Escáner de Secretos (DLP), Extracción JSON Path, Mapeador de Datos, Puerta de Aprobación Humana (`transform.approval`), operadores de listas, diffs con hash, deduplicación difusa, regex, selectores CSS, sanitización y scripts Python.
-     - **17 Nodos de Salida (`output.*`)**: Microsoft Teams, Bóveda de evidencia con gzip+sha256, operaciones Jira (crear, comentar, transicionar), páginas Confluence (crear, reemplazar, anexar), Git commits/push, SQLite, Telegram, Discord, Slack, MQTT, etc.
+2. **[Complete Node Catalog](node_catalog.md)**
+   - Exhaustive catalog of the **72 available nodes**:
+     - **27 Input Nodes (`input.*`)**: Webhooks, API calls, Git, incident telemetry, Jira, Confluence, WHOIS/RDAP, DNS DoH, Pi/Linux sensors, RSS, IMAP, etc.
+     - **28 Transform Nodes (`transform.*`)**: LLM agents, ReAct Coder, SecOps Analyzer and Planner, CVE/SBOM Audit, Secret Scanner (DLP), JSON Path extraction, Data Mapper, Human Approval Gate (`transform.approval`), list operators, hash diffs, fuzzy deduplication, regex, CSS selectors, sanitization and Python scripts.
+     - **17 Output Nodes (`output.*`)**: Microsoft Teams, Evidence Vault with gzip+sha256, Jira operations (create, comment, transition), Confluence pages (create, replace, append), Git commits/push, SQLite, Telegram, Discord, Slack, MQTT, etc.
 
-3. **[Agentes Nativos e Inteligencia Artificial](agentes_y_llms.md)**
-   - Por qué evitamos frameworks inflados como LangChain, LangGraph o SDKs monolíticos.
-   - El microarnés ReAct multi-turno (`transform.coder`) con herramientas reales (`bash`, `read`, `write`, `edit`, `grep`, `find`, `ls`).
-   - Algoritmos de compactación de memoria: **Blackhole** y **Luhn+** para ventanas de contexto finitas.
-   - Enmascaramiento de secretos en memoria (`sanitize_secrets`) para flujos de ciberseguridad e infraestructura.
+3. **[Native Agents and Artificial Intelligence](agents_and_llms.md)**
+   - Why we avoid bloated frameworks such as LangChain, LangGraph or monolithic SDKs.
+   - The multi-turn ReAct micro-harness (`transform.coder`) with real tools (`bash`, `read`, `write`, `edit`, `grep`, `find`, `ls`).
+   - Memory compaction algorithms: **Blackhole** and **Luhn+** for finite context windows.
+   - In-memory secret masking (`sanitize_secrets`) for cybersecurity and infrastructure flows.
 
-4. **[Exportación Standalone y Tree-Shaking](exportacion_standalone.md)**
-   - Cómo compilar cualquier grafo visual a un único fichero `.py` totalmente autónomo.
-   - Algoritmo de *tree-shaking*: inclusión dinámica exclusiva de librerías utilizadas (`httpx`, `gzip`, `sqlite3`, etc.).
-   - Modos de ejecución: interactivo, demonio cron y despliegue con Docker o Systemd.
+4. **[Standalone Export and Tree-Shaking](standalone_export.md)**
+   - How to compile any visual graph into a single, fully self-contained `.py` file.
+   - *Tree-shaking* algorithm: dynamic inclusion of only the libraries actually used (`httpx`, `gzip`, `sqlite3`, etc.).
+   - Execution modes: interactive, cron daemon, and deployment with Docker or Systemd.
 
-5. **[Casos de Uso y Workflows Representativos](casos_de_uso_y_workflows.md)**
-   - Diagramas paso a paso y flujos listos para producción:
-     - **Triaje y Remediación de Kubernetes con Preservación de Evidencias**.
-     - **Auditoría de Identidades: Detección de Usuarios Zombie en SaaS vs Entra ID**.
-     - **Gestión Automática del Ciclo de Vida de Incidencias en Jira Cloud**.
-     - **Documentación Viva en Confluence: Lectura, Extracción y Actualización en Espacios**.
-     - **Briefing Matutino Seguro de Correo Electrónico (Anti-Inyección)**.
-     - **Vigilancia de Infraestructura Edge (Raspberry Pi, Certificados SSL y Latencias)**.
+5. **[Use Cases and Representative Workflows](use_cases_and_workflows.md)**
+   - Step-by-step diagrams and production-ready flows:
+     - **Kubernetes Triage and Remediation with Evidence Preservation**.
+     - **Identity Audit: Detecting Zombie Users in SaaS vs Entra ID**.
+     - **Automatic Jira Cloud Issue Lifecycle Management**.
+     - **Living Documentation in Confluence: Reading, Extracting and Updating Across Spaces**.
+     - **Secure Morning Email Briefing (Anti-Injection)**.
+     - **Edge Infrastructure Monitoring (Raspberry Pi, SSL Certificates and Latencies)**.
 
-6. **[Dependencias y Rendimiento](dependencias_y_rendimiento.md)**
-   - Análisis detallado del stack tecnológico (FastAPI/Starlette, uvicorn, httpx, curl_cffi opcional).
-   - Por qué no se utiliza Node.js, React, Webpack ni dependencias innecesarias.
-   - Benchmarks y mediciones reales de memoria y consumo de CPU.
+6. **[Dependencies and Performance](dependencies_and_performance.md)**
+   - Detailed analysis of the technology stack (FastAPI/Starlette, uvicorn, httpx, optional curl_cffi).
+   - Why Node.js, React, Webpack and unnecessary dependencies are not used.
+   - Benchmarks and real measurements of memory and CPU usage.
