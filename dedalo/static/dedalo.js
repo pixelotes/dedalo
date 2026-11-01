@@ -6,9 +6,14 @@
 
 const $ = (id) => document.getElementById(id);
 
+// i18n: ayudantes dependientes del idioma (t/getLang vienen de i18n.js)
+const dateLocale = () => (getLang() === 'es' ? 'es-ES' : 'en-US');
+const defaultFlowName = () => t('flow.default_name');
+const defaultScript = () => t('code.default_comment') + '\nreturn entrada.text()';
+
 const state = {
-  graph: { name: 'nuevo-flujo', nodes: [], edges: [], version: 1 },
-  meta: { name: 'nuevo-flujo', description: '', schedule: '', enabled: true },
+  graph: { name: '', nodes: [], edges: [], version: 1 },
+  meta: { name: '', description: '', schedule: '', enabled: true },
   selectedNodeId: null,
   catalog: { node_types: {}, choices: { secrets: [], llms: [] } },
   templates: [],
@@ -48,7 +53,22 @@ const state = {
 // Inicialización
 // ---------------------------------------------------------------------------
 
+function setupLanguageSelector() {
+  const sel = $('cfgLang');
+  if (!sel) return;
+  sel.value = getLang();
+  sel.onchange = () => {
+    const code = sel.value;
+    withUnsavedCheck(() => setLang(code));
+  };
+}
+
 async function init() {
+  await window.i18nReady;
+  applyI18n();
+  state.graph.name = defaultFlowName();
+  state.meta.name = state.graph.name;
+  setupLanguageSelector();
   setupTheme();
   setupInspector();
   setupEvents();
@@ -83,7 +103,7 @@ function setInspectorCollapsed(collapsed, save = true) {
     if (btnExpand) btnExpand.hidden = false;
     if (btnToggle) {
       btnToggle.classList.remove('active');
-      btnToggle.setAttribute('title', 'Mostrar panel lateral (Ajustes)');
+      btnToggle.setAttribute('title', t('inspector.show_title'));
     }
     if (save) localStorage.setItem('dedalo_inspector_collapsed', 'true');
   } else {
@@ -91,7 +111,7 @@ function setInspectorCollapsed(collapsed, save = true) {
     if (btnExpand) btnExpand.hidden = true;
     if (btnToggle) {
       btnToggle.classList.add('active');
-      btnToggle.setAttribute('title', 'Ocultar panel lateral (Ajustes)');
+      btnToggle.setAttribute('title', t('inspector.hide_title'));
     }
     if (save) localStorage.setItem('dedalo_inspector_collapsed', 'false');
   }
@@ -134,7 +154,7 @@ function updateDirtyUI() {
   if (btnSave) {
     btnSave.classList.toggle('is-dirty', !!state.isDirty);
   }
-  const name = state.graph?.name || 'nuevo-flujo';
+  const name = state.graph?.name || defaultFlowName();
   document.title = (state.isDirty ? '● ' : '') + `${name} — Dédalo`;
 }
 
@@ -160,7 +180,9 @@ function withUnsavedCheck(action) {
     return;
   }
   unsavedPendingAction = action;
-  $('unsavedFlowName').textContent = state.graph.name || 'sin nombre';
+  $('unsavedMsg').innerHTML = t('confirm.unsaved_body', {
+    name: `<b>${escapeHtml(state.graph.name || t('confirm.unnamed'))}</b>`,
+  });
   $('unsavedSheet').hidden = false;
 }
 
@@ -169,6 +191,8 @@ function closeUnsavedModal() {
   unsavedPendingAction = null;
   const picker = $('templatePicker');
   if (picker) picker.value = '';
+  const langSel = $('cfgLang');
+  if (langSel) langSel.value = getLang();
 }
 
 function onUnsavedDiscard() {
@@ -249,7 +273,7 @@ function resetZoom() {
   state.view.x = cx - worldCenterX * state.view.k;
   state.view.y = cy - worldCenterY * state.view.k;
   updateTransform();
-  toast('Zoom restablecido (100%)');
+  toast(t('toast.zoom_reset'));
 }
 
 function centerFlow() {
@@ -258,7 +282,7 @@ function centerFlow() {
     state.view.y = 0;
     state.view.k = 1.0;
     updateTransform();
-    toast('Lienzo centrado.');
+    toast(t('toast.canvas_centered'));
     return;
   }
 
@@ -285,7 +309,7 @@ function centerFlow() {
   state.view.x = boxW / 2 - centerX * state.view.k;
   state.view.y = boxH / 2 - centerY * state.view.k;
   updateTransform();
-  toast('Flujo centrado.');
+  toast(t('toast.flow_centered'));
 }
 
 // ---------------------------------------------------------------------------
@@ -313,8 +337,8 @@ function setupEvents() {
     markDirty();
   };
 
-  $('btnNew').onclick = () => withUnsavedCheck(() => resetGraph('nuevo-flujo'));
-  $('btnSidebarNewFlow').onclick = () => withUnsavedCheck(() => resetGraph('nuevo-flujo'));
+  $('btnNew').onclick = () => withUnsavedCheck(() => resetGraph(defaultFlowName()));
+  $('btnSidebarNewFlow').onclick = () => withUnsavedCheck(() => resetGraph(defaultFlowName()));
   if ($('btnImportZip')) $('btnImportZip').onclick = () => $('importZipInput').click();
   if ($('importZipInput')) $('importZipInput').onchange = (e) => {
     if (e.target.files && e.target.files.length) {
@@ -365,12 +389,12 @@ function setupEvents() {
   if ($('btnHistHighlightCanvas')) $('btnHistHighlightCanvas').onclick = () => {
     if (currentRunDetail && currentRunDetail.steps) {
       highlightRunOnCanvas(currentRunDetail.steps);
-      toast('Nodos resaltados en el lienzo según el resultado de esta ejecución.');
+      toast(t('toast.nodes_highlighted'));
     }
   };
   if ($('btnHistClearHighlight')) $('btnHistClearHighlight').onclick = () => {
     clearRunHighlights();
-    toast('Resaltado eliminado.');
+    toast(t('toast.highlight_cleared'));
   };
 
   $('unsavedClose').onclick = () => closeUnsavedModal();
@@ -550,7 +574,7 @@ async function loadCatalog() {
     state.catalog = await res.json();
     renderPalette();
   } catch (e) {
-    toast('Error al cargar catálogo de nodos');
+    toast(t('error.load_catalog'));
   }
 }
 
@@ -559,11 +583,11 @@ async function loadTemplates() {
     const res = await fetch('/api/templates');
     state.templates = await res.json();
     const picker = $('templatePicker');
-    picker.innerHTML = '<option value="">— Cargar plantilla —</option>';
-    state.templates.forEach((t) => {
+    picker.innerHTML = `<option value="">${t('toolbar.templates_load')}</option>`;
+    state.templates.forEach((tpl) => {
       const opt = document.createElement('option');
-      opt.value = t.name;
-      opt.textContent = t.title;
+      opt.value = tpl.name;
+      opt.textContent = tpl.title;
       picker.appendChild(opt);
     });
   } catch (e) {}
@@ -575,7 +599,7 @@ async function loadFlows() {
     state.flows = await res.json();
     renderFlowsList();
   } catch (e) {
-    toast('Error al cargar lista de flujos');
+    toast(t('error.load_flows'));
   }
 }
 
@@ -600,7 +624,7 @@ function populateProfileSecretDropdown() {
   const sel = $('newProfileSecret');
   if (!sel) return;
   const currentVal = sel.value;
-  sel.innerHTML = '<option value="">(Sin secreto / Local)</option>';
+  sel.innerHTML = `<option value="">${t('settings.no_secret_local')}</option>`;
   (state.secrets || []).forEach((s) => {
     const opt = document.createElement('option');
     opt.value = s;
@@ -617,7 +641,7 @@ async function loadConfig() {
     $('cfgLlmUrl').value = cfg.llm_url || '';
     $('cfgLlmModel').value = cfg.llm_model || '';
     if (cfg.has_llm_key) {
-      $('cfgLlmKey').placeholder = '•••••••• (guardada)';
+      $('cfgLlmKey').placeholder = t('settings.key_saved');
     }
   } catch (e) {}
 }
@@ -634,9 +658,9 @@ async function saveConfig() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    if (res.ok) toast('Configuración guardada.');
+    if (res.ok) toast(t('toast.config_saved'));
   } catch (e) {
-    toast('Error al guardar configuración');
+    toast(t('error.save_config'));
   }
 }
 
@@ -648,7 +672,7 @@ function renderFlowsList() {
   const list = $('flowsList');
   list.innerHTML = '';
   if (!state.flows.length) {
-    list.innerHTML = '<p class="hint">No hay flujos guardados todavía.</p>';
+    list.innerHTML = `<p class="hint">${t('flows.empty')}</p>`;
     return;
   }
 
@@ -670,9 +694,9 @@ function renderFlowsList() {
 
     const isEnabled = fl.enabled !== false;
     const badgeClass = isEnabled ? 'badge-active' : 'badge-paused';
-    const badgeText = isEnabled ? 'Activo' : 'Pausado';
+    const badgeText = isEnabled ? t('flows.active') : t('flows.paused');
 
-    const schedText = fl.schedule ? `⏰ ${fl.schedule}` : 'Manual';
+    const schedText = fl.schedule ? `⏰ ${fl.schedule}` : t('flows.manual');
     const nextText = fl.next_run ? `<span class="hint-inline">(${fl.next_run.slice(11, 16)})</span>` : '';
 
     const info = document.createElement('div');
@@ -680,7 +704,7 @@ function renderFlowsList() {
     info.innerHTML = `
       <span class="flow-title">${escapeHtml(fl.name || fl.id)}</span>
       <div class="flow-meta-line">
-        <span class="${badgeClass}" title="Alternar activo/pausado">${badgeText}</span>
+        <span class="${badgeClass}" title="${t('flows.toggle_title')}">${badgeText}</span>
         <span class="flow-meta">${escapeHtml(schedText)} ${nextText}</span>
       </div>
     `;
@@ -697,7 +721,7 @@ function renderFlowsList() {
 
     const btnRunNow = document.createElement('button');
     btnRunNow.className = 'btn sm icon-btn';
-    btnRunNow.title = 'Ejecutar ahora en background';
+    btnRunNow.title = t('flows.run_now_title');
     btnRunNow.innerHTML = '<svg class="ic" width="12" height="12"><use href="#i-play"/></svg>';
     btnRunNow.onmousedown = (e) => e.stopPropagation();
     btnRunNow.onclick = async (e) => {
@@ -707,7 +731,7 @@ function renderFlowsList() {
 
     const btnSched = document.createElement('button');
     btnSched.className = 'btn sm icon-btn';
-    btnSched.title = 'Programar periodicidad';
+    btnSched.title = t('flows.schedule_title');
     btnSched.innerHTML = '<svg class="ic" width="12" height="12"><use href="#i-clock"/></svg>';
     btnSched.onmousedown = (e) => e.stopPropagation();
     btnSched.onclick = (e) => {
@@ -717,7 +741,7 @@ function renderFlowsList() {
 
     const btnDel = document.createElement('button');
     btnDel.className = 'btn sm icon-btn';
-    btnDel.title = 'Eliminar flujo';
+    btnDel.title = t('flows.delete_title');
     btnDel.innerHTML = '<svg class="ic" width="12" height="12"><use href="#i-trash"/></svg>';
     btnDel.onmousedown = (e) => e.stopPropagation();
     btnDel.onclick = (e) => {
@@ -738,7 +762,7 @@ function renderFlowsList() {
 let currentSchedFlowId = null;
 
 async function openScheduleModal(flowId) {
-  currentSchedFlowId = flowId || state.graph.name || 'nuevo-flujo';
+  currentSchedFlowId = flowId || state.graph.name || defaultFlowName();
   $('schedFlowTitle').textContent = currentSchedFlowId;
 
   const fl = state.flows.find((f) => f.id === currentSchedFlowId) || state.meta || {};
@@ -757,9 +781,9 @@ async function openScheduleModal(flowId) {
   }
   if (!matched) presetSelect.value = expr ? 'custom' : 'manual';
 
-  $('schedStatusVal').textContent = fl.enabled !== false ? (fl.schedule ? 'Programado' : 'Manual') : 'Pausado';
-  $('schedNextVal').textContent = fl.next_run || (fl.schedule ? 'Activo (esperando cálculo)' : 'Ninguna');
-  const lastRun = fl.last_run ? `${new Date(fl.last_run.last_run * 1000).toLocaleTimeString()} (${fl.last_run.status})` : 'Nunca';
+  $('schedStatusVal').textContent = fl.enabled !== false ? (fl.schedule ? t('schedule.state_scheduled') : t('flows.manual')) : t('flows.paused');
+  $('schedNextVal').textContent = fl.next_run || (fl.schedule ? t('schedule.next_pending') : t('schedule.next_none'));
+  const lastRun = fl.last_run ? `${new Date(fl.last_run.last_run * 1000).toLocaleTimeString()} (${fl.last_run.status})` : t('schedule.never');
   $('schedLastVal').textContent = lastRun;
 
   $('scheduleSheet').hidden = false;
@@ -786,7 +810,7 @@ async function saveScheduleModal() {
       body: JSON.stringify({ id: currentSchedFlowId, schedule, enabled }),
     });
     if (!res.ok) throw new Error();
-    toast(`Programación de «${currentSchedFlowId}» guardada.`);
+    toast(t('toast.schedule_saved', { id: currentSchedFlowId }));
     $('scheduleSheet').hidden = true;
     await loadFlows();
     if (state.graph.name === currentSchedFlowId) {
@@ -794,7 +818,7 @@ async function saveScheduleModal() {
       state.meta.enabled = enabled;
     }
   } catch (e) {
-    toast('Error al guardar programación.');
+    toast(t('error.save_schedule'));
   }
 }
 
@@ -803,20 +827,20 @@ async function toggleFlow(flowId) {
     const res = await fetch(`/api/flow/toggle?id=${encodeURIComponent(flowId)}`, { method: 'POST' });
     if (res.ok) {
       await loadFlows();
-      toast(`Estado de «${flowId}» actualizado.`);
+      toast(t('toast.flow_state_updated', { id: flowId }));
     }
   } catch (e) {
-    toast('Error al cambiar estado.');
+    toast(t('error.toggle_flow'));
   }
 }
 
 async function runFlowNow(flowId) {
-  toast(`Ejecutando «${flowId}» en background...`);
+  toast(t('toast.flow_running', { id: flowId }));
   try {
     const res = await fetch(`/api/flow/run_now?id=${encodeURIComponent(flowId)}`, { method: 'POST' });
     const data = await res.json();
     if (res.ok) {
-      toast(`«${flowId}» completado con éxito en ${data.duration}s.`);
+      toast(t('toast.flow_done', { id: flowId, duration: data.duration }));
       await loadFlows();
       if (flowId === state.graph.name && data.result) {
         highlightRunOnCanvas(data.result);
@@ -825,20 +849,20 @@ async function runFlowNow(flowId) {
         loadHistory();
       }
     } else {
-      toast(`Error en «${flowId}»: ${data.detail || 'Fallo'}`);
+      toast(t('toast.flow_failed', { id: flowId, detail: data.detail || t('error.failure') }));
     }
   } catch (e) {
-    toast('Fallo de conexión al disparar flujo.');
+    toast(t('error.trigger_connection'));
   }
 }
 
 async function runScheduleModalNow() {
   if (!currentSchedFlowId) return;
-  $('schedStatusVal').textContent = 'Ejecutando...';
+  $('schedStatusVal').textContent = t('schedule.running');
   await runFlowNow(currentSchedFlowId);
   const fl = state.flows.find((f) => f.id === currentSchedFlowId);
   if (fl) {
-    $('schedStatusVal').textContent = fl.last_run ? fl.last_run.status : 'Listo';
+    $('schedStatusVal').textContent = fl.last_run ? fl.last_run.status : t('common.ready');
     $('schedLastVal').textContent = fl.last_run ? `${fl.last_run.duration}s` : '-';
   }
 }
@@ -862,7 +886,7 @@ function nodeMatchesChip(typeKey, spec, chip) {
 function renderPalette() {
   const p = $('palette');
   p.innerHTML = '';
-  const categories = { input: 'Entrada', transform: 'Transformación', output: 'Salida' };
+  const categories = { input: t('palette.cat_input'), transform: t('palette.cat_transform'), output: t('palette.cat_output') };
   const query = ($('paletteSearch') && $('paletteSearch').value || '').trim().toLowerCase();
   const activeChip = state.paletteFilter || 'all';
   let totalMatched = 0;
@@ -904,7 +928,7 @@ function renderPalette() {
 
     const head = document.createElement('div');
     head.className = 'category-head';
-    head.title = isCollapsed ? 'Expandir categoría' : 'Colapsar categoría';
+    head.title = isCollapsed ? t('palette.expand') : t('palette.collapse');
     head.innerHTML = `
       <div class="category-head-title">
         <svg class="category-chevron ic" width="12" height="12"><use href="#i-chevron-down"/></svg>
@@ -945,11 +969,11 @@ function renderPalette() {
 
   const countHint = $('nodesCountHint');
   if (countHint) {
-    countHint.textContent = `${totalMatched} nodo${totalMatched === 1 ? '' : 's'}`;
+    countHint.textContent = t(totalMatched === 1 ? 'palette.count_one' : 'palette.count_many', { n: totalMatched });
   }
 
   if (totalMatched === 0) {
-    p.innerHTML = `<p class="hint" style="text-align: center; padding: 1.5rem 0.5rem;">No hay nodos que coincidan con «${escapeHtml(query || activeChip)}»</p>`;
+    p.innerHTML = `<p class="hint" style="text-align: center; padding: 1.5rem 0.5rem;">${t('palette.no_match', { query: escapeHtml(query || activeChip) })}</p>`;
   }
 }
 
@@ -957,7 +981,7 @@ function renderSecretsList() {
   const list = $('secretsList');
   list.innerHTML = '';
   if (!state.secrets.length) {
-    list.innerHTML = '<p class="hint">No hay secretos registrados.</p>';
+    list.innerHTML = `<p class="hint">${t('secrets.empty')}</p>`;
     return;
   }
   state.secrets.forEach((name) => {
@@ -977,7 +1001,7 @@ async function addSecret() {
   const name = $('newSecretName').value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-');
   const value = $('newSecretValue').value.trim();
   if (!name || !value) {
-    toast('Nombre y valor requeridos.');
+    toast(t('toast.name_value_required'));
     return;
   }
   try {
@@ -989,26 +1013,26 @@ async function addSecret() {
     if (res.ok) {
       $('newSecretName').value = '';
       $('newSecretValue').value = '';
-      toast(`Secreto «${name}» guardado.`);
+      toast(t('toast.secret_saved', { name }));
       await loadSecrets();
       await loadCatalog();
       renderInspector();
     }
   } catch (e) {
-    toast('Error al guardar secreto');
+    toast(t('error.save_secret'));
   }
 }
 
 async function removeSecret(name) {
-  if (!confirm(`¿Eliminar secreto «${name}»?`)) return;
+  if (!confirm(t('confirm.delete_secret', { name }))) return;
   try {
     await fetch(`/api/secrets?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
-    toast(`Secreto «${name}» eliminado.`);
+    toast(t('toast.secret_deleted', { name }));
     await loadSecrets();
     await loadCatalog();
     renderInspector();
   } catch (e) {
-    toast('Error al eliminar secreto');
+    toast(t('error.delete_secret'));
   }
 }
 
@@ -1021,7 +1045,7 @@ function renderLlmsList() {
   if (!list) return;
   list.innerHTML = '';
   if (!state.llms || !state.llms.length) {
-    list.innerHTML = '<p class="hint">No hay endpoints LLM guardados.</p>';
+    list.innerHTML = `<p class="hint">${t('settings.no_endpoints')}</p>`;
     return;
   }
   state.llms.forEach((item) => {
@@ -1040,14 +1064,14 @@ function renderLlmsList() {
     const secLabel = item.secret ? ` [key: ${item.secret}]` : '';
     const ctxLabel = item.max_context ? ` [ctx: ${item.max_context}]` : '';
     const tempLabel = item.temperature !== undefined ? ` [T: ${item.temperature}]` : '';
-    details.textContent = `${item.model || 'modelo'} @ ${item.url || ''}${secLabel}${ctxLabel}${tempLabel}`;
+    details.textContent = `${item.model || t('settings.model_fallback')} @ ${item.url || ''}${secLabel}${ctxLabel}${tempLabel}`;
 
     info.appendChild(title);
     info.appendChild(details);
 
     const btnDel = document.createElement('button');
     btnDel.className = 'btn sm icon-btn';
-    btnDel.title = 'Eliminar endpoint';
+    btnDel.title = t('settings.delete_endpoint_title');
     btnDel.innerHTML = '<svg class="ic" width="12" height="12"><use href="#i-trash"/></svg>';
     btnDel.onclick = () => removeLlmProfile(item.name);
 
@@ -1070,7 +1094,7 @@ async function addLlmProfile() {
   const temperature = rawTemp !== '' ? parseFloat(rawTemp) : 0.7;
 
   if (!name) {
-    toast('Nombre del endpoint requerido.');
+    toast(t('toast.endpoint_name_required'));
     return;
   }
 
@@ -1096,31 +1120,31 @@ async function addLlmProfile() {
       $('newProfileUrl').value = '';
       $('newProfileContext').value = '';
       $('newProfileTemp').value = '';
-      toast(`Endpoint «${name}» guardado.`);
+      toast(t('toast.endpoint_saved', { name }));
       await loadLlms();
       await loadCatalog();
       renderInspector();
     } else {
       const err = await res.json();
-      toast(err.detail || 'Error al guardar endpoint LLM');
+      toast(err.detail || t('error.save_endpoint'));
     }
   } catch (e) {
-    toast('Error al guardar endpoint LLM');
+    toast(t('error.save_endpoint'));
   }
 }
 
 async function removeLlmProfile(name) {
-  if (!confirm(`¿Eliminar endpoint LLM «${name}»?`)) return;
+  if (!confirm(t('confirm.delete_endpoint', { name }))) return;
   try {
     const res = await fetch(`/api/llms/${encodeURIComponent(name)}`, { method: 'DELETE' });
     if (res.ok) {
-      toast(`Endpoint «${name}» eliminado.`);
+      toast(t('toast.endpoint_deleted', { name }));
       await loadLlms();
       await loadCatalog();
       renderInspector();
     }
   } catch (e) {
-    toast('Error al eliminar endpoint LLM');
+    toast(t('error.delete_endpoint'));
   }
 }
 
@@ -1133,7 +1157,7 @@ let currentRunDetail = null;
 async function loadHistory() {
   const list = $('historyList');
   if (!list) return;
-  list.innerHTML = '<p class="hint">Cargando historial...</p>';
+  list.innerHTML = `<p class="hint">${t('history.loading')}</p>`;
 
   const onlyCurrent = $('historyOnlyCurrent') ? $('historyOnlyCurrent').checked : true;
   const flowId = onlyCurrent && state.graph && state.graph.name ? state.graph.name : '';
@@ -1146,7 +1170,7 @@ async function loadHistory() {
     state.historyRuns = runs;
     renderHistory(runs);
   } catch (e) {
-    list.innerHTML = '<p class="hint" style="color:var(--port-err);">Error al cargar el historial.</p>';
+    list.innerHTML = `<p class="hint" style="color:var(--port-err);">${t('error.load_history')}</p>`;
   }
 }
 
@@ -1156,7 +1180,7 @@ function renderHistory(runs) {
   list.innerHTML = '';
 
   if (!runs || runs.length === 0) {
-    list.innerHTML = '<p class="hint">No hay ejecuciones registradas.</p>';
+    list.innerHTML = `<p class="hint">${t('history.empty')}</p>`;
     return;
   }
 
@@ -1166,10 +1190,10 @@ function renderHistory(runs) {
     card.dataset.runId = r.id;
 
     const dt = new Date(r.started_at * 1000);
-    const dateStr = dt.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit' }) + ' ' +
-                    dt.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const dateStr = dt.toLocaleDateString(dateLocale(), { day: '2-digit', month: '2-digit' }) + ' ' +
+                    dt.toLocaleTimeString(dateLocale(), { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     const durStr = r.duration != null ? `${r.duration}s` : '...';
-    const trigStr = r.trigger_type === 'schedule' ? 'Cron' : r.trigger_type === 'preview' ? 'Prueba' : 'Manual';
+    const trigStr = r.trigger_type === 'schedule' ? t('history.trigger_cron') : r.trigger_type === 'preview' ? t('history.trigger_test') : t('history.trigger_manual');
     const statusBadge = r.status === 'ok' ? '<span class="hist-badge ok">OK</span>'
                       : r.status === 'running' ? '<span class="hist-badge running">RUN</span>'
                       : '<span class="hist-badge error">ERR</span>';
@@ -1186,7 +1210,7 @@ function renderHistory(runs) {
         <span>${dateStr}</span>
         <div style="display: flex; gap: 8px;">
           <span>${durStr}</span>
-          <span style="color: var(--primary);">${r.step_count || 0} pasos</span>
+          <span style="color: var(--primary);">${t('history.steps_count', { n: r.step_count || 0 })}</span>
         </div>
       </div>
     `;
@@ -1206,7 +1230,7 @@ async function openRunDetail(runId) {
   try {
     const res = await fetch(`/api/history/run?id=${encodeURIComponent(runId)}`);
     if (!res.ok) {
-      toast('No se encontró el detalle de la ejecución');
+      toast(t('toast.run_not_found'));
       return;
     }
     const run = await res.json();
@@ -1214,45 +1238,45 @@ async function openRunDetail(runId) {
 
     $('histRunId').textContent = run.id;
     const dt = new Date(run.started_at * 1000);
-    const dateStr = dt.toLocaleString('es-ES');
-    const trigStr = run.trigger_type === 'schedule' ? 'Programado (Cron)'
-                  : run.trigger_type === 'preview' ? 'Prueba en lienzo'
-                  : 'Disparo manual';
+    const dateStr = dt.toLocaleString(dateLocale());
+    const trigStr = run.trigger_type === 'schedule' ? t('history.trigger_long_cron')
+                  : run.trigger_type === 'preview' ? t('history.trigger_long_test')
+                  : t('history.trigger_long_manual');
 
     const metaBar = $('histMetaBar');
     const statusColor = run.status === 'ok' ? 'var(--port-ok)' : 'var(--port-err)';
     metaBar.innerHTML = `
-      <div><b>Flujo:</b> <span>${escapeHtml(run.flow_name || run.flow_id)}</span></div>
-      <div><b>Tipo:</b> <span>${trigStr}</span></div>
-      <div><b>Fecha:</b> <span>${dateStr}</span></div>
-      <div><b>Duración:</b> <span>${run.duration != null ? run.duration + 's' : '-'}</span></div>
-      <div><b>Estado:</b> <span style="font-weight:700; color:${statusColor};">${run.status.toUpperCase()}</span></div>
+      <div><b>${t('history.meta_flow')}</b> <span>${escapeHtml(run.flow_name || run.flow_id)}</span></div>
+      <div><b>${t('history.meta_type')}</b> <span>${trigStr}</span></div>
+      <div><b>${t('history.meta_date')}</b> <span>${dateStr}</span></div>
+      <div><b>${t('history.meta_duration')}</b> <span>${run.duration != null ? run.duration + 's' : '-'}</span></div>
+      <div><b>${t('history.meta_status')}</b> <span style="font-weight:700; color:${statusColor};">${run.status.toUpperCase()}</span></div>
     `;
 
     if (run.error) {
-      metaBar.innerHTML += `<div style="width: 100%; color: var(--port-err); margin-top: 4px;"><b>Error:</b> ${escapeHtml(run.error)}</div>`;
+      metaBar.innerHTML += `<div style="width: 100%; color: var(--port-err); margin-top: 4px;"><b>${t('history.meta_error')}</b> ${escapeHtml(run.error)}</div>`;
     }
 
     const body = $('histStepsBody');
     body.innerHTML = '';
 
     if (!run.steps || run.steps.length === 0) {
-      body.innerHTML = '<p class="hint">No hay pasos registrados para esta ejecución.</p>';
+      body.innerHTML = `<p class="hint">${t('history.no_steps')}</p>`;
     } else {
       run.steps.forEach((s, idx) => {
         const stepCard = document.createElement('div');
         stepCard.className = 'step-card';
         const badgeClass = s.status === 'ok' ? 'ok' : s.status === 'skipped' ? 'skipped' : 'error';
-        const statusLabel = s.status === 'ok' ? 'Éxito' : s.status === 'skipped' ? 'Omitido' : 'Error';
+        const statusLabel = s.status === 'ok' ? t('history.status_ok') : s.status === 'skipped' ? t('history.status_skipped') : t('history.status_error');
 
         let inputHtml = '';
         if (s.inputs != null) {
           inputHtml = `
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; margin-top: 6px;">
-              <span class="hint" style="font-size:0.7rem; text-transform:uppercase; font-weight:600;">Entrada Recibida:</span>
+              <span class="hint" style="font-size:0.7rem; text-transform:uppercase; font-weight:600;">${t('history.input_received')}</span>
               <div style="display: flex; gap: 4px;">
-                <button class="icon-btn view-full-in-btn" style="font-size:0.72rem; padding: 2px 6px;" title="Ver entrada completa">🔍 Ver completo</button>
-                <button class="icon-btn copy-in-btn" style="font-size:0.72rem; padding: 2px 6px;" title="Copiar entrada">Copiar</button>
+                <button class="icon-btn view-full-in-btn" style="font-size:0.72rem; padding: 2px 6px;" title="${t('history.view_input_title')}">🔍 ${t('common.view_full')}</button>
+                <button class="icon-btn copy-in-btn" style="font-size:0.72rem; padding: 2px 6px;" title="${t('history.copy_input_title')}">${t('common.copy')}</button>
               </div>
             </div>
             <pre class="step-data" style="max-height: 100px;">${escapeHtml(s.inputs)}</pre>
@@ -1263,10 +1287,10 @@ async function openRunDetail(runId) {
         if (s.data != null) {
           dataHtml = `
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-              <span class="hint" style="font-size:0.7rem; text-transform:uppercase; font-weight:600;">Resultado / Salida:</span>
+              <span class="hint" style="font-size:0.7rem; text-transform:uppercase; font-weight:600;">${t('history.output_label')}</span>
               <div style="display: flex; gap: 4px;">
-                <button class="icon-btn view-full-step-btn" style="font-size:0.72rem; padding: 2px 6px;" title="Ver datos completos sin truncar">🔍 Ver completo</button>
-                <button class="icon-btn copy-step-btn" style="font-size:0.72rem; padding: 2px 6px;" title="Copiar datos">Copiar</button>
+                <button class="icon-btn view-full-step-btn" style="font-size:0.72rem; padding: 2px 6px;" title="${t('history.view_output_title')}">🔍 ${t('common.view_full')}</button>
+                <button class="icon-btn copy-step-btn" style="font-size:0.72rem; padding: 2px 6px;" title="${t('history.copy_data_title')}">${t('common.copy')}</button>
               </div>
             </div>
             <pre class="step-data">${escapeHtml(s.data)}</pre>
@@ -1275,7 +1299,7 @@ async function openRunDetail(runId) {
 
         let errHtml = '';
         if (s.error) {
-          errHtml = `<div class="step-error"><b>Error de nodo:</b> ${escapeHtml(s.error)}</div>`;
+          errHtml = `<div class="step-error"><b>${t('history.node_error')}</b> ${escapeHtml(s.error)}</div>`;
         }
 
         const durLabel = s.duration ? `<span class="hint" style="font-size:0.7rem;">${s.duration} ms</span>` : '';
@@ -1289,8 +1313,8 @@ async function openRunDetail(runId) {
             <div style="display: flex; align-items: center; gap: 8px;">
               ${durLabel}
               <span class="step-badge ${badgeClass}">${statusLabel}</span>
-              <button class="btn sm secondary locate-node-btn" title="Localizar y centrar este nodo en el lienzo visual">
-                <svg class="ic" width="12" height="12"><use href="#i-center"/></svg> Ver nodo
+              <button class="btn sm secondary locate-node-btn" title="${t('history.locate_title')}">
+                <svg class="ic" width="12" height="12"><use href="#i-center"/></svg> ${t('history.view_node')}
               </button>
             </div>
           </div>
@@ -1305,8 +1329,8 @@ async function openRunDetail(runId) {
         if (viewStepBtn) {
           viewStepBtn.onclick = () => {
             openDataViewer(
-              `Ejecución ${run.id} — Salida de «${s.node_id}»`,
-              `Estado: ${statusLabel} | Duración: ${s.duration || 0} ms`,
+              t('viewer.run_output', { run: run.id, node: s.node_id }),
+              t('viewer.status_line', { status: statusLabel, ms: s.duration || 0 }),
               s.data
             );
           };
@@ -1316,8 +1340,8 @@ async function openRunDetail(runId) {
         if (viewInBtn) {
           viewInBtn.onclick = () => {
             openDataViewer(
-              `Ejecución ${run.id} — Entrada de «${s.node_id}»`,
-              `Paso #${idx + 1}`,
+              t('viewer.run_input', { run: run.id, node: s.node_id }),
+              t('viewer.step_n', { n: idx + 1 }),
               s.inputs
             );
           };
@@ -1327,7 +1351,7 @@ async function openRunDetail(runId) {
         if (copyInBtn) {
           copyInBtn.onclick = () => {
             navigator.clipboard.writeText(s.inputs);
-            toast('Entrada copiada al portapapeles.');
+            toast(t('toast.input_copied'));
           };
         }
 
@@ -1335,7 +1359,7 @@ async function openRunDetail(runId) {
         if (copyBtn) {
           copyBtn.onclick = () => {
             navigator.clipboard.writeText(s.data);
-            toast('Salida copiada al portapapeles.');
+            toast(t('toast.output_copied'));
           };
         }
 
@@ -1356,7 +1380,7 @@ async function openRunDetail(runId) {
 
     $('historySheet').hidden = false;
   } catch (e) {
-    toast('Error al obtener detalle de ejecución');
+    toast(t('error.load_run'));
   }
 }
 
@@ -1407,21 +1431,21 @@ function highlightNodeOnCanvas(nodeId) {
     state.view.x = cw / 2 - (node.x + 90) * state.view.k;
     state.view.y = ch / 2 - (node.y + 40) * state.view.k;
     updateTransform();
-    toast(`Nodo «${nodeId}» seleccionado.`);
+    toast(t('toast.node_selected', { id: nodeId }));
   }
 }
 
 async function purgeHistory() {
-  if (!confirm('¿Deseas purgar del historial todas las ejecuciones de más de 30 días de antigüedad?')) {
+  if (!confirm(t('confirm.purge_history'))) {
     return;
   }
   try {
     const res = await fetch('/api/history/purge?days=30', { method: 'POST' });
     const data = await res.json();
-    toast(`Historial purgado: ${data.deleted} ejecuciones eliminadas.`);
+    toast(t('toast.history_purged', { n: data.deleted }));
     await loadHistory();
   } catch (e) {
-    toast('Error al purgar historial.');
+    toast(t('error.purge_history'));
   }
 }
 
@@ -1429,7 +1453,7 @@ async function purgeHistory() {
 // Gestión de Flujos (Crear, Cargar, Guardar, Eliminar)
 // ---------------------------------------------------------------------------
 
-function resetGraph(name = 'nuevo-flujo') {
+function resetGraph(name = defaultFlowName()) {
   if (state.debug && state.debug.active) stopDebugFlow();
   state.graph = { name, nodes: [], edges: [], version: 1 };
   state.meta = { name, description: '', schedule: '', enabled: true };
@@ -1443,7 +1467,7 @@ function resetGraph(name = 'nuevo-flujo') {
   if (state.activeTab === 'history') {
     loadHistory();
   }
-  toast('Lienzo en blanco.');
+  toast(t('toast.blank_canvas'));
 }
 
 async function openFlow(flowId) {
@@ -1465,9 +1489,9 @@ async function openFlow(flowId) {
     if (state.activeTab === 'history') {
       loadHistory();
     }
-    toast(`Flujo «${flowId}» cargado.`);
+    toast(t('toast.flow_loaded', { id: flowId }));
   } catch (e) {
-    toast('Error al cargar flujo.');
+    toast(t('error.load_flow'));
   }
 }
 
@@ -1488,14 +1512,14 @@ async function loadTemplate(templateName) {
     if (state.activeTab === 'history') {
       loadHistory();
     }
-    toast(`Plantilla «${templateName}» cargada.`);
+    toast(t('toast.template_loaded', { name: templateName }));
   } catch (e) {
-    toast('Error al cargar plantilla.');
+    toast(t('error.load_template'));
   }
 }
 
 async function saveFlow() {
-  const id = state.graph.name || 'flujo';
+  const id = state.graph.name || t('flow.fallback_id');
   state.meta.name = id;
   const payload = {
     id,
@@ -1511,34 +1535,34 @@ async function saveFlow() {
     });
     const data = await res.json();
     if (!res.ok) {
-      alert('Error de validación:\n' + (Array.isArray(data.detail) ? data.detail.join('\n') : data.detail));
+      alert(t('error.validation') + '\n' + (Array.isArray(data.detail) ? data.detail.join('\n') : data.detail));
       return false;
     }
     setClean();
-    toast(`Flujo «${id}» guardado correctamente.`);
+    toast(t('toast.flow_saved', { id }));
     await loadFlows();
     render();
     return true;
   } catch (e) {
-    toast('Error al guardar el flujo.');
+    toast(t('error.save_flow'));
     return false;
   }
 }
 
 async function deleteFlow(flowId) {
-  if (!confirm(`¿Eliminar definitivamente el flujo «${flowId}»?`)) return;
+  if (!confirm(t('confirm.delete_flow', { id: flowId }))) return;
   try {
     const res = await fetch(`/api/flow?id=${encodeURIComponent(flowId)}`, { method: 'DELETE' });
     if (!res.ok) throw new Error();
-    toast(`Flujo «${flowId}» eliminado.`);
+    toast(t('toast.flow_deleted', { id: flowId }));
     if (state.graph.name === flowId) {
       setClean();
       state.activeInspector = null;
-      resetGraph('nuevo-flujo');
+      resetGraph(defaultFlowName());
     }
     await loadFlows();
   } catch (e) {
-    toast('Error al eliminar flujo');
+    toast(t('error.delete_flow'));
   }
 }
 
@@ -1551,20 +1575,20 @@ async function compileGraph() {
     });
     const data = await res.json();
     if (!res.ok) {
-      alert('Error de compilación:\n' + (Array.isArray(data.detail) ? data.detail.join('\n') : data.detail));
+      alert(t('error.compile_title') + '\n' + (Array.isArray(data.detail) ? data.detail.join('\n') : data.detail));
       return;
     }
-    $('sheetTitle').textContent = 'Código generado (Python plano)';
+    $('sheetTitle').textContent = t('sheet.code_title');
     $('sheetBody').textContent = data.code;
     $('sheetTrace').hidden = true;
     $('sheet').hidden = false;
   } catch (e) {
-    toast('Fallo al compilar');
+    toast(t('error.compile_failed'));
   }
 }
 
 async function runPreview() {
-  toast('Ejecutando flujo...');
+  toast(t('toast.running_flow'));
   try {
     const res = await fetch('/api/run', {
       method: 'POST',
@@ -1573,18 +1597,18 @@ async function runPreview() {
     });
     const data = await res.json();
     if (!res.ok) {
-      alert('Error al ejecutar:\n' + (Array.isArray(data.detail) ? data.detail.join('\n') : data.detail));
+      alert(t('error.run_title') + '\n' + (Array.isArray(data.detail) ? data.detail.join('\n') : data.detail));
       return;
     }
     state.lastRunResults = data.results || {};
-    $('sheetTitle').textContent = 'Traza de ejecución en vivo';
+    $('sheetTitle').textContent = t('sheet.trace_title');
     $('sheetBody').textContent = data.code;
 
     const traceDiv = $('sheetTrace');
-    traceDiv.innerHTML = '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;"><strong>Resultados por nodo:</strong><span class="hint" style="font-size:0.72rem;">Haz clic en «Ver completo» para inspeccionar datos no truncados</span></div>';
+    traceDiv.innerHTML = `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;"><strong>${t('sheet.trace_results')}</strong><span class="hint" style="font-size:0.72rem;">${t('sheet.trace_hint')}</span></div>`;
     Object.entries(data.results || {}).forEach(([nid, r]) => {
       const cls = r.status === 'ok' ? 'trace-ok' : r.status === 'skipped' ? 'trace-skip' : 'trace-err';
-      const detail = r.status === 'ok' ? JSON.stringify(r.data).slice(0, 100) : r.error || 'Omitido';
+      const detail = r.status === 'ok' ? JSON.stringify(r.data).slice(0, 100) : r.error || t('common.skipped');
       const dur = r.duration_ms ? `[${r.duration_ms} ms]` : '';
       const item = document.createElement('div');
       item.className = `trace-item ${cls}`;
@@ -1595,13 +1619,13 @@ async function runPreview() {
         <div style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
           ▸ <b>${escapeHtml(nid)}</b> [${r.status}] ${dur}: ${escapeHtml(detail)}
         </div>
-        <button class="btn sm secondary view-full-trace-btn" style="padding:2px 6px; font-size:0.7rem; margin-left:8px;">🔍 Ver completo</button>
+        <button class="btn sm secondary view-full-trace-btn" style="padding:2px 6px; font-size:0.7rem; margin-left:8px;">🔍 ${t('common.view_full')}</button>
       `;
       item.querySelector('.view-full-trace-btn').onclick = (e) => {
         e.stopPropagation();
         openDataViewer(
-          `Nodo «${nid}» — Resultado`,
-          `Estado: ${r.status} | Duración: ${r.duration_ms || 0} ms`,
+          t('viewer.node_result', { name: nid }),
+          t('viewer.status_line', { status: r.status, ms: r.duration_ms || 0 }),
           r.status === 'ok' ? r.data : r.error
         );
       };
@@ -1618,7 +1642,7 @@ async function runPreview() {
       loadHistory();
     }
   } catch (e) {
-    toast('Error al ejecutar flujo.');
+    toast(t('error.run_flow'));
   }
 }
 
@@ -1661,7 +1685,7 @@ function addNode(typeKey, x, y) {
 
   if (typeKey === 'transform.script' || spec.code_field) {
     const cf = spec.code_field || 'code';
-    node.config[cf] = '# Procesa los datos de entrada y devuelve el resultado\nreturn entrada.text()';
+    node.config[cf] = defaultScript();
   }
 
   state.graph.nodes.push(node);
@@ -1669,7 +1693,7 @@ function addNode(typeKey, x, y) {
   state.activeInspector = 'node';
   markDirty();
   render();
-  toast(`Nodo «${spec.label}» añadido.`);
+  toast(t('toast.node_added', { label: spec.label }));
 }
 
 function removeNode(nodeId) {
@@ -1707,7 +1731,7 @@ function duplicateNode(nodeId) {
   state.activeInspector = 'node';
   markDirty();
   render();
-  toast(`Nodo duplicado: «${newId}».`);
+  toast(t('toast.node_duplicated', { id: newId }));
 }
 
 // ---------------------------------------------------------------------------
@@ -1773,7 +1797,7 @@ function renderNodes() {
       <span class="node-title-wrap" title="${escapeHtml(node.label || node.id)}">${escapeHtml(node.label || node.id)}</span>
       <div class="node-header-right">
         <span class="node-type-tag">${node.type.split('.')[1]}</span>
-        <button class="node-btn-del" title="Eliminar nodo">
+        <button class="node-btn-del" title="${t('node.delete')}">
           <svg class="ic" width="12" height="12"><use href="#i-trash"/></svg>
         </button>
       </div>
@@ -1798,7 +1822,7 @@ function renderNodes() {
         <div style="margin-bottom: 6px; font-weight: 500;">${escapeHtml(node.id)}</div>
         <button class="btn sm secondary node-btn-edit-code" style="width: 100%; font-size: 0.72rem; padding: 3px 6px; display: flex; align-items: center; justify-content: center; gap: 4px;">
           <svg class="ic" width="12" height="12"><use href="#i-code"/></svg>
-          <span>${codeLines ? `Editar (${codeLines} lín.)` : 'Escribir código'}</span>
+          <span>${codeLines ? t('node.edit_lines', { n: codeLines }) : t('node.write_code')}</span>
         </button>
       `;
       const btnEdit = body.querySelector('.node-btn-edit-code');
@@ -1817,7 +1841,7 @@ function renderNodes() {
     const inPort = document.createElement('div');
     inPort.className = 'port in';
     inPort.dataset.role = 'in';
-    inPort.title = 'Entrada';
+    inPort.title = t('node.port_in');
     inPort.onmouseup = (e) => {
       if (state.wiring && state.wiring.sourceNodeId !== node.id) {
         e.stopPropagation();
@@ -1831,7 +1855,7 @@ function renderNodes() {
     okPort.className = 'port ok out-ok';
     okPort.dataset.role = 'out';
     okPort.dataset.port = 'ok';
-    okPort.title = 'Salida OK (éxito)';
+    okPort.title = t('node.port_ok');
     okPort.onmousedown = (e) => startWire(e, node.id, 'ok');
     el.appendChild(okPort);
 
@@ -1839,7 +1863,7 @@ function renderNodes() {
     errPort.className = 'port error out-error';
     errPort.dataset.role = 'out';
     errPort.dataset.port = 'error';
-    errPort.title = 'Salida ERROR (fallo)';
+    errPort.title = t('node.port_error');
     errPort.onmousedown = (e) => startWire(e, node.id, 'error');
     el.appendChild(errPort);
 
@@ -1912,13 +1936,13 @@ function renderWires() {
       <g class="wire-del-btn">
         <circle r="10" class="wire-del-circle"></circle>
         <path d="M -3.5 -3.5 L 3.5 3.5 M 3.5 -3.5 L -3.5 3.5" class="wire-del-cross"></path>
-        <title>Desconectar cable</title>
+        <title>${t('canvas.wire_disconnect')}</title>
       </g>
     `;
 
     // Tooltip nativo
     const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
-    title.textContent = `Conexión ${edge.port.toUpperCase()} (${edge.source} → ${edge.target})\nHaz clic en × o clic derecho para desconectar`;
+    title.textContent = t('canvas.wire_title', { port: edge.port.toUpperCase(), source: edge.source, target: edge.target });
     group.appendChild(title);
 
     group.appendChild(hitbox);
@@ -2059,7 +2083,7 @@ function finishWireAction(sourceId, targetId, port) {
     state.graph.edges.push({ source: sourceId, target: targetId, port });
     markDirty();
     render();
-    toast(`Conectado por «${port}»`);
+    toast(t('toast.connected', { port }));
   } else {
     renderWires();
   }
@@ -2102,7 +2126,7 @@ let dataViewerMode = 'formatted'; // 'formatted' | 'raw'
 function openDataViewer(title, subtitle, data) {
   dataViewerCurrentData = data;
   dataViewerMode = 'formatted';
-  if ($('dataViewerTitle')) $('dataViewerTitle').textContent = title || 'Inspección de Datos';
+  if ($('dataViewerTitle')) $('dataViewerTitle').textContent = title || t('viewer.default_title');
   if ($('dataViewerSubtitle')) $('dataViewerSubtitle').textContent = subtitle || '';
   if ($('dataViewerSearch')) $('dataViewerSearch').value = '';
 
@@ -2120,7 +2144,7 @@ function renderDataViewerContent() {
   let text = '';
 
   if (raw === null || raw === undefined) {
-    text = '(Vacío / Sin datos)';
+    text = t('viewer.empty');
   } else if (typeof raw === 'string') {
     text = raw;
     if (dataViewerMode === 'formatted') {
@@ -2137,7 +2161,7 @@ function renderDataViewerContent() {
 
   const bytes = new Blob([text]).size;
   const sizeStr = bytes > 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(2)} MB` : `${(bytes / 1024).toFixed(2)} KB`;
-  if ($('dataViewerSize')) $('dataViewerSize').textContent = `${sizeStr} (${text.length} caracteres)`;
+  if ($('dataViewerSize')) $('dataViewerSize').textContent = t('viewer.size', { size: sizeStr, chars: text.length });
 
   pre.textContent = text;
 }
@@ -2158,7 +2182,7 @@ function copyDataViewerContent() {
   const pre = $('dataViewerContent');
   if (pre && pre.textContent) {
     navigator.clipboard.writeText(pre.textContent);
-    toast('Contenido completo copiado al portapapeles.');
+    toast(t('toast.content_copied'));
   }
 }
 
@@ -2173,7 +2197,7 @@ function filterDataViewerContent(e) {
   const text = pre.textContent;
   const lines = text.split('\n');
   const matched = lines.filter((l) => l.toLowerCase().includes(query));
-  pre.textContent = matched.join('\n') || `(No se encontraron líneas que contengan «${query}»)`;
+  pre.textContent = matched.join('\n') || t('viewer.no_lines', { query });
 }
 
 // ---------------------------------------------------------------------------
@@ -2213,12 +2237,12 @@ function toggleDebugFlow() {
 
 function startDebugFlow() {
   if (!state.graph.nodes.length) {
-    toast('El flujo no tiene nodos para depurar.');
+    toast(t('toast.debug_no_nodes'));
     return;
   }
   const order = getTopologicalOrder();
   if (!order) {
-    toast('El flujo contiene ciclos o conexiones inválidas.');
+    toast(t('toast.debug_cycles'));
     return;
   }
 
@@ -2234,7 +2258,7 @@ function startDebugFlow() {
   if ($('btnDebugFlow')) $('btnDebugFlow').classList.add('active');
   updateDebugToolbar();
   highlightActiveDebugNode();
-  toast('Modo depuración activo. Pulsa «Siguiente paso» para comenzar.');
+  toast(t('toast.debug_active'));
 }
 
 function updateDebugToolbar() {
@@ -2254,8 +2278,8 @@ function updateDebugToolbar() {
     $('btnDebugNext').disabled = false;
   } else {
     $('debugStepNum').textContent = total;
-    $('debugStepNodeName').textContent = 'Completado';
-    $('debugStepNodeName').title = 'Flujo completado';
+    $('debugStepNodeName').textContent = t('debug.completed');
+    $('debugStepNodeName').title = t('debug.flow_completed');
     $('btnDebugNext').disabled = true;
   }
 }
@@ -2268,14 +2292,14 @@ async function stepDebugNext() {
   if (!state.debug.active || state.debug.running) return;
   const idx = state.debug.currentStepIndex;
   if (idx >= state.debug.stepsOrder.length) {
-    toast('Depuración completada.');
+    toast(t('toast.debug_done'));
     return;
   }
 
   const node = state.debug.stepsOrder[idx];
   state.debug.running = true;
   $('btnDebugNext').disabled = true;
-  toast(`Ejecutando paso ${idx + 1}: «${node.label || node.id}»...`);
+  toast(t('toast.debug_step_running', { n: idx + 1, name: node.label || node.id }));
 
   try {
     const res = await fetch('/api/flow/step', {
@@ -2292,7 +2316,7 @@ async function stepDebugNext() {
     state.debug.running = false;
 
     if (!res.ok || data.status !== 'ok') {
-      alert('Error en el paso:\n' + (data.detail || data.error || 'Error desconocido'));
+      alert(t('error.step_title') + '\n' + (data.detail || data.error || t('error.unknown')));
       return;
     }
 
@@ -2309,12 +2333,12 @@ async function stepDebugNext() {
   } catch (e) {
     state.debug.running = false;
     $('btnDebugNext').disabled = false;
-    toast('Fallo al ejecutar paso de depuración.');
+    toast(t('toast.debug_step_failed'));
   }
 }
 
 async function runToNode(targetNodeId) {
-  toast(`Ejecutando hasta nodo «${targetNodeId}»...`);
+  toast(t('toast.run_to_node', { id: targetNodeId }));
   try {
     const res = await fetch('/api/flow/step', {
       method: 'POST',
@@ -2328,7 +2352,7 @@ async function runToNode(targetNodeId) {
     });
     const data = await res.json();
     if (!res.ok || data.status !== 'ok') {
-      alert('Error ejecutando hasta el nodo:\n' + (data.detail || data.error || 'Error'));
+      alert(t('error.run_to_title') + '\n' + (data.detail || data.error || t('error.generic')));
       return;
     }
 
@@ -2361,9 +2385,9 @@ async function runToNode(targetNodeId) {
     if (targetNode) {
       selectNode(targetNode);
     }
-    toast(`Ejecutado hasta «${targetNodeId}» con éxito.`);
+    toast(t('toast.run_to_done', { id: targetNodeId }));
   } catch (e) {
-    toast('Error en ejecución hasta el nodo.');
+    toast(t('error.run_to_failed'));
   }
 }
 
@@ -2373,7 +2397,7 @@ async function continueDebugFlow() {
     await stepDebugNext();
     const lastNode = state.debug.stepsOrder[state.debug.currentStepIndex - 1];
     if (lastNode && state.debug.cachedResults[lastNode.id]?.status === 'error') {
-      toast('Depuración detenida por error en el nodo.');
+      toast(t('toast.debug_stopped_error'));
       break;
     }
   }
@@ -2387,7 +2411,7 @@ function resetDebugFlow() {
   updateDebugToolbar();
   highlightActiveDebugNode();
   renderInspector();
-  toast('Depuración reiniciada.');
+  toast(t('toast.debug_reset'));
 }
 
 function stopDebugFlow() {
@@ -2395,7 +2419,7 @@ function stopDebugFlow() {
   $('debugToolbar').hidden = true;
   if ($('btnDebugFlow')) $('btnDebugFlow').classList.remove('active');
   renderNodes();
-  toast('Depuración finalizada.');
+  toast(t('toast.debug_ended'));
 }
 
 // ---------------------------------------------------------------------------
@@ -2413,14 +2437,14 @@ function renderNodeExecutionSection(node, container) {
 
   const isOk = execData.status === 'ok';
   const badgeClass = isOk ? 'step-ok' : execData.status === 'skipped' ? 'step-skip' : 'step-err';
-  const badgeText = isOk ? 'OK' : execData.status === 'skipped' ? 'OMITIDO' : 'ERROR';
+  const badgeText = isOk ? 'OK' : execData.status === 'skipped' ? t('node.badge_skipped') : 'ERROR';
   const durationText = execData.duration_ms ? `${execData.duration_ms} ms` : '';
 
   box.innerHTML = `
     <div class="node-exec-head">
       <span class="node-exec-title">
         <svg class="ic" width="13" height="13"><use href="#i-play"/></svg>
-        Datos de Ejecución
+        ${t('node.exec_title')}
       </span>
       <div style="display: flex; gap: 6px; align-items: center;">
         <span class="hint" style="font-size: 0.72rem;">${durationText}</span>
@@ -2428,16 +2452,16 @@ function renderNodeExecutionSection(node, container) {
       </div>
     </div>
     <div class="tab-pill-group" style="margin-bottom: 6px;">
-      <button class="tab-pill active" id="pillOutput_${node.id}">Salida (Output)</button>
-      <button class="tab-pill" id="pillInput_${node.id}">Entrada (Input)</button>
+      <button class="tab-pill active" id="pillOutput_${node.id}">${t('node.output_tab')}</button>
+      <button class="tab-pill" id="pillInput_${node.id}">${t('node.input_tab')}</button>
     </div>
     <pre class="node-exec-pre" id="nodeExecPre_${node.id}"></pre>
     <div class="node-exec-actions">
-      <button class="btn sm secondary" id="btnViewFullData_${node.id}" title="Ver contenido completo no truncado en ventana ampliada">
-        🔍 Ver completo (no truncado)
+      <button class="btn sm secondary" id="btnViewFullData_${node.id}" title="${t('node.view_full_title')}">
+        🔍 ${t('node.view_full_btn')}
       </button>
-      <button class="btn sm secondary" id="btnCopyExecData_${node.id}" title="Copiar al portapapeles">
-        📋 Copiar
+      <button class="btn sm secondary" id="btnCopyExecData_${node.id}" title="${t('node.copy_title')}">
+        📋 ${t('common.copy')}
       </button>
     </div>
   `;
@@ -2453,7 +2477,7 @@ function renderNodeExecutionSection(node, container) {
     const rawData = activeTab === 'output' ? (isOk ? execData.data : execData.error) : execData.inputs;
     let displayText = '';
     if (rawData === null || rawData === undefined) {
-      displayText = activeTab === 'input' ? '(Sin entradas precedentes o nodo inicial)' : '(Salida vacía)';
+      displayText = activeTab === 'input' ? t('node.no_input') : t('node.empty_output');
     } else if (typeof rawData === 'object') {
       displayText = JSON.stringify(rawData, null, 2);
     } else {
@@ -2479,8 +2503,12 @@ function renderNodeExecutionSection(node, container) {
   btnFull.onclick = () => {
     const rawData = activeTab === 'output' ? (isOk ? execData.data : execData.error) : execData.inputs;
     openDataViewer(
-      `Nodo «${node.label || node.id}» — ${activeTab === 'output' ? 'Salida' : 'Entrada'}`,
-      `Tipo: ${node.type} | Estado: ${badgeText} ${durationText ? `| Duración: ${durationText}` : ''}`,
+      t(activeTab === 'output' ? 'viewer.node_output' : 'viewer.node_input', { name: node.label || node.id }),
+      t('viewer.node_meta', {
+        type: node.type,
+        status: badgeText,
+        duration: durationText ? t('viewer.duration_part', { duration: durationText }) : '',
+      }),
       rawData
     );
   };
@@ -2489,7 +2517,7 @@ function renderNodeExecutionSection(node, container) {
     const rawData = activeTab === 'output' ? (isOk ? execData.data : execData.error) : execData.inputs;
     const textToCopy = typeof rawData === 'object' ? JSON.stringify(rawData, null, 2) : String(rawData || '');
     navigator.clipboard.writeText(textToCopy);
-    toast('Datos copiados al portapapeles.');
+    toast(t('toast.data_copied'));
   };
 
   updateExecDisplay();
@@ -2521,28 +2549,28 @@ function renderLivePreviewSection(node, spec, container) {
   if (parentData !== null) {
     const size = typeof parentData === 'string' ? parentData.length : JSON.stringify(parentData).length;
     const sizeKb = (size / 1024).toFixed(1);
-    sourceLabel = `Usando salida de <b>${escapeHtml(parentId)}</b> (${sizeKb} KB)`;
+    sourceLabel = t('preview.using_output', { id: escapeHtml(parentId), kb: sizeKb });
   } else {
-    sourceLabel = 'Sin salida previa conectada. Puedes probar con muestra:';
+    sourceLabel = t('preview.no_input');
   }
 
   box.innerHTML = `
     <div class="live-preview-head">
       <div class="live-preview-title">
         <span class="live-pulse-dot"></span>
-        <span>Vista Previa en Vivo</span>
+        <span>${t('preview.title')}</span>
       </div>
-      <span class="hint" id="livePreviewStatus_${node.id}" style="font-size: 0.72rem;">Listo</span>
+      <span class="hint" id="livePreviewStatus_${node.id}" style="font-size: 0.72rem;">${t('common.ready')}</span>
     </div>
     <div class="live-preview-source" id="livePreviewSource_${node.id}">
       <span>${sourceLabel}</span>
     </div>
-    <pre class="live-preview-pre" id="livePreviewOutput_${node.id}">(Calculando vista previa…)</pre>
+    <pre class="live-preview-pre" id="livePreviewOutput_${node.id}">${t('preview.calculating_output')}</pre>
     <a class="live-sample-toggle" id="toggleSampleInput_${node.id}">
-      ${parentData === null ? '▼ Editar entrada de prueba' : '▶ Usar entrada de prueba personalizada'}
+      ${parentData === null ? t('preview.edit_sample') : t('preview.use_custom')}
     </a>
     <div class="live-sample-area" id="sampleInputArea_${node.id}" ${parentData !== null ? 'hidden' : ''}>
-      <textarea id="sampleInputText_${node.id}" rows="3" style="font-family: var(--mono); font-size: 0.72rem;" placeholder="Pega aquí HTML, JSON o texto de prueba...">${parentData ? (typeof parentData === 'string' ? parentData : JSON.stringify(parentData, null, 2)) : ''}</textarea>
+      <textarea id="sampleInputText_${node.id}" rows="3" style="font-family: var(--mono); font-size: 0.72rem;" placeholder="${t('preview.sample_placeholder')}">${parentData ? (typeof parentData === 'string' ? parentData : JSON.stringify(parentData, null, 2)) : ''}</textarea>
     </div>
   `;
 
@@ -2550,7 +2578,7 @@ function renderLivePreviewSection(node, spec, container) {
   const area = box.querySelector(`#sampleInputArea_${node.id}`);
   toggleBtn.onclick = () => {
     area.hidden = !area.hidden;
-    toggleBtn.textContent = area.hidden ? '▶ Usar entrada de prueba personalizada' : '▼ Ocultar entrada personalizada';
+    toggleBtn.textContent = area.hidden ? t('preview.use_custom') : t('preview.hide_custom');
   };
 
   const sampleText = box.querySelector(`#sampleInputText_${node.id}`);
@@ -2576,7 +2604,7 @@ async function runLivePreview(node) {
   if (!outEl) return;
 
   if (box) box.classList.add('is-updating');
-  if (statEl) statEl.textContent = 'Calculando…';
+  if (statEl) statEl.textContent = t('preview.calculating');
 
   let inputData = null;
   const sampleArea = $(`sampleInputArea_${node.id}`);
@@ -2614,7 +2642,7 @@ async function runLivePreview(node) {
     if (data.status === 'ok') {
       let count = '';
       if (Array.isArray(data.data)) {
-        count = `(${data.data.length} elementos)`;
+        count = t('preview.items', { n: data.data.length });
       }
       if (statEl) statEl.innerHTML = `<span style="color:var(--port-ok)">OK ${count} · ${data.duration_ms} ms</span>`;
 
@@ -2622,18 +2650,18 @@ async function runLivePreview(node) {
       if (typeof data.data === 'object' && data.data !== null) {
         display = JSON.stringify(data.data, null, 2);
       } else {
-        display = String(data.data !== null && data.data !== undefined ? data.data : '(Salida vacía)');
+        display = String(data.data !== null && data.data !== undefined ? data.data : t('node.empty_output'));
       }
       outEl.style.color = 'var(--text)';
       outEl.textContent = display;
     } else {
-      if (statEl) statEl.innerHTML = `<span style="color:var(--port-err)">Error</span>`;
+      if (statEl) statEl.innerHTML = `<span style="color:var(--port-err)">${t('error.generic')}</span>`;
       outEl.style.color = 'var(--port-err)';
-      outEl.textContent = data.error || 'Error desconocido';
+      outEl.textContent = data.error || t('error.unknown');
     }
   } catch (e) {
     if (box) box.classList.remove('is-updating');
-    if (statEl) statEl.textContent = 'Error de red';
+    if (statEl) statEl.textContent = t('error.network');
     outEl.textContent = String(e);
   }
 }
@@ -2650,25 +2678,25 @@ function renderInspector() {
   if (state.selectedNodeId) {
     const node = state.graph.nodes.find((n) => n.id === state.selectedNodeId);
     if (node) {
-      if (titleEl) titleEl.textContent = 'Ajustes del Nodo';
+      if (titleEl) titleEl.textContent = t('inspector.node_title');
       renderNodeInspector(node, body);
       return;
     }
   }
 
   if (state.activeInspector === 'flow') {
-    if (titleEl) titleEl.textContent = 'Ajustes del Flujo';
+    if (titleEl) titleEl.textContent = t('inspector.flow_title');
     renderFlowInspector(body);
     return;
   }
 
   // Estado vacío: clic fuera en el lienzo sin nodo ni flujo seleccionado
-  if (titleEl) titleEl.textContent = 'Inspector';
+  if (titleEl) titleEl.textContent = t('inspector.title');
   body.innerHTML = `
     <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 260px; text-align: center; color: var(--text-muted); gap: 12px; padding: 20px;">
       <svg class="ic" width="36" height="36" style="opacity: 0.35;"><use href="#i-flow"/></svg>
       <p style="font-size: 0.84rem; margin: 0; line-height: 1.5;">
-        Haz clic en un <b>nodo</b> del lienzo o en un <b>flujo</b> de la barra lateral para ver y editar sus ajustes.
+        ${t('inspector.empty_html')}
       </p>
     </div>
   `;
@@ -2678,37 +2706,38 @@ function renderInspector() {
 // Panel de Herramientas y Permisos para transform.coder
 // ---------------------------------------------------------------------------
 
+// category / name / desc son claves del catálogo i18n (se traducen al renderizar)
 const CODER_TOOLS_SPEC = [
   {
-    category: 'Lectura y Navegación (Seguro)',
+    category: 'coder.cat_read',
     icon: '📂',
     tools: [
-      { id: 'read', name: 'Lectura de archivos (read)', desc: 'Leer archivos del workspace con numeración de líneas.' },
-      { id: 'grep', name: 'Búsqueda en código (grep)', desc: 'Búsqueda por patrones regex en archivos del proyecto.' },
-      { id: 'find', name: 'Localizar archivos (find)', desc: 'Búsqueda de archivos y directorios por patrón glob.' },
-      { id: 'ls', name: 'Listar carpetas (ls)', desc: 'Listar contenido y tamaños de archivos en directorios.' },
+      { id: 'read', name: 'coder.tool_read_name', desc: 'coder.tool_read_desc' },
+      { id: 'grep', name: 'coder.tool_grep_name', desc: 'coder.tool_grep_desc' },
+      { id: 'find', name: 'coder.tool_find_name', desc: 'coder.tool_find_desc' },
+      { id: 'ls', name: 'coder.tool_ls_name', desc: 'coder.tool_ls_desc' },
     ],
   },
   {
-    category: 'Modificación en Disco (Escritura)',
+    category: 'coder.cat_write',
     icon: '✏️',
     tools: [
-      { id: 'edit', name: 'Edición quirúrgica (edit)', desc: 'Reemplazar cadenas exactas y únicas en archivos existentes.' },
-      { id: 'write', name: 'Escritura de archivos (write)', desc: 'Crear o sobreescribir archivos completos en el workspace.' },
+      { id: 'edit', name: 'coder.tool_edit_name', desc: 'coder.tool_edit_desc' },
+      { id: 'write', name: 'coder.tool_write_name', desc: 'coder.tool_write_desc' },
     ],
   },
   {
-    category: 'Ejecución en Consola (Bash)',
+    category: 'coder.cat_bash',
     icon: '💻',
     tools: [
-      { id: 'bash', name: 'Terminal / Shell (bash)', desc: 'Ejecutar comandos de consola, scripts y pruebas automáticas.' },
+      { id: 'bash', name: 'coder.tool_bash_name', desc: 'coder.tool_bash_desc' },
     ],
   },
   {
-    category: 'Acceso a Red / Internet',
+    category: 'coder.cat_net',
     icon: '🌐',
     tools: [
-      { id: 'web_search', name: 'Búsqueda Web (web_search)', desc: 'Buscar documentación e información en internet vía DuckDuckGo.' },
+      { id: 'web_search', name: 'coder.tool_web_search_name', desc: 'coder.tool_web_search_desc' },
     ],
   },
 ];
@@ -2749,7 +2778,7 @@ function createCoderToolsSection(node) {
   }
 
   const lbl = document.createElement('label');
-  lbl.innerHTML = '<span>🛠️ Herramientas y Permisos</span>';
+  lbl.innerHTML = `<span>🛠️ ${t('coder.tools_title')}</span>`;
   container.appendChild(lbl);
 
   const presetsBox = document.createElement('div');
@@ -2759,10 +2788,10 @@ function createCoderToolsSection(node) {
   presetsBox.style.margin = '4px 0 8px 0';
 
   const presetOptions = [
-    { id: 'coding', label: 'Programación' },
-    { id: 'read_only', label: 'Solo Lectura' },
-    { id: 'all', label: 'Todas' },
-    { id: 'custom', label: 'A Medida' },
+    { id: 'coding', label: t('coder.preset_coding') },
+    { id: 'read_only', label: t('coder.preset_read_only') },
+    { id: 'all', label: t('coder.preset_all') },
+    { id: 'custom', label: t('coder.preset_custom') },
   ];
 
   const presetButtons = {};
@@ -2846,12 +2875,12 @@ function createCoderToolsSection(node) {
     catHead.style.justifyContent = 'space-between';
 
     const catTitle = document.createElement('span');
-    catTitle.textContent = `${cat.icon} ${cat.category}`;
+    catTitle.textContent = `${cat.icon} ${t(cat.category)}`;
     catHead.appendChild(catTitle);
 
     const catToggle = document.createElement('button');
     catToggle.type = 'button';
-    catToggle.textContent = 'Alternar';
+    catToggle.textContent = t('coder.toggle');
     catToggle.style.background = 'none';
     catToggle.style.border = 'none';
     catToggle.style.color = 'var(--primary)';
@@ -2900,8 +2929,8 @@ function createCoderToolsSection(node) {
 
       const info = document.createElement('div');
       info.innerHTML = `
-        <div style="font-weight: 500; line-height: 1.2;">${escapeHtml(tool.name)}</div>
-        <div style="font-size: 0.70rem; color: var(--text-muted); line-height: 1.2;">${escapeHtml(tool.desc)}</div>
+        <div style="font-weight: 500; line-height: 1.2;">${escapeHtml(t(tool.name))}</div>
+        <div style="font-size: 0.70rem; color: var(--text-muted); line-height: 1.2;">${escapeHtml(t(tool.desc))}</div>
       `;
 
       row.appendChild(cb);
@@ -2920,7 +2949,7 @@ function renderNodeInspector(node, body) {
   body.innerHTML = '';
 
   // ID y Etiqueta
-  body.appendChild(createField('ID del nodo', node.id, (val) => {
+  body.appendChild(createField(t('inspector.node_id'), node.id, (val) => {
     const clean = val.replace(/[^a-zA-Z0-9_]/g, '');
     if (clean && clean !== node.id) {
       state.graph.edges.forEach((e) => {
@@ -2934,7 +2963,7 @@ function renderNodeInspector(node, body) {
     }
   }));
 
-  body.appendChild(createField('Etiqueta', node.label, (val) => {
+  body.appendChild(createField(t('inspector.label'), node.label, (val) => {
     node.label = val;
     markDirty();
     renderNodes();
@@ -2949,7 +2978,7 @@ function renderNodeInspector(node, body) {
   runToBtn.style.alignItems = 'center';
   runToBtn.style.justifyContent = 'center';
   runToBtn.style.gap = '6px';
-  runToBtn.innerHTML = `<svg class="ic" width="13" height="13"><use href="#i-play"/></svg> <span>Ejecutar hasta este nodo</span>`;
+  runToBtn.innerHTML = `<svg class="ic" width="13" height="13"><use href="#i-play"/></svg> <span>${t('inspector.run_to_node')}</span>`;
   runToBtn.onclick = () => runToNode(node.id);
   body.appendChild(runToBtn);
 
@@ -2960,7 +2989,7 @@ function renderNodeInspector(node, body) {
     const btnBox = document.createElement('div');
     btnBox.className = 'field-group';
     btnBox.style.marginBottom = '14px';
-    btnBox.innerHTML = '<label>Código Python *</label>';
+    btnBox.innerHTML = `<label>${t('inspector.python_code')}</label>`;
 
     const btnCode = document.createElement('button');
     btnCode.className = 'btn primary';
@@ -2968,7 +2997,7 @@ function renderNodeInspector(node, body) {
     btnCode.style.alignItems = 'center';
     btnCode.style.justifyContent = 'center';
     btnCode.style.gap = '6px';
-    btnCode.innerHTML = `<svg class="ic" width="14" height="14"><use href="#i-code"/></svg> <span>${codeLines ? `Editar código (${codeLines} líneas)` : 'Escribir código…'}</span>`;
+    btnCode.innerHTML = `<svg class="ic" width="14" height="14"><use href="#i-code"/></svg> <span>${codeLines ? t('inspector.edit_code_lines', { n: codeLines }) : t('inspector.write_code')}</span>`;
     btnCode.onclick = () => openCodeEditor(node);
     btnBox.appendChild(btnCode);
     body.appendChild(btnBox);
@@ -2976,7 +3005,7 @@ function renderNodeInspector(node, body) {
 
   // Ayuda interactiva para Webhook Entrante
   if (node.type === 'input.webhook') {
-    const flowId = state.graph.name || 'mi-flujo';
+    const flowId = state.graph.name || t('flow.webhook_example');
     const hookUrl = `${window.location.origin}/api/webhook/${flowId}`;
     const box = document.createElement('div');
     box.className = 'field-group';
@@ -2986,17 +3015,17 @@ function renderNodeInspector(node, body) {
     box.style.padding = '8px 10px';
     box.style.marginBottom = '14px';
     box.innerHTML = `
-      <label style="color: var(--primary); font-weight: 600;">URL del Webhook (POST / GET)</label>
+      <label style="color: var(--primary); font-weight: 600;">${t('inspector.webhook_url')}</label>
       <div style="display: flex; gap: 6px; margin-top: 4px;">
         <input type="text" readonly value="${escapeHtml(hookUrl)}" style="font-family: var(--mono); font-size: 0.72rem; flex: 1; padding: 4px 6px;" />
-        <button class="btn sm" id="btnCopyWebhook" title="Copiar URL">Copiar</button>
+        <button class="btn sm" id="btnCopyWebhook" title="${t('inspector.copy_url_title')}">${t('common.copy')}</button>
       </div>
-      <span class="field-help" style="margin-top: 4px;">Envía datos JSON por POST a esta URL para disparar el flujo desde Home Assistant, cURL o alertas externas.</span>
+      <span class="field-help" style="margin-top: 4px;">${t('inspector.webhook_help')}</span>
     `;
     const btn = box.querySelector('#btnCopyWebhook');
     btn.onclick = () => {
       navigator.clipboard.writeText(hookUrl);
-      toast('URL del webhook copiada');
+      toast(t('toast.webhook_copied'));
     };
     body.appendChild(box);
   }
@@ -3054,7 +3083,7 @@ function renderNodeInspector(node, body) {
       };
     } else if (choicesFrom === 'secrets') {
       inputEl = document.createElement('select');
-      inputEl.innerHTML = '<option value="">(Sin secreto)</option>';
+      inputEl.innerHTML = `<option value="">${t('inspector.no_secret')}</option>`;
       state.secrets.forEach((s) => {
         const opt = document.createElement('option');
         opt.value = s;
@@ -3069,7 +3098,7 @@ function renderNodeInspector(node, body) {
       };
     } else if (choicesFrom === 'llms') {
       inputEl = document.createElement('select');
-      inputEl.innerHTML = '<option value="">(Global / Variable de entorno)</option>';
+      inputEl.innerHTML = `<option value="">${t('inspector.llm_default')}</option>`;
       const catalogLlms = (state.catalog && state.catalog.choices && state.catalog.choices.llms) || [];
       if (catalogLlms.length > 0) {
         catalogLlms.forEach((m) => {
@@ -3150,7 +3179,7 @@ function renderNodeInspector(node, body) {
   btnDel.className = 'btn sm';
   btnDel.style.marginTop = '16px';
   btnDel.style.color = 'var(--port-err)';
-  btnDel.innerHTML = '<svg class="ic" width="14" height="14"><use href="#i-trash"/></svg> Eliminar nodo';
+  btnDel.innerHTML = `<svg class="ic" width="14" height="14"><use href="#i-trash"/></svg> ${t('node.delete')}`;
   btnDel.onclick = () => removeNode(node.id);
   body.appendChild(btnDel);
 }
@@ -3161,10 +3190,10 @@ function renderFlowInspector(body) {
   // Nombre del flujo
   const nameGrp = document.createElement('div');
   nameGrp.className = 'field-group';
-  nameGrp.innerHTML = '<label>Nombre del flujo *</label>';
+  nameGrp.innerHTML = `<label>${t('inspector.flow_name')}</label>`;
   const nameInput = document.createElement('input');
   nameInput.value = state.graph.name || '';
-  nameInput.placeholder = 'ej. mi-flujo';
+  nameInput.placeholder = t('inspector.flow_name_placeholder');
   nameInput.oninput = (e) => {
     const slug = e.target.value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-');
     state.graph.name = slug;
@@ -3178,11 +3207,11 @@ function renderFlowInspector(body) {
   // Descripción
   const descGrp = document.createElement('div');
   descGrp.className = 'field-group';
-  descGrp.innerHTML = '<label>Descripción</label>';
+  descGrp.innerHTML = `<label>${t('inspector.description')}</label>`;
   const descInput = document.createElement('textarea');
   descInput.rows = 2;
   descInput.value = state.meta.description || '';
-  descInput.placeholder = 'Notas o propósito de este flujo...';
+  descInput.placeholder = t('inspector.description_placeholder');
   descInput.oninput = (e) => {
     state.meta.description = e.target.value;
     markDirty();
@@ -3193,7 +3222,7 @@ function renderFlowInspector(body) {
   // Sección de Estado y Programación
   const secSched = document.createElement('div');
   secSched.className = 'inspector-section';
-  secSched.textContent = 'Programación y Estado';
+  secSched.textContent = t('inspector.sched_section');
   body.appendChild(secSched);
 
   // Checkbox: Flujo activo
@@ -3205,7 +3234,7 @@ function renderFlowInspector(body) {
   const enabledLbl = document.createElement('label');
   enabledLbl.style.margin = '0';
   enabledLbl.style.cursor = 'pointer';
-  enabledLbl.textContent = 'Flujo activo';
+  enabledLbl.textContent = t('inspector.flow_active');
   const enabledInput = document.createElement('input');
   enabledInput.type = 'checkbox';
   enabledInput.checked = state.meta.enabled !== false;
@@ -3222,16 +3251,16 @@ function renderFlowInspector(body) {
   // Presets de periodicidad
   const presetGrp = document.createElement('div');
   presetGrp.className = 'field-group';
-  presetGrp.innerHTML = '<label>Frecuencia de ejecución</label>';
+  presetGrp.innerHTML = `<label>${t('inspector.frequency')}</label>`;
   const presetSelect = document.createElement('select');
   const presets = [
-    { value: '', label: 'Manual (sin programación)' },
-    { value: '* * * * *', label: 'Cada minuto' },
-    { value: '*/5 * * * *', label: 'Cada 5 minutos' },
-    { value: '*/15 * * * *', label: 'Cada 15 minutos' },
-    { value: '0 * * * *', label: 'Cada hora' },
-    { value: '0 9 * * *', label: 'Diario (09:00)' },
-    { value: 'custom', label: 'Personalizado (cron)' },
+    { value: '', label: t('inspector.freq_manual') },
+    { value: '* * * * *', label: t('inspector.freq_1m') },
+    { value: '*/5 * * * *', label: t('inspector.freq_5m') },
+    { value: '*/15 * * * *', label: t('inspector.freq_15m') },
+    { value: '0 * * * *', label: t('inspector.freq_1h') },
+    { value: '0 9 * * *', label: t('inspector.freq_daily') },
+    { value: 'custom', label: t('inspector.freq_custom') },
   ];
   const currSched = state.meta.schedule || '';
   let matchedPreset = false;
@@ -3254,10 +3283,10 @@ function renderFlowInspector(body) {
   // Input de expresión Cron
   const cronGrp = document.createElement('div');
   cronGrp.className = 'field-group';
-  cronGrp.innerHTML = '<label>Expresión Cron</label>';
+  cronGrp.innerHTML = `<label>${t('inspector.cron_expr')}</label>`;
   const cronInput = document.createElement('input');
   cronInput.value = currSched;
-  cronInput.placeholder = 'ej. */5 * * * *';
+  cronInput.placeholder = t('inspector.cron_placeholder');
   cronInput.style.display = (currSched || presetSelect.value === 'custom') ? 'block' : 'none';
   cronInput.oninput = (e) => {
     state.meta.schedule = e.target.value.trim();
@@ -3265,7 +3294,7 @@ function renderFlowInspector(body) {
   };
   const cronHelp = document.createElement('span');
   cronHelp.className = 'field-help';
-  cronHelp.textContent = 'Formato cron estándar de 5 campos (min hora día mes dds).';
+  cronHelp.textContent = t('inspector.cron_help');
   cronHelp.style.display = cronInput.style.display;
   cronGrp.appendChild(cronInput);
   cronGrp.appendChild(cronHelp);
@@ -3287,22 +3316,22 @@ function renderFlowInspector(body) {
   // Resumen del flujo
   const secStats = document.createElement('div');
   secStats.className = 'inspector-section';
-  secStats.textContent = 'Estructura del Grafo';
+  secStats.textContent = t('inspector.graph_section');
   body.appendChild(secStats);
 
   const statsBox = document.createElement('div');
   statsBox.innerHTML = `
     <div class="flow-stats-row">
-      <span>Nodos en lienzo:</span>
+      <span>${t('inspector.stat_nodes')}</span>
       <span class="flow-stats-val">${state.graph.nodes.length}</span>
     </div>
     <div class="flow-stats-row">
-      <span>Conexiones (cables):</span>
+      <span>${t('inspector.stat_edges')}</span>
       <span class="flow-stats-val">${state.graph.edges.length}</span>
     </div>
     <div class="flow-stats-row">
-      <span>Estado cambios:</span>
-      <span class="flow-stats-val" style="color: ${state.isDirty ? 'var(--port-err)' : 'var(--port-ok)'}">${state.isDirty ? 'Sin guardar' : 'Al día'}</span>
+      <span>${t('inspector.stat_state')}</span>
+      <span class="flow-stats-val" style="color: ${state.isDirty ? 'var(--port-err)' : 'var(--port-ok)'}">${state.isDirty ? t('toolbar.unsaved') : t('inspector.up_to_date')}</span>
     </div>
   `;
   body.appendChild(statsBox);
@@ -3310,7 +3339,7 @@ function renderFlowInspector(body) {
   // Acciones rápidas
   const secActions = document.createElement('div');
   secActions.className = 'inspector-section';
-  secActions.textContent = 'Acciones';
+  secActions.textContent = t('inspector.actions');
   body.appendChild(secActions);
 
   const actBox = document.createElement('div');
@@ -3321,27 +3350,27 @@ function renderFlowInspector(body) {
 
   const btnSave = document.createElement('button');
   btnSave.className = 'btn primary sm';
-  btnSave.innerHTML = '<svg class="ic" width="13" height="13"><use href="#i-save"/></svg> Guardar flujo';
+  btnSave.innerHTML = `<svg class="ic" width="13" height="13"><use href="#i-save"/></svg> ${t('inspector.save_flow')}`;
   btnSave.onclick = saveFlow;
 
   const btnRun = document.createElement('button');
   btnRun.className = 'btn secondary sm';
-  btnRun.innerHTML = '<svg class="ic" width="13" height="13"><use href="#i-play"/></svg> Probar ejecución';
+  btnRun.innerHTML = `<svg class="ic" width="13" height="13"><use href="#i-play"/></svg> ${t('inspector.test_run')}`;
   btnRun.onclick = runPreview;
 
   const btnAdvSched = document.createElement('button');
   btnAdvSched.className = 'btn secondary sm';
-  btnAdvSched.innerHTML = '<svg class="ic" width="13" height="13"><use href="#i-clock"/></svg> Programación avanzada...';
+  btnAdvSched.innerHTML = `<svg class="ic" width="13" height="13"><use href="#i-clock"/></svg> ${t('inspector.adv_schedule')}`;
   btnAdvSched.onclick = () => openScheduleModal(state.graph.name);
 
   const btnExportZip = document.createElement('button');
   btnExportZip.className = 'btn secondary sm';
-  btnExportZip.innerHTML = '<svg class="ic" width="13" height="13"><use href="#i-download"/></svg> Exportar este flujo (.zip)';
+  btnExportZip.innerHTML = `<svg class="ic" width="13" height="13"><use href="#i-download"/></svg> ${t('inspector.export_zip')}`;
   btnExportZip.onclick = () => exportFlowZip(state.graph.name);
 
   const btnExportPy = document.createElement('button');
   btnExportPy.className = 'btn secondary sm';
-  btnExportPy.innerHTML = '<svg class="ic" width="13" height="13"><use href="#i-download"/></svg> Exportar script (.py)';
+  btnExportPy.innerHTML = `<svg class="ic" width="13" height="13"><use href="#i-download"/></svg> ${t('inspector.export_py')}`;
   btnExportPy.onclick = () => exportFlowPy(state.graph.name);
 
   const btnDelFlow = document.createElement('button');
@@ -3349,7 +3378,7 @@ function renderFlowInspector(body) {
   btnDelFlow.style.color = 'var(--port-err)';
   btnDelFlow.style.borderColor = 'rgba(239, 68, 68, 0.35)';
   btnDelFlow.style.marginTop = '6px';
-  btnDelFlow.innerHTML = '<svg class="ic" width="13" height="13"><use href="#i-trash"/></svg> Eliminar este flujo';
+  btnDelFlow.innerHTML = `<svg class="ic" width="13" height="13"><use href="#i-trash"/></svg> ${t('inspector.delete_flow')}`;
   btnDelFlow.onclick = () => deleteFlow(state.graph.name);
 
   actBox.appendChild(btnSave);
@@ -3390,7 +3419,7 @@ function openCodeEditor(node) {
 
   const currentCode = node.config[codeField] !== undefined
     ? node.config[codeField]
-    : '# Procesa los datos de entrada y devuelve el resultado\nreturn entrada.text()';
+    : defaultScript();
 
   // Inicializar CodeMirror si no existe aún
   if (!codeMirrorInstance) {
@@ -3434,14 +3463,14 @@ function renderCodeEditorInputs(node) {
   inputsPanel.innerHTML = '';
 
   const head = document.createElement('h3');
-  head.textContent = 'Variables de entrada';
+  head.textContent = t('code.input_vars');
   inputsPanel.appendChild(head);
 
   const incoming = state.graph.edges.filter((e) => e.target === node.id);
   if (!incoming.length) {
     const hint = document.createElement('p');
     hint.className = 'hint';
-    hint.textContent = 'Conecta otros nodos a este para acceder a sus datos.';
+    hint.textContent = t('code.connect_hint');
     inputsPanel.appendChild(hint);
   } else {
     incoming.forEach((edge) => {
@@ -3453,11 +3482,11 @@ function renderCodeEditorInputs(node) {
 
       const kind = document.createElement('span');
       kind.className = 'kind';
-      kind.textContent = `${srcSpec ? srcSpec.label : (srcNode ? srcNode.type : '?')} · puerto ${edge.port}`;
+      kind.textContent = t('code.port_kind', { label: srcSpec ? srcSpec.label : (srcNode ? srcNode.type : '?'), port: edge.port });
 
       const codeChip = document.createElement('code');
       codeChip.textContent = `entrada["${edge.source}"]`;
-      codeChip.title = 'Haz clic para insertar en el código';
+      codeChip.title = t('code.insert_title');
       codeChip.onclick = () => {
         if (codeMirrorInstance) {
           codeMirrorInstance.replaceSelection(`entrada["${edge.source}"]`);
@@ -3467,7 +3496,7 @@ function renderCodeEditorInputs(node) {
 
       const what = document.createElement('span');
       what.className = 'what';
-      what.textContent = srcSpec && srcSpec.output ? `Devuelve: ${srcSpec.output}` : 'Salida del nodo';
+      what.textContent = srcSpec && srcSpec.output ? t('code.returns', { output: srcSpec.output }) : t('code.node_output');
 
       card.appendChild(kind);
       card.appendChild(codeChip);
@@ -3480,14 +3509,14 @@ function renderCodeEditorInputs(node) {
   const cheatsheet = document.createElement('div');
   cheatsheet.className = 'code-cheatsheet';
   cheatsheet.innerHTML = `
-    <strong style="color: var(--text); display: block; margin-bottom: 4px;">Atajos de entrada:</strong>
-    <div>▸ <code title="Texto combinado">entrada.text()</code></div>
-    <div>▸ <code title="Primer dato entrante">entrada.first</code></div>
-    <div>▸ <code title="Diccionario seguro">entrada.get("id")</code></div>
-    <div>▸ <code title="Lista de entradas">list(entrada)</code></div>
+    <strong style="color: var(--text); display: block; margin-bottom: 4px;">${t('code.shortcuts')}</strong>
+    <div>▸ <code title="${t('code.tip_text')}">entrada.text()</code></div>
+    <div>▸ <code title="${t('code.tip_first')}">entrada.first</code></div>
+    <div>▸ <code title="${t('code.tip_dict')}">entrada.get("id")</code></div>
+    <div>▸ <code title="${t('code.tip_list')}">list(entrada)</code></div>
     <p style="margin-top: 6px; font-size: 0.7rem; color: var(--text-muted); line-height: 1.3;">
-      Usa <code style="cursor: default;">return</code> para pasar el valor a los nodos siguientes.<br/>
-      <span style="opacity: 0.8;">(Ctrl+Enter para aplicar)</span>
+      ${t('code.return_hint', { code: '<code style="cursor: default;">return</code>' })}<br/>
+      <span style="opacity: 0.8;">${t('code.apply_hint')}</span>
     </p>
   `;
   cheatsheet.querySelectorAll('code').forEach((el) => {
@@ -3519,7 +3548,7 @@ function saveScriptCode() {
   $('codeSheet').hidden = true;
   renderNodes();
   renderInspector();
-  toast(`Código de «${node.id}» actualizado.`);
+  toast(t('toast.code_updated', { id: node.id }));
 }
 
 // ---------------------------------------------------------------------------
@@ -3537,7 +3566,7 @@ function escapeHtml(str) {
 function exportFlowZip(flowId) {
   const fid = (flowId || state.graph.name || '').trim();
   if (!fid) {
-    toast('Guarda el flujo antes de exportarlo', 'err');
+    toast(t('toast.save_first'), 'err');
     return;
   }
   const link = document.createElement('a');
@@ -3546,13 +3575,13 @@ function exportFlowZip(flowId) {
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
-  toast(`Descargando ${fid}.zip`, 'ok');
+  toast(t('toast.downloading', { file: `${fid}.zip` }), 'ok');
 }
 
 function exportFlowPy(flowId) {
   const fid = (flowId || state.graph.name || '').trim();
   if (!fid) {
-    toast('Guarda el flujo antes de exportarlo', 'err');
+    toast(t('toast.save_first'), 'err');
     return;
   }
   const link = document.createElement('a');
@@ -3561,7 +3590,7 @@ function exportFlowPy(flowId) {
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
-  toast(`Descargando ${fid}.py`, 'ok');
+  toast(t('toast.downloading', { file: `${fid}.py` }), 'ok');
 }
 
 function exportAllFlowsZip() {
@@ -3571,14 +3600,14 @@ function exportAllFlowsZip() {
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
-  toast('Descargando backup completo de flujos (.zip)', 'ok');
+  toast(t('toast.downloading_backup'), 'ok');
 }
 
 async function handleImportZip(file) {
   if (!file) return;
   const formData = new FormData();
   formData.append('file', file);
-  toast('Importando flujos...', 'info');
+  toast(t('toast.importing'), 'info');
   try {
     const res = await fetch('/api/flows/import', {
       method: 'POST',
@@ -3586,14 +3615,14 @@ async function handleImportZip(file) {
     });
     const data = await res.json();
     if (!res.ok || data.status === 'error') {
-      toast(data.detail || data.error || 'Error al importar', 'err');
+      toast(data.detail || data.error || t('error.import'), 'err');
       return;
     }
     const count = data.imported_count || (data.imported ? data.imported.length : 0);
-    toast(`¡Importados ${count} flujo(s) con éxito!`, 'ok');
+    toast(t('toast.imported', { n: count }), 'ok');
     if (data.required_secrets && data.required_secrets.length > 0) {
       setTimeout(() => {
-        toast(`Aviso: Flujos importados requieren secretos: ${data.required_secrets.join(', ')}`, 'info');
+        toast(t('toast.import_secrets', { names: data.required_secrets.join(', ') }), 'info');
       }, 2500);
     }
     await loadFlows();
@@ -3601,7 +3630,7 @@ async function handleImportZip(file) {
       loadFlow(data.imported[0].id);
     }
   } catch (err) {
-    toast(`Error de conexión: ${err.message}`, 'err');
+    toast(t('error.connection', { message: err.message }), 'err');
   }
 }
 

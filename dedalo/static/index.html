@@ -1,10 +1,11 @@
 <!doctype html>
-<html lang="es">
+<html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Dédalo — Flujos visuales en Python plano</title>
+<title data-i18n="page.title">Dédalo — Visual flows in plain Python</title>
 <link rel="stylesheet" href="/assets/dedalo.css" />
+<script src="/assets/i18n.js"></script>
 </head>
 <body>
 
@@ -94,123 +95,123 @@
   </div>
 
   <div class="flow-name-wrap">
-    <input id="flowName" class="name-input" placeholder="nombre-del-flujo" autocomplete="off" spellcheck="false" />
-    <span id="dirtyBadge" class="dirty-badge" title="Cambios pendientes de guardar (Ctrl+S / ⌘S)">
+    <input id="flowName" class="name-input" placeholder="flow-name" data-i18n-placeholder="toolbar.flow_name_placeholder" autocomplete="off" spellcheck="false" />
+    <span id="dirtyBadge" class="dirty-badge" title="Unsaved changes (Ctrl+S / ⌘S)" data-i18n-title="toolbar.unsaved_tooltip">
       <span class="dirty-dot"></span>
-      <span class="dirty-text">Sin guardar</span>
+      <span class="dirty-text" data-i18n="toolbar.unsaved">Unsaved</span>
     </span>
   </div>
 
   <span class="spacer"></span>
 
-  <!-- Grupo 1: Flujo y Plantillas -->
+  <!-- Group 1: Flow and templates -->
   <div class="header-group header-group-flow">
-    <button id="btnNew" class="btn secondary sm" title="Crear lienzo en blanco (limpiar)"><svg class="ic" width="13" height="13"><use href="#i-trash"/></svg> Vaciar</button>
-    <select id="templatePicker" class="template-select" title="Cargar desde una plantilla">
-      <option value="">Plantillas...</option>
+    <button id="btnNew" class="btn secondary sm" title="Create a blank canvas (clear)" data-i18n-title="toolbar.clear_title"><svg class="ic" width="13" height="13"><use href="#i-trash"/></svg> <span data-i18n="toolbar.clear">Clear</span></button>
+    <select id="templatePicker" class="template-select" title="Load from a template" data-i18n-title="toolbar.templates_title">
+      <option value="" data-i18n="toolbar.templates">Templates...</option>
     </select>
   </div>
 
   <div class="header-sep"></div>
 
-  <!-- Grupo 2: Herramientas y Programación -->
+  <!-- Group 2: Tools and scheduling -->
   <div class="header-group header-group-tools">
-    <button id="btnCompile" class="btn secondary sm" title="Ver código generado en Python plano"><svg class="ic" width="13" height="13"><use href="#i-code"/></svg> Código</button>
-    <button id="btnSchedule" class="btn secondary sm" title="Programar ejecución periódica"><svg class="ic" width="13" height="13"><use href="#i-clock"/></svg> Programar</button>
+    <button id="btnCompile" class="btn secondary sm" title="View generated plain Python code" data-i18n-title="toolbar.code_title"><svg class="ic" width="13" height="13"><use href="#i-code"/></svg> <span data-i18n="toolbar.code">Code</span></button>
+    <button id="btnSchedule" class="btn secondary sm" title="Schedule periodic execution" data-i18n-title="toolbar.schedule_title"><svg class="ic" width="13" height="13"><use href="#i-clock"/></svg> <span data-i18n="toolbar.schedule">Schedule</span></button>
   </div>
 
   <div class="header-sep"></div>
 
-  <!-- Grupo 3: Ejecución y Pruebas -->
+  <!-- Group 3: Execution and testing -->
   <div class="header-group header-group-exec">
-    <button id="btnRun" class="btn secondary sm btn-run" title="Probar flujo completo ahora"><svg class="ic" width="13" height="13"><use href="#i-play"/></svg> Probar</button>
-    <button id="btnDebugFlow" class="btn secondary sm btn-debug" title="Depurar paso a paso en el lienzo visual"><svg class="ic" width="13" height="13"><use href="#i-bug"/></svg> Depurar</button>
+    <button id="btnRun" class="btn secondary sm btn-run" title="Test the whole flow now" data-i18n-title="toolbar.test_title"><svg class="ic" width="13" height="13"><use href="#i-play"/></svg> <span data-i18n="toolbar.test">Test</span></button>
+    <button id="btnDebugFlow" class="btn secondary sm btn-debug" title="Debug step by step on the visual canvas" data-i18n-title="toolbar.debug_title"><svg class="ic" width="13" height="13"><use href="#i-bug"/></svg> <span data-i18n="toolbar.debug">Debug</span></button>
   </div>
 
   <div class="header-sep"></div>
 
-  <!-- Grupo 4: Acción Principal -->
-  <button id="btnSave" class="btn primary sm" title="Guardar flujo (Ctrl+S / ⌘S)"><svg class="ic" width="13" height="13"><use href="#i-save"/></svg> Guardar</button>
+  <!-- Group 4: Primary action -->
+  <button id="btnSave" class="btn primary sm" title="Save flow (Ctrl+S / ⌘S)" data-i18n-title="toolbar.save_title"><svg class="ic" width="13" height="13"><use href="#i-save"/></svg> <span data-i18n="toolbar.save">Save</span></button>
 
   <div class="header-sep"></div>
 
-  <!-- Grupo 5: Ajustes y Tema -->
+  <!-- Group 5: Settings and theme -->
   <div class="header-group header-group-view">
-    <button id="btnToggleInspector" class="btn icon-btn sm" title="Alternar panel derecho de ajustes" aria-label="Alternar panel de ajustes"><svg class="ic" width="15" height="15"><use href="#i-sidebar-right"/></svg></button>
-    <button id="btnTheme" class="btn icon-btn sm" title="Cambiar tema (oscuro/claro)" aria-label="Cambiar tema"><svg class="ic" width="15" height="15"><use href="#i-theme"/></svg></button>
+    <button id="btnToggleInspector" class="btn icon-btn sm" title="Toggle right settings panel" aria-label="Toggle settings panel" data-i18n-title="toolbar.toggle_inspector_title" data-i18n-aria-label="toolbar.toggle_inspector_aria"><svg class="ic" width="15" height="15"><use href="#i-sidebar-right"/></svg></button>
+    <button id="btnTheme" class="btn icon-btn sm" title="Change theme (dark/light)" aria-label="Change theme" data-i18n-title="toolbar.theme_title" data-i18n-aria-label="toolbar.theme_aria"><svg class="ic" width="15" height="15"><use href="#i-theme"/></svg></button>
   </div>
 </header>
 
 <main class="workspace">
 
-  <!-- Panel lateral izquierdo con pestañas -->
+  <!-- Left sidebar with tabs -->
   <aside class="sidebar" id="sidebar">
     <nav class="sidebar-nav">
-      <button class="nav-tab active" data-tab="flows" title="Mis Flujos">
-        <svg class="ic" width="16" height="16"><use href="#i-flow"/></svg> Flujos
+      <button class="nav-tab active" data-tab="flows" title="My Flows" data-i18n-title="sidebar.flows_tab_title">
+        <svg class="ic" width="16" height="16"><use href="#i-flow"/></svg> <span data-i18n="sidebar.flows">Flows</span>
       </button>
-      <button class="nav-tab" data-tab="nodes" title="Paleta de Nodos">
-        <svg class="ic" width="16" height="16"><use href="#i-nodes"/></svg> Nodos
+      <button class="nav-tab" data-tab="nodes" title="Node Palette" data-i18n-title="sidebar.nodes_tab_title">
+        <svg class="ic" width="16" height="16"><use href="#i-nodes"/></svg> <span data-i18n="sidebar.nodes">Nodes</span>
       </button>
-      <button class="nav-tab" data-tab="history" title="Historial de Ejecuciones">
-        <svg class="ic" width="16" height="16"><use href="#i-history"/></svg> Historial
+      <button class="nav-tab" data-tab="history" title="Run History" data-i18n-title="sidebar.history_tab_title">
+        <svg class="ic" width="16" height="16"><use href="#i-history"/></svg> <span data-i18n="sidebar.history">History</span>
       </button>
-      <button class="nav-tab" data-tab="secrets" title="Gestión de Secretos">
-        <svg class="ic" width="16" height="16"><use href="#i-key"/></svg> Secretos
+      <button class="nav-tab" data-tab="secrets" title="Secrets Management" data-i18n-title="sidebar.secrets_tab_title">
+        <svg class="ic" width="16" height="16"><use href="#i-key"/></svg> <span data-i18n="sidebar.secrets">Secrets</span>
       </button>
-      <button class="nav-tab" data-tab="settings" title="Configuración LLM">
-        <svg class="ic" width="16" height="16"><use href="#i-settings"/></svg> Ajustes
+      <button class="nav-tab" data-tab="settings" title="LLM Settings" data-i18n-title="sidebar.settings_tab_title">
+        <svg class="ic" width="16" height="16"><use href="#i-settings"/></svg> <span data-i18n="sidebar.settings">Settings</span>
       </button>
     </nav>
 
-    <!-- Tab 1: Flujos -->
+    <!-- Tab 1: Flows -->
     <div class="tab-pane active" id="paneFlows">
       <div class="pane-head">
-        <h3>Mis Flujos</h3>
+        <h3 data-i18n="sidebar.flows_tab_title">My Flows</h3>
         <div class="pane-head-actions">
-          <button id="btnImportZip" class="btn sm secondary icon-btn" title="Importar flujos (.zip o .json)">
+          <button id="btnImportZip" class="btn sm secondary icon-btn" title="Import flows (.zip or .json)" data-i18n-title="flows.import_title">
             <svg class="ic" width="13" height="13"><use href="#i-upload"/></svg>
           </button>
-          <button id="btnExportAllZip" class="btn sm secondary icon-btn" title="Exportar todos los flujos (Backup .zip)">
+          <button id="btnExportAllZip" class="btn sm secondary icon-btn" title="Export all flows (.zip backup)" data-i18n-title="flows.export_all_title">
             <svg class="ic" width="13" height="13"><use href="#i-download"/></svg>
           </button>
-          <button id="btnSidebarNewFlow" class="btn sm primary" title="Crear nuevo flujo">
-            <svg class="ic" width="12" height="12"><use href="#i-plus"/></svg> Nuevo
+          <button id="btnSidebarNewFlow" class="btn sm primary" title="Create new flow" data-i18n-title="flows.new_title">
+            <svg class="ic" width="12" height="12"><use href="#i-plus"/></svg> <span data-i18n="flows.new">New</span>
           </button>
         </div>
       </div>
       <input type="file" id="importZipInput" accept=".zip,.json" style="display:none" />
       <div class="flows-list" id="flowsList">
-        <p class="hint">Cargando flujos...</p>
+        <p class="hint" data-i18n="flows.loading">Loading flows...</p>
       </div>
     </div>
 
-    <!-- Tab 2: Nodos (Paleta organizada) -->
+    <!-- Tab 2: Nodes (organized palette) -->
     <div class="tab-pane" id="paneNodes">
       <div class="pane-head">
-        <h3>Nodos</h3>
-        <span class="hint-inline" id="nodesCountHint">56 nodos</span>
+        <h3 data-i18n="sidebar.nodes">Nodes</h3>
+        <span class="hint-inline" id="nodesCountHint">56 nodes</span>
       </div>
       <div class="palette-search-wrap">
-        <input id="paletteSearch" type="search" placeholder="Buscar nodo (diff, tabla, mqtt...)" autocomplete="off" />
+        <input id="paletteSearch" type="search" placeholder="Search node (diff, table, mqtt...)" data-i18n-placeholder="palette.search_placeholder" autocomplete="off" />
       </div>
       <div class="palette-chips" id="paletteChips">
-        <button class="chip active" data-chip="all">Todos</button>
-        <button class="chip" data-chip="net">Red/Web</button>
-        <button class="chip" data-chip="data">Datos</button>
-        <button class="chip" data-chip="ai">IA</button>
-        <button class="chip" data-chip="git">Git</button>
-        <button class="chip" data-chip="sys">Sistema</button>
+        <button class="chip active" data-chip="all" data-i18n="palette.chip_all">All</button>
+        <button class="chip" data-chip="net" data-i18n="palette.chip_net">Network/Web</button>
+        <button class="chip" data-chip="data" data-i18n="palette.chip_data">Data</button>
+        <button class="chip" data-chip="ai" data-i18n="palette.chip_ai">AI</button>
+        <button class="chip" data-chip="git" data-i18n="palette.chip_git">Git</button>
+        <button class="chip" data-chip="sys" data-i18n="palette.chip_sys">System</button>
       </div>
       <div class="palette-categories" id="palette"></div>
     </div>
 
-    <!-- Tab 3: Historial -->
+    <!-- Tab 3: History -->
     <div class="tab-pane" id="paneHistory">
       <div class="pane-head">
-        <h3>Historial</h3>
+        <h3 data-i18n="sidebar.history">History</h3>
         <div style="display: flex; gap: 4px; align-items: center;">
-          <button id="btnRefreshHistory" class="icon-btn" title="Actualizar historial">
+          <button id="btnRefreshHistory" class="icon-btn" title="Refresh history" data-i18n-title="history.refresh_title">
             <svg class="ic" width="14" height="14"><use href="#i-history"/></svg>
           </button>
         </div>
@@ -218,46 +219,46 @@
       <div class="history-controls">
         <label class="checkbox-label" style="font-size: 0.76rem;">
           <input type="checkbox" id="historyOnlyCurrent" checked />
-          <span>Solo flujo actual</span>
+          <span data-i18n="history.only_current">Current flow only</span>
         </label>
-        <button id="btnHistoryPurge" class="btn sm secondary" title="Purgar registros con más de 30 días">
-          Purgar >30d
+        <button id="btnHistoryPurge" class="btn sm secondary" title="Purge records older than 30 days" data-i18n-title="history.purge_title">
+          <span data-i18n="history.purge">Purge >30d</span>
         </button>
       </div>
       <div class="history-list" id="historyList">
-        <p class="hint">No hay ejecuciones registradas.</p>
+        <p class="hint" data-i18n="history.empty">No runs recorded.</p>
       </div>
     </div>
 
-    <!-- Tab 3: Secretos -->
+    <!-- Tab 4: Secrets -->
     <div class="tab-pane" id="paneSecrets">
       <div class="pane-head">
-        <h3>Secretos</h3>
+        <h3 data-i18n="sidebar.secrets">Secrets</h3>
       </div>
-      <p class="hint">Credenciales seguras asociadas a nodos (tokens de APIs, Telegram, etc.) sin exponerse en el grafo.</p>
+      <p class="hint" data-i18n="secrets.hint">Secure credentials attached to nodes (API tokens, Telegram, etc.) without exposing them in the graph.</p>
       <div class="secret-add-box">
-        <input id="newSecretName" placeholder="nombre-secreto" autocomplete="off" />
-        <input id="newSecretValue" type="password" placeholder="Valor del token" autocomplete="off" />
-        <button id="btnSaveSecret" class="btn sm primary">Guardar secreto</button>
+        <input id="newSecretName" placeholder="secret-name" data-i18n-placeholder="secrets.name_placeholder" autocomplete="off" />
+        <input id="newSecretValue" type="password" placeholder="Token value" data-i18n-placeholder="secrets.value_placeholder" autocomplete="off" />
+        <button id="btnSaveSecret" class="btn sm primary" data-i18n="secrets.save">Save secret</button>
       </div>
       <div class="secrets-list" id="secretsList">
-        <p class="hint">No hay secretos registrados.</p>
+        <p class="hint" data-i18n="secrets.empty">No secrets registered.</p>
       </div>
     </div>
 
-    <!-- Tab 5: Ajustes y Endpoints LLM -->
+    <!-- Tab 5: Settings and LLM endpoints -->
     <div class="tab-pane" id="paneSettings">
       <div class="pane-head">
-        <h3>Endpoints LLM</h3>
+        <h3 data-i18n="settings.llm_title">LLM Endpoints</h3>
       </div>
-      <p class="hint">Perfiles de inferencia reutilizables en nodos con soporte LLM.</p>
-      
+      <p class="hint" data-i18n="settings.llm_hint">Reusable inference profiles for nodes with LLM support.</p>
+
       <div class="llm-add-box">
-        <label>Nombre del endpoint:
-          <input id="newProfileName" placeholder="ej. ollama-qwen, openrouter-claude" autocomplete="off" />
+        <label><span data-i18n="settings.endpoint_name">Endpoint name:</span>
+          <input id="newProfileName" placeholder="e.g. ollama-qwen, openrouter-claude" data-i18n-placeholder="settings.endpoint_name_placeholder" autocomplete="off" />
         </label>
         <div class="form-row-2">
-          <label>Proveedor:
+          <label><span data-i18n="settings.provider">Provider:</span>
             <select id="newProfileProvider">
               <option value="custom">custom</option>
               <option value="ollama">ollama</option>
@@ -267,113 +268,124 @@
               <option value="groq">groq</option>
             </select>
           </label>
-          <label>Modelo:
+          <label><span data-i18n="settings.model">Model:</span>
             <input id="newProfileModel" placeholder="qwen2.5-coder:7b" autocomplete="off" />
           </label>
         </div>
-        <label>URL Base API:
+        <label><span data-i18n="settings.base_url">API base URL:</span>
           <input id="newProfileUrl" placeholder="http://localhost:11434/v1" autocomplete="off" />
         </label>
         <div class="form-row-2">
-          <label>Secreto API Key:
+          <label><span data-i18n="settings.api_key_secret">API key secret:</span>
             <select id="newProfileSecret">
-              <option value="">(Sin secreto / Local)</option>
+              <option value="" data-i18n="settings.no_secret_local">(No secret / Local)</option>
             </select>
           </label>
-          <label>Max Context:
-            <input id="newProfileContext" type="number" placeholder="0 (Auto)" min="0" />
+          <label><span data-i18n="settings.max_context">Max context:</span>
+            <input id="newProfileContext" type="number" placeholder="0 (Auto)" data-i18n-placeholder="settings.max_context_placeholder" min="0" />
           </label>
         </div>
-        <label>Temperatura:
+        <label><span data-i18n="settings.temperature">Temperature:</span>
           <input id="newProfileTemp" type="number" step="0.1" min="0" max="2" placeholder="0.7" />
         </label>
-        <button id="btnSaveLlmProfile" class="btn sm primary">Guardar endpoint LLM</button>
+        <button id="btnSaveLlmProfile" class="btn sm primary" data-i18n="settings.save_endpoint">Save LLM endpoint</button>
       </div>
 
-      <div class="pane-subhead">
-        Endpoints guardados
+      <div class="pane-subhead" data-i18n="settings.saved_endpoints">
+        Saved endpoints
       </div>
       <div class="llms-list" id="llmsList">
-        <p class="hint">No hay endpoints LLM guardados.</p>
+        <p class="hint" data-i18n="settings.no_endpoints">No LLM endpoints saved.</p>
       </div>
 
       <div class="settings-divider"></div>
 
       <div class="pane-head">
-        <h3>Fallback Global</h3>
+        <h3 data-i18n="settings.fallback_title">Global Fallback</h3>
       </div>
-      <p class="hint">Configuración por defecto para nodos sin endpoint especificado.</p>
+      <p class="hint" data-i18n="settings.fallback_hint">Default configuration for nodes without a specified endpoint.</p>
       <div class="settings-form">
-        <label>URL Base API:
+        <label><span data-i18n="settings.base_url">API base URL:</span>
           <input id="cfgLlmUrl" placeholder="http://localhost:11434/v1" />
         </label>
-        <label>Modelo por defecto:
+        <label><span data-i18n="settings.default_model">Default model:</span>
           <input id="cfgLlmModel" placeholder="llama3" />
         </label>
-        <label>API Key global:
-          <input id="cfgLlmKey" type="password" placeholder="(Opcional si es local)" />
+        <label><span data-i18n="settings.global_key">Global API key:</span>
+          <input id="cfgLlmKey" type="password" placeholder="(Optional if local)" data-i18n-placeholder="settings.global_key_placeholder" />
         </label>
-        <button id="btnSaveConfig" class="btn sm secondary">Guardar fallback global</button>
+        <button id="btnSaveConfig" class="btn sm secondary" data-i18n="settings.save_fallback">Save global fallback</button>
+      </div>
+
+      <div class="settings-divider"></div>
+
+      <div class="settings-form">
+        <label><span data-i18n="settings.language">Language:</span>
+          <select id="cfgLang">
+            <option value="en">English</option>
+            <option value="es">Español</option>
+          </select>
+        </label>
       </div>
     </div>
   </aside>
 
-  <!-- Lienzo central interactivo -->
+  <!-- Interactive central canvas -->
   <section class="canvas-wrap" id="canvasWrap">
     <div class="canvas-content" id="canvasContent">
       <svg class="wires" id="wires"></svg>
       <div class="nodes" id="nodes"></div>
     </div>
-    <div class="empty-hint" id="emptyHint">
-      Selecciona la pestaña <b>Nodos</b> y añade uno para empezar.<br />
-      Conecta el punto verde (<b>ok</b>) o rojo (<b>error</b>) de un nodo al siguiente.
+    <div class="empty-hint" id="emptyHint" data-i18n-html="canvas.empty_hint">
+      Select the <b>Nodes</b> tab and add one to get started.<br />
+      Connect a node's green (<b>ok</b>) or red (<b>error</b>) dot to the next one.
     </div>
 
-    <!-- Barra flotante de control de depuración -->
+    <!-- Floating debug control bar -->
     <div class="debug-toolbar" id="debugToolbar" hidden>
-      <div class="debug-toolbar-drag" title="Depuración paso a paso">
+      <div class="debug-toolbar-drag" title="Step-by-step debugging" data-i18n-title="debug.drag_title">
         <svg class="ic" width="15" height="15" style="color: var(--primary);"><use href="#i-bug"/></svg>
       </div>
       <div class="debug-step-indicator" id="debugStepIndicator">
-        <span>Paso <b id="debugStepNum">1</b>/<span id="debugStepTotal">1</span>:</span>
+        <span><span data-i18n="debug.step">Step</span> <b id="debugStepNum">1</b>/<span id="debugStepTotal">1</span>:</span>
         <code id="debugStepNodeName" title="">-</code>
       </div>
       <div class="debug-actions">
-        <button id="btnDebugReset" class="btn sm icon-btn secondary" title="Reiniciar depuración al inicio" aria-label="Reiniciar"><svg class="ic" width="13" height="13"><use href="#i-rotate-ccw"/></svg></button>
-        <button id="btnDebugNext" class="btn sm icon-btn primary" title="Ejecutar paso activo" aria-label="Paso siguiente"><svg class="ic" width="13" height="13"><use href="#i-step-forward"/></svg></button>
-        <button id="btnDebugContinue" class="btn sm icon-btn secondary" title="Continuar ejecución completa hasta el final" aria-label="Continuar"><svg class="ic" width="13" height="13"><use href="#i-play"/></svg></button>
-        <button id="btnDebugStop" class="btn sm icon-btn" style="color: var(--port-err);" title="Detener y salir de la depuración" aria-label="Detener y salir"><svg class="ic" width="13" height="13"><use href="#i-square"/></svg></button>
+        <button id="btnDebugReset" class="btn sm icon-btn secondary" title="Restart debugging from the start" aria-label="Restart" data-i18n-title="debug.reset_title" data-i18n-aria-label="debug.reset_aria"><svg class="ic" width="13" height="13"><use href="#i-rotate-ccw"/></svg></button>
+        <button id="btnDebugNext" class="btn sm icon-btn primary" title="Run active step" aria-label="Next step" data-i18n-title="debug.next_title" data-i18n-aria-label="debug.next_aria"><svg class="ic" width="13" height="13"><use href="#i-step-forward"/></svg></button>
+        <button id="btnDebugContinue" class="btn sm icon-btn secondary" title="Continue the full run to the end" aria-label="Continue" data-i18n-title="debug.continue_title" data-i18n-aria-label="debug.continue_aria"><svg class="ic" width="13" height="13"><use href="#i-play"/></svg></button>
+        <button id="btnDebugStop" class="btn sm icon-btn" style="color: var(--port-err);" title="Stop and exit debugging" aria-label="Stop and exit" data-i18n-title="debug.stop_title" data-i18n-aria-label="debug.stop_aria"><svg class="ic" width="13" height="13"><use href="#i-square"/></svg></button>
       </div>
     </div>
 
-    <!-- Controles flotantes de Zoom y Pan -->
+    <!-- Floating zoom and pan controls -->
     <div class="zoombar" id="zoombar">
-      <button class="zoom-btn" id="btnZoomIn" title="Acercar (Zoom In)">
+      <button class="zoom-btn" id="btnZoomIn" title="Zoom in" data-i18n-title="canvas.zoom_in">
         <svg class="ic" width="14" height="14"><use href="#i-plus"/></svg>
       </button>
-      <button class="zoom-btn zoom-level-btn" id="btnZoomReset" title="Restablecer zoom (100%)">
+      <button class="zoom-btn zoom-level-btn" id="btnZoomReset" title="Reset zoom (100%)" data-i18n-title="canvas.zoom_reset">
         <span id="zoomLevel">100%</span>
       </button>
-      <button class="zoom-btn" id="btnZoomOut" title="Alejar (Zoom Out)">
+      <button class="zoom-btn" id="btnZoomOut" title="Zoom out" data-i18n-title="canvas.zoom_out">
         <svg class="ic" width="14" height="14"><use href="#i-minus"/></svg>
       </button>
       <div class="zoom-sep"></div>
-      <button class="zoom-btn" id="btnZoomCenter" title="Centrar y encuadrar flujo">
+      <button class="zoom-btn" id="btnZoomCenter" title="Center and fit flow" data-i18n-title="canvas.zoom_center">
         <svg class="ic" width="14" height="14"><use href="#i-center"/></svg>
       </button>
     </div>
-    <!-- Botón flotante para expandir el inspector cuando está colapsado -->
-    <button id="btnExpandInspector" class="inspector-expand-btn" title="Mostrar panel de ajustes" hidden>
+    <!-- Floating button to expand the inspector when collapsed -->
+    <button id="btnExpandInspector" class="inspector-expand-btn" title="Show settings panel" data-i18n-title="inspector.expand_title" hidden>
       <svg class="ic" width="14" height="14"><use href="#i-chevron-left"/></svg>
-      <span>Ajustes</span>
+      <span data-i18n="inspector.settings">Settings</span>
     </button>
   </section>
 
-  <!-- Inspector derecho -->
+  <!-- Right inspector -->
   <aside class="inspector" id="inspector">
     <div class="inspector-head">
-      <h2 id="inspectorTitle">Ajustes del Flujo</h2>
-      <button class="icon-btn" id="btnCollapseInspector" title="Colapsar panel" aria-label="Colapsar panel">
+      <h2 id="inspectorTitle" data-i18n="inspector.flow_title">Flow Settings</h2>
+      <button class="icon-btn" id="btnCollapseInspector" title="Collapse panel" aria-label="Collapse panel" data-i18n-title="inspector.collapse" data-i18n-aria-label="inspector.collapse">
         <svg class="ic" width="14" height="14"><use href="#i-chevron-right"/></svg>
       </button>
     </div>
@@ -384,27 +396,27 @@
 
 <div class="status" id="status"></div>
 
-<!-- Modal para ver código Python o traza de ejecución -->
+<!-- Modal to view Python code or execution trace -->
 <div class="sheet" id="sheet" hidden>
   <div class="sheet-box">
     <div class="sheet-head">
-      <strong id="sheetTitle">Código generado</strong>
-      <button id="sheetClose" class="icon-btn" title="Cerrar"><svg class="ic" width="14" height="14"><use href="#i-x"/></svg></button>
+      <strong id="sheetTitle" data-i18n="sheet.code_title_default">Generated code</strong>
+      <button id="sheetClose" class="icon-btn" title="Close" data-i18n-title="common.close"><svg class="ic" width="14" height="14"><use href="#i-x"/></svg></button>
     </div>
     <pre id="sheetBody"></pre>
     <div id="sheetTrace" class="trace" hidden></div>
   </div>
 </div>
 
-<!-- Modal para editar scripts Python personalizados -->
+<!-- Modal to edit custom Python scripts -->
 <div class="sheet" id="codeSheet" hidden>
   <div class="sheet-box code-box">
     <div class="sheet-head">
       <div style="display: flex; align-items: center; gap: 8px;">
         <svg class="ic" width="18" height="18" style="color: var(--primary);"><use href="#i-code"/></svg>
-        <strong>Editor Python: <span id="codeNodeId" style="color: var(--primary);"></span></strong>
+        <strong><span data-i18n="code.editor_title">Python editor:</span> <span id="codeNodeId" style="color: var(--primary);"></span></strong>
       </div>
-      <button id="codeClose" class="icon-btn" title="Cerrar"><svg class="ic" width="14" height="14"><use href="#i-x"/></svg></button>
+      <button id="codeClose" class="icon-btn" title="Close" data-i18n-title="common.close"><svg class="ic" width="14" height="14"><use href="#i-x"/></svg></button>
     </div>
     <div class="code-body">
       <aside class="code-inputs" id="codeInputs"></aside>
@@ -413,92 +425,92 @@
       </div>
     </div>
     <div class="sheet-foot">
-      <span class="hint" id="codeHint">Se comprueba la sintaxis al guardar el flujo. Pulsa sobre cualquier variable de entrada para insertarla.</span>
+      <span class="hint" id="codeHint" data-i18n="code.hint">Syntax is checked when the flow is saved. Click any input variable to insert it.</span>
       <div style="display: flex; gap: 8px;">
-        <button id="codeCancel" class="btn secondary">Cancelar</button>
-        <button id="codeSave" class="btn primary"><svg class="ic" width="14" height="14"><use href="#i-save"/></svg> Aplicar cambios</button>
+        <button id="codeCancel" class="btn secondary" data-i18n="common.cancel">Cancel</button>
+        <button id="codeSave" class="btn primary"><svg class="ic" width="14" height="14"><use href="#i-save"/></svg> <span data-i18n="code.apply">Apply changes</span></button>
       </div>
     </div>
   </div>
 </div>
 
-<!-- Modal para programar la ejecución periódica del flujo -->
+<!-- Modal to schedule periodic flow execution -->
 <div class="sheet" id="scheduleSheet" hidden>
   <div class="sheet-box schedule-box">
     <div class="sheet-head">
-      <strong>Programación del flujo: <span id="schedFlowTitle"></span></strong>
-      <button id="schedClose" class="icon-btn" title="Cerrar"><svg class="ic" width="14" height="14"><use href="#i-x"/></svg></button>
+      <strong><span data-i18n="schedule.title">Flow schedule:</span> <span id="schedFlowTitle"></span></strong>
+      <button id="schedClose" class="icon-btn" title="Close" data-i18n-title="common.close"><svg class="ic" width="14" height="14"><use href="#i-x"/></svg></button>
     </div>
     <div class="schedule-body">
       <div class="field-group">
         <label class="checkbox-label">
           <input type="checkbox" id="schedEnabled" />
-          <b>Activar ejecución automática en segundo plano</b>
+          <b data-i18n="schedule.enable">Enable automatic background execution</b>
         </label>
       </div>
       <div class="field-group">
-        <label>Preajuste de frecuencia:</label>
+        <label data-i18n="schedule.preset_label">Frequency preset:</label>
         <select id="schedPreset">
-          <option value="manual">Manual (sin repetición)</option>
-          <option value="@every 5m">Cada 5 minutos (@every 5m)</option>
-          <option value="@every 15m">Cada 15 minutos (@every 15m)</option>
-          <option value="@every 30m">Cada 30 minutos (@every 30m)</option>
-          <option value="@every 1h">Cada hora (@every 1h)</option>
-          <option value="0 8 * * *">Todos los días a las 08:00 (0 8 * * *)</option>
-          <option value="0 9 * * 1-5">Días laborables (L-V) a las 09:00 (0 9 * * 1-5)</option>
-          <option value="custom">Personalizado (expresión Cron)</option>
+          <option value="manual" data-i18n="schedule.preset_manual">Manual (no repeat)</option>
+          <option value="@every 5m" data-i18n="schedule.preset_5m">Every 5 minutes (@every 5m)</option>
+          <option value="@every 15m" data-i18n="schedule.preset_15m">Every 15 minutes (@every 15m)</option>
+          <option value="@every 30m" data-i18n="schedule.preset_30m">Every 30 minutes (@every 30m)</option>
+          <option value="@every 1h" data-i18n="schedule.preset_1h">Every hour (@every 1h)</option>
+          <option value="0 8 * * *" data-i18n="schedule.preset_daily">Every day at 08:00 (0 8 * * *)</option>
+          <option value="0 9 * * 1-5" data-i18n="schedule.preset_weekdays">Weekdays (Mon-Fri) at 09:00 (0 9 * * 1-5)</option>
+          <option value="custom" data-i18n="schedule.preset_custom">Custom (Cron expression)</option>
         </select>
       </div>
       <div class="field-group">
-        <label>Expresión Cron o intervalo (@every Xm):</label>
-        <input id="schedExpr" class="name-input" style="width:100%" placeholder="*/15 * * * * o @every 30m" />
-        <span class="field-help" id="schedHelp">El planificador evaluará esta regla cada 30 segundos.</span>
+        <label data-i18n="schedule.expr_label">Cron expression or interval (@every Xm):</label>
+        <input id="schedExpr" class="name-input" style="width:100%" placeholder="*/15 * * * * or @every 30m" data-i18n-placeholder="schedule.expr_placeholder" />
+        <span class="field-help" id="schedHelp" data-i18n="schedule.help">The scheduler evaluates this rule every 30 seconds.</span>
       </div>
       <div class="schedule-status-box" id="schedStatusBox">
-        <div>Estado actual: <b id="schedStatusVal">-</b></div>
-        <div>Próxima ejecución estimada: <span id="schedNextVal" class="mono">-</span></div>
-        <div>Última ejecución: <span id="schedLastVal" class="mono">-</span></div>
+        <div><span data-i18n="schedule.status_current">Current status:</span> <b id="schedStatusVal">-</b></div>
+        <div><span data-i18n="schedule.next_run">Estimated next run:</span> <span id="schedNextVal" class="mono">-</span></div>
+        <div><span data-i18n="schedule.last_run">Last run:</span> <span id="schedLastVal" class="mono">-</span></div>
       </div>
     </div>
     <div class="sheet-foot">
-      <button id="btnSchedRunNow" class="btn secondary"><svg class="ic" width="14" height="14"><use href="#i-play"/></svg> Ejecutar ahora</button>
-      <button id="btnSchedSave" class="btn primary">Guardar programación</button>
+      <button id="btnSchedRunNow" class="btn secondary"><svg class="ic" width="14" height="14"><use href="#i-play"/></svg> <span data-i18n="schedule.run_now">Run now</span></button>
+      <button id="btnSchedSave" class="btn primary" data-i18n="schedule.save">Save schedule</button>
     </div>
   </div>
 </div>
 
-<!-- Modal para confirmar cambios sin guardar al cambiar de flujo -->
+<!-- Modal to confirm unsaved changes when switching flows -->
 <div class="sheet" id="unsavedSheet" hidden>
   <div class="sheet-box" style="width: 460px;">
     <div class="sheet-head">
-      <strong>Cambios sin guardar</strong>
-      <button id="unsavedClose" class="icon-btn" title="Cerrar"><svg class="ic" width="14" height="14"><use href="#i-x"/></svg></button>
+      <strong data-i18n="confirm.unsaved_title">Unsaved changes</strong>
+      <button id="unsavedClose" class="icon-btn" title="Close" data-i18n-title="common.close"><svg class="ic" width="14" height="14"><use href="#i-x"/></svg></button>
     </div>
     <div class="schedule-body">
-      <p style="font-size: 0.88rem; line-height: 1.5;">
-        Tienes modificaciones sin guardar en el flujo actual (<b><span id="unsavedFlowName"></span></b>).
+      <p id="unsavedMsg" style="font-size: 0.88rem; line-height: 1.5;">
+        You have unsaved changes in the current flow (<b><span id="unsavedFlowName"></span></b>).
       </p>
-      <p class="hint">¿Deseas guardar los cambios antes de continuar o prefieres descartarlos?</p>
+      <p class="hint" data-i18n="confirm.unsaved_question">Do you want to save the changes before continuing, or discard them?</p>
     </div>
     <div class="sheet-foot">
-      <button id="btnUnsavedCancel" class="btn secondary">Cancelar</button>
+      <button id="btnUnsavedCancel" class="btn secondary" data-i18n="common.cancel">Cancel</button>
       <div style="display: flex; gap: 8px;">
-        <button id="btnUnsavedDiscard" class="btn secondary" style="color: var(--port-err);">Descartar</button>
-        <button id="btnUnsavedSave" class="btn primary">Guardar y continuar</button>
+        <button id="btnUnsavedDiscard" class="btn secondary" style="color: var(--port-err);" data-i18n="confirm.discard">Discard</button>
+        <button id="btnUnsavedSave" class="btn primary" data-i18n="confirm.save_continue">Save and continue</button>
       </div>
     </div>
   </div>
 </div>
 
-<!-- Modal para inspeccionar una ejecución y resultados paso a paso -->
+<!-- Modal to inspect a run and its step-by-step results -->
 <div class="sheet" id="historySheet" hidden>
   <div class="sheet-box history-box">
     <div class="sheet-head">
       <div style="display: flex; align-items: center; gap: 8px;">
         <svg class="ic" width="18" height="18" style="color: var(--primary);"><use href="#i-history"/></svg>
-        <strong>Ejecución: <span id="histRunId" class="mono" style="color: var(--primary);"></span></strong>
+        <strong><span data-i18n="history.run_title">Run:</span> <span id="histRunId" class="mono" style="color: var(--primary);"></span></strong>
       </div>
-      <button id="histClose" class="icon-btn" title="Cerrar"><svg class="ic" width="14" height="14"><use href="#i-x"/></svg></button>
+      <button id="histClose" class="icon-btn" title="Close" data-i18n-title="common.close"><svg class="ic" width="14" height="14"><use href="#i-x"/></svg></button>
     </div>
     <div class="history-meta-bar" id="histMetaBar"></div>
     <div class="history-steps-container" id="histStepsContainer">
@@ -506,46 +518,46 @@
     </div>
     <div class="sheet-foot">
       <div style="display: flex; gap: 8px;">
-        <button id="btnHistHighlightCanvas" class="btn secondary" title="Resaltar el estado de cada nodo en el lienzo visual">
-          <svg class="ic" width="14" height="14"><use href="#i-flow"/></svg> Resaltar en lienzo
+        <button id="btnHistHighlightCanvas" class="btn secondary" title="Highlight each node's status on the visual canvas" data-i18n-title="history.highlight_title">
+          <svg class="ic" width="14" height="14"><use href="#i-flow"/></svg> <span data-i18n="history.highlight">Highlight on canvas</span>
         </button>
-        <button id="btnHistClearHighlight" class="btn secondary" title="Limpiar colores de resaltado">
-          Limpiar resaltado
+        <button id="btnHistClearHighlight" class="btn secondary" title="Clear highlight colors" data-i18n-title="history.clear_highlight_title" data-i18n="history.clear_highlight">
+          Clear highlight
         </button>
       </div>
-      <button id="btnHistCloseSheet" class="btn primary">Cerrar</button>
+      <button id="btnHistCloseSheet" class="btn primary" data-i18n="common.close">Close</button>
     </div>
   </div>
 </div>
 
-<!-- Modal visor de datos completos (no truncados) -->
+<!-- Full (untruncated) data viewer modal -->
 <div class="sheet" id="dataViewerModal" hidden>
   <div class="sheet-box data-viewer-box">
     <div class="sheet-head">
       <div style="display: flex; align-items: center; gap: 8px;">
         <svg class="ic" width="18" height="18" style="color: var(--primary);"><use href="#i-code"/></svg>
-        <strong id="dataViewerTitle">Inspección de Datos Completos</strong>
+        <strong id="dataViewerTitle" data-i18n="viewer.title">Full Data Inspection</strong>
         <span id="dataViewerSubtitle" class="hint" style="font-size: 0.75rem; margin-left: 8px;"></span>
       </div>
       <div style="display: flex; gap: 8px; align-items: center;">
-        <button id="btnCopyDataViewer" class="btn sm secondary" title="Copiar todos los datos al portapapeles">Copiar todo</button>
-        <button id="btnCloseDataViewer" class="icon-btn" title="Cerrar"><svg class="ic" width="14" height="14"><use href="#i-x"/></svg></button>
+        <button id="btnCopyDataViewer" class="btn sm secondary" title="Copy all data to clipboard" data-i18n-title="viewer.copy_title" data-i18n="viewer.copy_all">Copy all</button>
+        <button id="btnCloseDataViewer" class="icon-btn" title="Close" data-i18n-title="common.close"><svg class="ic" width="14" height="14"><use href="#i-x"/></svg></button>
       </div>
     </div>
     <div class="data-viewer-toolbar">
       <div class="btn-group">
-        <button id="btnDataViewFormatted" class="btn sm active">Formateado (JSON / Texto)</button>
-        <button id="btnDataViewRaw" class="btn sm">Texto Plano (Raw)</button>
+        <button id="btnDataViewFormatted" class="btn sm active" data-i18n="viewer.formatted">Formatted (JSON / Text)</button>
+        <button id="btnDataViewRaw" class="btn sm" data-i18n="viewer.raw">Plain Text (Raw)</button>
       </div>
-      <input type="text" id="dataViewerSearch" placeholder="Buscar en el contenido..." class="sm-input" style="width: 220px;" />
+      <input type="text" id="dataViewerSearch" placeholder="Search in content..." data-i18n-placeholder="viewer.search_placeholder" class="sm-input" style="width: 220px;" />
       <span id="dataViewerSize" class="hint" style="font-size: 0.75rem; margin-left: auto;"></span>
     </div>
     <div class="data-viewer-scroll">
       <pre id="dataViewerContent" class="data-viewer-pre"></pre>
     </div>
     <div class="sheet-foot">
-      <span class="hint" style="font-size: 0.72rem;">Datos íntegros y no truncados capturados directamente de la ejecución.</span>
-      <button id="btnCloseDataViewerFoot" class="btn primary">Cerrar</button>
+      <span class="hint" style="font-size: 0.72rem;" data-i18n="viewer.footer">Complete, untruncated data captured directly from the run.</span>
+      <button id="btnCloseDataViewerFoot" class="btn primary" data-i18n="common.close">Close</button>
     </div>
   </div>
 </div>
