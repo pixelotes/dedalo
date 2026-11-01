@@ -10,10 +10,11 @@ import io
 import zipfile
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -53,13 +54,25 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Dédalo Standalone", version="0.1.0", lifespan=lifespan)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Sin CORS: la interfaz se sirve desde el mismo origen que la API. Para evitar DNS rebinding y CSRF
+# se valida la cabecera Host (DEDALO_ALLOWED_HOSTS, separada por comas; admite "*.dominio" y "*").
+ALLOWED_HOSTS = [
+    h.strip() for h in os.environ.get("DEDALO_ALLOWED_HOSTS", "localhost,127.0.0.1,[::1]").split(",") if h.strip()
+]
+SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+
+@app.middleware("http")
+async def same_origin_only(request: Request, call_next):
+    """Rechaza peticiones que modifican estado si el Origin del navegador no coincide con el Host."""
+    origin = request.headers.get("origin")
+    if origin and request.method not in SAFE_METHODS and urlsplit(origin).netloc != request.headers.get("host"):
+        return JSONResponse({"detail": "Origen no permitido"}, status_code=403)
+    return await call_next(request)
+
+
+# Se añade después para que sea la capa más externa y filtre el Host antes que nada.
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
 
 HEADLESS = os.environ.get("DEDALO_HEADLESS", "").strip().lower() in ("1", "true", "yes")
 

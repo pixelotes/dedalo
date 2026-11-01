@@ -181,6 +181,7 @@ Dédalo ejecuta código: los flujos se compilan a Python y nodos como `transform
 
 - **Sin autenticación**: la interfaz web y la API REST (incluidas `/api/run`, `/api/flow` y `/api/secrets`) no piden credenciales. Quien llegue al puerto puede ejecutar código y leer o escribir secretos.
 - **Escucha local**: usa `DEDALO_HOST=127.0.0.1` y accede por túnel SSH, Tailscale o un proxy inverso con autenticación (por ejemplo Caddy o Nginx con OIDC o basic auth). No lo publiques directamente en internet ni lo abras a toda la red local.
+- **Sin CORS y comprobación de host**: la API no envía cabeceras CORS (la interfaz se sirve desde el mismo origen). Se rechazan las peticiones cuyo `Host` no esté en `DEDALO_ALLOWED_HOSTS` (por defecto `localhost,127.0.0.1,[::1]`; admite `*.dominio`) y las peticiones que modifican estado con un `Origin` distinto del `Host`. Si accedes por un dominio, IP de Tailscale o proxy inverso, añádelo a esa variable; el proxy debe conservar la cabecera `Host`. Las llamadas sin `Origin` (curl, webhooks de servidores) no se ven afectadas, pero sí deben usar un `Host` permitido.
 - **Docker**: publica el puerto solo en local (`"127.0.0.1:8080:8080"`). Dentro del contenedor debe seguir escuchando en `0.0.0.0`.
 - **Webhooks**: `/api/webhook/<flujo>` no valida el origen. Si necesitas recibir eventos de internet, expón solo esa ruta a través del proxy y protégela con un token o una lista de IP.
 - **`transform.script`**: el aislamiento es de variables, no un sandbox. No ejecutes flujos importados de terceros sin revisarlos.

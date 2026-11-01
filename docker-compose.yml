@@ -28,6 +28,8 @@ services:
     environment:
       - DEDALO_PORT=8080
       - DEDALO_HOST=0.0.0.0
+      # Dominios con los que se accede a Dédalo (cabecera Host); por defecto solo localhost
+      - DEDALO_ALLOWED_HOSTS=${DEDALO_ALLOWED_HOSTS:-localhost,127.0.0.1,[::1]}
       # Cambiar a 1 para modo headless (desactiva la UI web, mantiene Webhooks y API)
       - DEDALO_HEADLESS=0
       # Optimizaciones de memoria para Python y glibc

@@ -165,3 +165,27 @@ def test_export_and_import_api():
 
 
 
+
+
+def test_no_cors_headers():
+    res = client.get("/api/catalog", headers={"Origin": "https://evil.example"})
+    assert "access-control-allow-origin" not in res.headers
+    pre = client.options(
+        "/api/flow", headers={"Origin": "https://evil.example", "Access-Control-Request-Method": "POST"}
+    )
+    assert "access-control-allow-origin" not in pre.headers
+
+
+def test_host_not_allowed():
+    res = client.get("/api/catalog", headers={"Host": "evil.example"})
+    assert res.status_code == 400
+
+
+def test_cross_origin_post_rejected():
+    res = client.post("/api/compile", json={"graph": {}}, headers={"Origin": "https://evil.example"})
+    assert res.status_code == 403
+
+
+def test_same_origin_post_allowed():
+    res = client.post("/api/compile", json={"graph": {}}, headers={"Origin": "http://testserver"})
+    assert res.status_code != 403
