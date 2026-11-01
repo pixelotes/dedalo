@@ -35,8 +35,20 @@ def get_db(db_path: Path | str | None = None) -> sqlite3.Connection:
     return conn
 
 
+_initialized: set[str] = set()
+
+
 def init_db(db_path: Path | str | None = None) -> None:
-    """Inicializa las tablas e índices si no existen y migra columnas nuevas."""
+    """Inicializa las tablas e índices si no existen y migra columnas nuevas (una vez por proceso y base)."""
+    target = Path(db_path) if db_path else DB_PATH
+    key = str(target)
+    if key in _initialized and target.exists():
+        return
+    _init_schema(db_path)
+    _initialized.add(key)
+
+
+def _init_schema(db_path: Path | str | None = None) -> None:
     with get_db(db_path) as conn:
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS runs (

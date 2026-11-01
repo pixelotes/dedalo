@@ -7,6 +7,7 @@ Permite ejecutar periódicamente los flujos activos que tengan una expresión cr
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -111,11 +112,18 @@ async def trigger_flow(flow_id: str, trigger_type: str = "manual") -> dict[str, 
 class Scheduler:
     """Motor de planificación periódica en segundo plano."""
 
-    def __init__(self, check_interval: float = 30.0, purge_interval: float = 86400.0):
+    def __init__(self, check_interval: float = 30.0, purge_interval: float = 86400.0, max_concurrent: int | None = None):
         self.check_interval = check_interval
         self.purge_interval = purge_interval
+        if max_concurrent is None:
+            try:
+                max_concurrent = int(os.environ.get("DEDALO_MAX_CONCURRENT_FLOWS", "2"))
+            except ValueError:
+                max_concurrent = 2
+        self._sem = asyncio.Semaphore(max(1, max_concurrent))
         self._running = False
         self._task: asyncio.Task | None = None
+        self._runs: set[asyncio.Task] = set()
         self._last_purge: float = 0.0
 
     async def start(self) -> None:
@@ -136,6 +144,25 @@ class Scheduler:
                 await self._task
             except asyncio.CancelledError:
                 pass
+        for t in list(self._runs):
+            t.cancel()
+        if self._runs:
+            await asyncio.gather(*self._runs, return_exceptions=True)
+
+    async def _run_scheduled(self, fid: str) -> None:
+        """Ejecuta un flujo planificado respetando el límite de concurrencia."""
+        async with self._sem:
+            try:
+                res = await asyncio.to_thread(run_flow_sync, fid, "schedule")
+                RUN_HISTORY[fid]["status"] = "ok"
+                RUN_HISTORY[fid]["duration"] = res["duration"]
+                RUN_HISTORY[fid]["last_success"] = time.time()
+                RUN_HISTORY[fid]["run_id"] = res.get("run_id")
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                RUN_HISTORY[fid]["status"] = "error"
+                RUN_HISTORY[fid]["error"] = str(exc)
 
     async def _loop(self) -> None:
         while self._running:
@@ -160,21 +187,17 @@ class Scheduler:
                     fid = fl["id"]
                     hist = RUN_HISTORY.get(fid, {})
                     last_run = hist.get("last_run")
+                    if hist.get("status") == "running":
+                        continue  # ya en ejecución: no solapar
 
                     if _should_run(sched, last_run):
                         RUN_HISTORY[fid] = {
                             "last_run": time.time(),
                             "status": "running",
                         }
-                        try:
-                            res = await asyncio.to_thread(run_flow_sync, fid, "schedule")
-                            RUN_HISTORY[fid]["status"] = "ok"
-                            RUN_HISTORY[fid]["duration"] = res["duration"]
-                            RUN_HISTORY[fid]["last_success"] = time.time()
-                            RUN_HISTORY[fid]["run_id"] = res.get("run_id")
-                        except Exception as exc:
-                            RUN_HISTORY[fid]["status"] = "error"
-                            RUN_HISTORY[fid]["error"] = str(exc)
+                        task = asyncio.create_task(self._run_scheduled(fid))
+                        self._runs.add(task)
+                        task.add_done_callback(self._runs.discard)
             except Exception:
                 pass
 

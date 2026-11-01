@@ -7,17 +7,14 @@ Los scripts compilados invocan directamente estas funciones sin sobrecarga de ru
 from __future__ import annotations
 
 import base64
-import csv
 import ctypes
 import datetime
-import difflib
 import email
 import email.header
 import gc
 import gzip
 import hashlib
 import html
-import imaplib
 import json
 import math
 import os
@@ -25,37 +22,41 @@ import random
 import re
 import socket
 import ssl
-import statistics
 from collections import Counter, defaultdict
 import shutil
-import smtplib
 import sqlite3
 import subprocess
 import sys
 import time
 import urllib.parse
-import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
 from dataclasses import dataclass, field
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Any, Callable
 
 import httpx
 
+# csv, difflib, imaplib, smtplib, statistics, xml.etree y email.mime se importan al usarse (~80 ms y ~5 MB de arranque)
 from dedalo import llms, secrets
 from dedalo import sandbox as sbx
 
 
+_malloc_trim: Any = None
+
+
 def compact_memory() -> None:
     """Fuerza la recolección de basura de Python y solicita a glibc liberar heap al SO."""
+    global _malloc_trim
     gc.collect()
-    if sys.platform.startswith("linux"):
-        try:
-            ctypes.CDLL("libc.so.6").malloc_trim(0)
-        except Exception:
-            pass
+    if _malloc_trim is None:
+        _malloc_trim = False
+        if sys.platform.startswith("linux"):
+            try:
+                _malloc_trim = ctypes.CDLL("libc.so.6").malloc_trim
+            except Exception:
+                pass
+    if _malloc_trim:
+        _malloc_trim(0)
 
 DEFAULT_TIMEOUT = 20.0
 DEFAULT_AGENT_TOKENS = 2048
@@ -375,6 +376,8 @@ def rss(
     xml_text = fetch_res.data if isinstance(fetch_res.data, str) else json.dumps(fetch_res.data)
 
     try:
+        import xml.etree.ElementTree as ET
+
         root = ET.fromstring(xml_text)
     except Exception as exc:
         return NodeResult("error", error=f"XML RSS inválido: {exc}")
@@ -467,6 +470,8 @@ def csv_file(
     try:
         delim = delimiter.replace("\\t", "\t") if delimiter else ","
         with p.open(encoding=encoding or "utf-8", newline="") as f:
+            import csv
+
             reader = csv.DictReader(f, delimiter=delim)
             return NodeResult("ok", data=list(reader))
     except Exception as exc:
@@ -3979,6 +3984,9 @@ def email_smtp(
     password = secrets.get(secret) if secret else ""
     sender = from_addr.strip() or user.strip()
 
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+
     msg = MIMEMultipart()
     msg["From"] = sender
     msg["To"] = to_addr.strip()
@@ -3987,6 +3995,8 @@ def email_smtp(
     msg.attach(MIMEText(body, subtype, "utf-8"))
 
     try:
+        import smtplib
+
         p_num = int(port) if str(port).isdigit() else 587
         if p_num == 465:
             server = smtplib.SMTP_SSL(host, p_num, timeout=15.0)
@@ -4352,6 +4362,8 @@ def fuzzy_dedup(
     def _calc_similarity(s1: str, s2: str) -> float:
         if s1 == s2:
             return 1.0
+        import difflib
+
         ratio = difflib.SequenceMatcher(None, s1, s2).ratio()
         w1, w2 = set(re.findall(r"\w+", s1)), set(re.findall(r"\w+", s2))
         if w1 and w2:
@@ -4441,6 +4453,8 @@ def aggregate(
     def _calc_metrics(vals: list[float], op: str) -> Any:
         if not vals:
             return 0.0 if op != "summary" else {}
+        import statistics
+
         op_norm = (op or "avg").lower().strip()
         if op_norm == "count":
             return len(vals)
@@ -5152,6 +5166,8 @@ def imap_read(
 
     max_items = max(1, int(limit or 5))
     try:
+        import imaplib
+
         mail = imaplib.IMAP4_SSL(h, int(port or 993), timeout=float(timeout))
         mail.login(u, pwd)
         mail.select(folder or "INBOX")
@@ -5431,6 +5447,8 @@ def sitemap_read(
             urls_found: list[dict[str, str]] = []
             sub_sitemaps: list[str] = []
             try:
+                import xml.etree.ElementTree as ET
+
                 root = ET.fromstring(xml_text)
             except Exception:
                 return urls_found, sub_sitemaps

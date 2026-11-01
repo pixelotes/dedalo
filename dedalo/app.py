@@ -2,29 +2,44 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
+import logging
 import os
 import time
 import io
 import zipfile
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from dedalo import compiler, history, llms, runtime, sandbox, scheduler, secrets, store, templates
+from dedalo.security import (
+    BodyLimitMiddleware,
+    SameOriginMiddleware,
+    SecurityHeadersMiddleware,
+    webhook_token_ok,
+)
+
+log = logging.getLogger("dedalo.app")
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 CONFIG_FILE = Path("data/config.json")
 
 sched = scheduler.Scheduler()
+
+
+def _internal_error(msg: str, exc: Exception) -> HTTPException:
+    """Registra la excepción en el log y devuelve un 500 sin detalles internos (rutas, trazas)."""
+    log.error("%s: %s", msg, exc, exc_info=exc)
+    return HTTPException(status_code=500, detail=f"{msg} (consulta los logs del servidor)")
 
 
 @contextlib.asynccontextmanager
@@ -64,30 +79,13 @@ app = FastAPI(title="Dédalo Standalone", version="0.1.0", lifespan=lifespan)
 ALLOWED_HOSTS = [
     h.strip() for h in os.environ.get("DEDALO_ALLOWED_HOSTS", "localhost,127.0.0.1,[::1]").split(",") if h.strip()
 ]
-SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+MAX_BODY_BYTES = int(float(os.environ.get("DEDALO_MAX_BODY_MB", "25")) * 1024 * 1024)
 
-
-class SameOriginMiddleware:
-    """ASGI puro (sin BaseHTTPMiddleware, para no añadir latencia): rechaza con 403 las peticiones que
-    modifican estado si el Origin del navegador no coincide con el Host."""
-
-    def __init__(self, app):
-        self.app = app
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] == "http" and scope["method"] not in SAFE_METHODS:
-            headers = {k: v for k, v in scope["headers"] if k in (b"origin", b"host")}
-            origin = headers.get(b"origin")
-            if origin and urlsplit(origin.decode("latin-1")).netloc != headers.get(b"host", b"").decode("latin-1"):
-                await JSONResponse({"detail": "Origen no permitido"}, status_code=403)(scope, receive, send)
-                return
-        await self.app(scope, receive, send)
-
-
+# Orden: el último añadido es la capa más externa (cabeceras > host > límite de cuerpo > mismo origen).
 app.add_middleware(SameOriginMiddleware)
-
-# Se añade después para que sea la capa más externa y filtre el Host antes que nada.
+app.add_middleware(BodyLimitMiddleware, max_bytes=MAX_BODY_BYTES)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
+app.add_middleware(SecurityHeadersMiddleware)
 
 HEADLESS = os.environ.get("DEDALO_HEADLESS", "").strip().lower() in ("1", "true", "yes")
 
@@ -386,7 +384,7 @@ def save_flow_endpoint(req: FlowSaveRequest) -> dict[str, Any]:
     except compiler.GraphError as exc:
         raise HTTPException(status_code=400, detail=exc.errors)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Error al guardar flujo: {exc}")
+        raise _internal_error("Error al guardar flujo", exc)
 
 
 @app.post("/api/flow/schedule")
@@ -441,7 +439,7 @@ def export_flow_endpoint(flow_id: str = "", id: str = "") -> Response:
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Flujo «{target_id}» no encontrado.")
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Error exportando flujo: {exc}")
+        raise _internal_error("Error exportando flujo", exc)
 
 
 @app.get("/api/flow/export-py")
@@ -461,7 +459,7 @@ def export_flow_py_endpoint(flow_id: str = "", id: str = "") -> Response:
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Flujo «{target_id}» no encontrado.")
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Error exportando script del flujo: {exc}")
+        raise _internal_error("Error exportando script del flujo", exc)
 
 
 
@@ -477,7 +475,7 @@ def export_all_flows_endpoint() -> Response:
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Error exportando backup de flujos: {exc}")
+        raise _internal_error("Error exportando backup de flujos", exc)
 
 
 @app.post("/api/flows/import")
@@ -513,7 +511,7 @@ async def import_flows_endpoint(request: Request) -> dict[str, Any]:
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Error al importar flujos: {exc}")
+        raise _internal_error("Error al importar flujos", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -530,7 +528,7 @@ def compile_endpoint(req: CompileRequest) -> dict[str, Any]:
     except compiler.GraphError as exc:
         raise HTTPException(status_code=400, detail=exc.errors)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Error al compilar: {exc}")
+        raise _internal_error("Error al compilar", exc)
 
 
 @app.post("/api/run")
@@ -755,28 +753,8 @@ def flow_step_endpoint(req: FlowStepRequest) -> dict[str, Any]:
         runtime.compact_memory()
 
 
-@app.api_route("/api/webhook/{flow_id}", methods=["GET", "POST", "PUT"])
-async def webhook_endpoint(flow_id: str, request: Request) -> dict[str, Any]:
-    """Recibe una llamada externa para disparar un flujo por webhook."""
-    flow_data = store.load_flow(flow_id)
-    if not flow_data:
-        raise HTTPException(status_code=404, detail=f"Flujo «{flow_id}» no encontrado")
-
-    raw_body = await request.body()
-    body_data: Any = None
-    if raw_body:
-        try:
-            body_data = json.loads(raw_body)
-        except Exception:
-            body_data = raw_body.decode("utf-8", errors="replace")
-    elif request.query_params:
-        body_data = dict(request.query_params)
-    else:
-        body_data = {}
-
-    req_headers = dict(request.headers)
-
-    graph_dict = flow_data.get("graph") or {}
+def _run_webhook_sync(flow_id: str, graph_dict: dict[str, Any], ctx: scheduler.FlowContext) -> dict[str, Any]:
+    """Compila y ejecuta el flujo del webhook. Corre en un hilo para no bloquear el event loop."""
     try:
         graph = compiler.Graph.from_dict(graph_dict)
         source = compiler.compile(graph)
@@ -785,12 +763,6 @@ async def webhook_endpoint(flow_id: str, request: Request) -> dict[str, Any]:
 
     flow_name = graph.name or flow_id
     run_id = history.record_run_start(flow_id=flow_id, flow_name=flow_name, trigger_type="webhook")
-
-    ctx = scheduler.FlowContext(
-        flow_name=flow_id,
-        payload=body_data,
-        headers=req_headers,
-    )
     ns: dict[str, Any] = {}
     t0 = time.time()
     try:
@@ -826,6 +798,48 @@ async def webhook_endpoint(flow_id: str, request: Request) -> dict[str, Any]:
         runtime.compact_memory()
 
 
+@app.api_route("/api/webhook/{flow_id}", methods=["GET", "POST", "PUT"])
+async def webhook_endpoint(flow_id: str, request: Request) -> dict[str, Any]:
+    """Recibe una llamada externa para disparar un flujo por webhook."""
+    req_headers = dict(request.headers)
+    query = dict(request.query_params)
+
+    # Token opcional (DEDALO_WEBHOOK_TOKEN): sin él, el comportamiento es el de siempre.
+    expected = os.environ.get("DEDALO_WEBHOOK_TOKEN", "")
+    if expected:
+        ok, source = webhook_token_ok(request.headers, request.query_params, expected)
+        if not ok:
+            raise HTTPException(status_code=401, detail="Token de webhook no válido", headers={"WWW-Authenticate": "Bearer"})
+        # El token no debe llegar al flujo ni al historial
+        if source == "query":
+            query.pop("token", None)
+        else:
+            req_headers.pop(source, None)
+
+    flow_data = store.load_flow(flow_id)
+    if not flow_data:
+        raise HTTPException(status_code=404, detail=f"Flujo «{flow_id}» no encontrado")
+
+    raw_body = await request.body()
+    body_data: Any = None
+    if raw_body:
+        try:
+            body_data = json.loads(raw_body)
+        except Exception:
+            body_data = raw_body.decode("utf-8", errors="replace")
+    elif query:
+        body_data = query
+    else:
+        body_data = {}
+
+    ctx = scheduler.FlowContext(
+        flow_name=flow_id,
+        payload=body_data,
+        headers=req_headers,
+    )
+    return await asyncio.to_thread(_run_webhook_sync, flow_id, flow_data.get("graph") or {}, ctx)
+
+
 # ---------------------------------------------------------------------------
 # API: Historial de Ejecuciones
 # ---------------------------------------------------------------------------
@@ -847,7 +861,7 @@ def get_history_run_endpoint(id: str = Query(...)) -> dict[str, Any]:
 
 
 @app.post("/api/history/purge")
-def purge_history_endpoint(days: int = 30) -> dict[str, Any]:
+def purge_history_endpoint(days: int = Query(30, ge=1, le=3650)) -> dict[str, Any]:
     """Purga ejecuciones con antigüedad superior a los días especificados (por defecto 30)."""
     deleted = history.purge_older_than(days=days)
     return {"status": "ok", "deleted": deleted, "days": days}

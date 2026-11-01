@@ -58,32 +58,61 @@ def _stamped_hash(source: str) -> str | None:
     return match.group(1) if match else None
 
 
+# id -> ((mtime_ns, tamaño) del .json y del .meta.json, entrada). Evita releer y parsear cada flujo
+# en cada llamada; solo se hace un stat por fichero.
+_LIST_CACHE: dict[str, tuple[tuple[tuple[int, int], tuple[int, int]], dict[str, Any]]] = {}
+
+
+def _stamp_of(path: Path) -> tuple[int, int]:
+    """(mtime_ns, tamaño); el tamaño cubre sistemas de ficheros con marcas de tiempo gruesas."""
+    try:
+        st = path.stat()
+        return st.st_mtime_ns, st.st_size
+    except OSError:
+        return -1, -1
+
+
 def list_flows() -> list[dict[str, Any]]:
     """Devuelve la lista de todos los flujos guardados con sus metadatos."""
     if not FLOWS_DIR.is_dir():
+        _LIST_CACHE.clear()
         return []
 
     flows = []
+    seen: set[str] = set()
     for p in sorted(FLOWS_DIR.glob("*.json")):
         if p.name.endswith(".meta.json"):
             continue
         flow_id = p.stem
         meta_file = FLOWS_DIR / f"{flow_id}.meta.json"
+        stamp = (_stamp_of(p), _stamp_of(meta_file))
+        seen.add(flow_id)
+
+        cached = _LIST_CACHE.get(flow_id)
+        if cached and cached[0] == stamp:
+            flows.append(dict(cached[1]))  # copia: los llamadores añaden campos (last_run, next_run)
+            continue
+
         meta = {}
-        if meta_file.is_file():
+        if stamp[1][0] != -1:
             try:
                 meta = json.loads(meta_file.read_text(encoding="utf-8"))
             except Exception:
                 pass
 
-        flows.append({
+        entry = {
             "id": flow_id,
             "name": meta.get("name", flow_id),
             "description": meta.get("description", ""),
             "schedule": meta.get("schedule", ""),
             "enabled": meta.get("enabled", True),
-            "updated_at": meta.get("updated_at", int(p.stat().st_mtime)),
-        })
+            "updated_at": meta.get("updated_at", int(stamp[0][0] / 1e9)),
+        }
+        _LIST_CACHE[flow_id] = (stamp, entry)
+        flows.append(dict(entry))
+
+    for stale in set(_LIST_CACHE) - seen:
+        del _LIST_CACHE[stale]
     return flows
 
 

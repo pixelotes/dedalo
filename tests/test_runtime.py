@@ -930,7 +930,7 @@ def test_imap_read_mocked(monkeypatch):
 
     from dedalo import secrets
     monkeypatch.setattr(secrets, "get", lambda name: "fake_pwd" if name == "mi_correo" else "")
-    monkeypatch.setattr(runtime.imaplib, "IMAP4_SSL", FakeIMAP)
+    monkeypatch.setattr("imaplib.IMAP4_SSL", FakeIMAP)
 
     res = runtime.imap_read(None, [], host="imap.example.com", username="user@example.com", secret="mi_correo")
     assert res.ok
