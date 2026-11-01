@@ -6,31 +6,31 @@ services:
       args:
         UID: 1000
         GID: 1000
-        # Instala bubblewrap en la imagen (aislamiento de comandos); 0 para omitirlo
+        # Installs bubblewrap in the image (command isolation); 0 to omit it
         WITH_BWRAP: 1
     image: dedalo:latest
     container_name: dedalo
     restart: unless-stopped
 
     # --------------------------------------------------------------------------
-    # Seguridad reforzada (Security Hardening)
+    # Security Hardening
     # --------------------------------------------------------------------------
-    # Bloquea la elevación de privilegios de subprocesos (suid/guid)
+    # Blocks privilege escalation of subprocesses (suid/guid)
     security_opt:
       - no-new-privileges:true
-    # Elimina todas las capacidades Linux innecesarias
+    # Drops all unnecessary Linux capabilities
     cap_drop:
       - ALL
-    # Ejecuta explícitamente con UID/GID no privilegiado
+    # Explicitly runs with an unprivileged UID/GID
     user: "1000:1000"
-    # Sistema de ficheros raíz de solo lectura: solo se escribe en data/ y /tmp
+    # Read-only root filesystem: writes only go to data/ and /tmp
     read_only: true
-    # Aislamiento de comandos con bubblewrap (DEDALO_SANDBOX=auto|on). Necesita user namespaces, que
-    # el perfil por defecto de Docker bloquea; descomenta estas tres líneas solo si lo activas:
+    # Command isolation with bubblewrap (DEDALO_SANDBOX=auto|on). It needs user namespaces, which
+    # Docker's default profile blocks; uncomment these three lines only if you enable it:
     #   - seccomp=unconfined
     #   - apparmor=unconfined
     #   - systempaths=unconfined
-    # (bajo `security_opt`, junto a no-new-privileges). Sin ellas, `auto` ejecuta sin aislar y `on` falla.
+    # (under `security_opt`, next to no-new-privileges). Without them, `auto` runs without isolation and `on` fails.
 
     ports:
       - "8080:8080"
@@ -38,20 +38,20 @@ services:
     environment:
       - DEDALO_PORT=8080
       - DEDALO_HOST=0.0.0.0
-      # Dominios con los que se accede a Dédalo (cabecera Host); por defecto solo localhost
+      # Domains used to access Dédalo (Host header); by default only localhost
       - DEDALO_ALLOWED_HOSTS=${DEDALO_ALLOWED_HOSTS:-localhost,127.0.0.1,[::1]}
-      # Cambiar a 1 para modo headless (desactiva la UI web, mantiene Webhooks y API)
+      # Set to 1 for headless mode (disables the web UI, keeps Webhooks and API)
       - DEDALO_HEADLESS=0
-      # Aislamiento de comandos: off | auto | on (vacío = por defecto: off en nodos, auto en transform.coder)
+      # Command isolation: off | auto | on (empty = default: off in nodes, auto in transform.coder)
       - DEDALO_SANDBOX=${DEDALO_SANDBOX:-}
-      # Optimizaciones de memoria para Python y glibc
+      # Memory optimizations for Python and glibc
       - PYTHONOPTIMIZE=1
       - MALLOC_TRIM_THRESHOLD_=65536
 
     volumes:
-      # Persistencia de flujos, historial SQLite, secretos y estado
+      # Persistence of flows, SQLite history, secrets and state
       - ./data:/app/data
-      # Espacio temporal aislado en memoria RAM para scripts efímeros
+      # Isolated temporary space in RAM for ephemeral scripts
       - type: tmpfs
         target: /tmp
         tmpfs:
@@ -59,16 +59,16 @@ services:
           mode: 1777
 
       # ------------------------------------------------------------------------
-      # NOTA sobre métricas de CPU, temperatura y espacio:
-      # Al ejecutarse dentro de un contenedor Docker aislado, los nodos de
-      # monitorización del sistema (input.pi_health) leen el entorno del contenedor.
-      # Si deseas monitorizar el host real (Raspberry Pi/Linux), puedes descomentar:
+      # NOTE on CPU, temperature and disk metrics:
+      # When running inside an isolated Docker container, the system
+      # monitoring nodes (input.pi_health) read the container's environment.
+      # If you want to monitor the real host (Raspberry Pi/Linux), you can uncomment:
       # - /sys/class/thermal:/sys/class/thermal:ro
       # - /proc/stat:/proc/stat:ro
       # ------------------------------------------------------------------------
 
     # --------------------------------------------------------------------------
-    # Control de recursos (Alineado con el diseño de bajo consumo de Dédalo)
+    # Resource control (Aligned with Dédalo's low-footprint design)
     # --------------------------------------------------------------------------
     deploy:
       resources:
@@ -79,7 +79,7 @@ services:
           memory: 32M
 
     # --------------------------------------------------------------------------
-    # Rotación de logs para proteger la tarjeta SD / disco
+    # Log rotation to protect the SD card / disk
     # --------------------------------------------------------------------------
     logging:
       driver: "json-file"

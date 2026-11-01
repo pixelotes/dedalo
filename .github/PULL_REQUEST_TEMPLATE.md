@@ -1,15 +1,15 @@
-## Qué cambia
+## What changes
 
-<!-- Resumen breve y motivo. Enlaza el issue si existe. -->
+<!-- Brief summary and motivation. Link the issue if there is one. -->
 
-## Cómo se ha probado
+## How it was tested
 
 - [ ] `ruff check .`
 - [ ] `pytest -v`
-- [ ] Probado a mano en la interfaz (si aplica)
+- [ ] Tested manually in the UI (if applicable)
 
-## Lista de comprobación
+## Checklist
 
-- [ ] Incluye pruebas para el cambio de comportamiento
-- [ ] Documentación actualizada (`README.md` / `doc/`)
-- [ ] Sin secretos ni datos de `data/`
+- [ ] Includes tests for the behavior change
+- [ ] Documentation updated (`README.md` / `doc/`)
+- [ ] No secrets or `data/` contents

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Para cualquier proceso de Dédalo corriendo en local
+# Stops any Dédalo process running locally
 #
 
 set -euo pipefail
@@ -9,9 +9,9 @@ PORT="${DEDALO_PORT:-8080}"
 PIDS=$(lsof -ti :"$PORT" || true)
 
 if [ -n "$PIDS" ]; then
-  echo "Deteniendo Dédalo en puerto $PORT (PID: $PIDS)..."
+  echo "Stopping Dédalo on port $PORT (PID: $PIDS)..."
   kill $PIDS
-  echo "Dédalo detenido."
+  echo "Dédalo stopped."
 else
-  echo "No hay ningún proceso escuchando en el puerto $PORT."
+  echo "No process is listening on port $PORT."
 fi

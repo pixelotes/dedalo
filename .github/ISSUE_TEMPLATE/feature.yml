@@ -1,20 +1,20 @@
-name: Propuesta
-description: Sugiere una mejora o un nodo nuevo
+name: Feature request
+description: Suggest an improvement or a new node
 labels: [enhancement]
 body:
   - type: textarea
     id: problema
     attributes:
-      label: Problema o necesidad
+      label: Problem or need
     validations:
       required: true
   - type: textarea
     id: propuesta
     attributes:
-      label: Propuesta
+      label: Proposal
     validations:
       required: true
   - type: textarea
     id: alternativas
     attributes:
-      label: Alternativas consideradas
+      label: Alternatives considered

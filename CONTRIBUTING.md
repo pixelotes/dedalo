@@ -1,8 +1,8 @@
-# Contribuir a Dédalo
+# Contributing to Dédalo
 
-Gracias por tu interés. Antes de abrir un PR grande, abre un issue para comentar la idea.
+Thanks for your interest. Before opening a large PR, open an issue to discuss the idea.
 
-## Entorno de desarrollo
+## Development environment
 
 ```bash
 python -m venv .venv
@@ -10,29 +10,29 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-Requiere Python 3.11 o superior.
+Requires Python 3.11 or later.
 
-## Antes de enviar un cambio
+## Before submitting a change
 
 ```bash
 ruff check .
 pytest -v
 ```
 
-CI ejecuta lo mismo (más escaneo de secretos y vulnerabilidades); el PR debe pasar en verde.
+CI runs the same checks (plus secret and vulnerability scanning); the PR must pass.
 
-## Convenciones
+## Conventions
 
-- Código y mensajes de commit en español, como el resto del repositorio.
-- Mantén el núcleo ligero: evita añadir dependencias salvo que sean imprescindibles.
-- Los cambios de comportamiento llevan su prueba en `tests/`.
-- Si cambias nodos, API o variables de entorno, actualiza `README.md` y `doc/`.
-- Nunca incluyas secretos, claves ni contenido de `data/` en commits o capturas.
+- Code, documentation and commit messages in English (Spanish is supported as a UI and message language).
+- Keep the core lightweight: avoid adding dependencies unless they are essential.
+- Behavior changes come with a test in `tests/`.
+- If you change nodes, the API or environment variables, update `README.md` and `doc/`.
+- Never include secrets, keys or the contents of `data/` in commits or screenshots.
 
-## Vulnerabilidades
+## Vulnerabilities
 
-No uses issues públicos. Sigue [SECURITY.md](SECURITY.md).
+Do not use public issues. Follow [SECURITY.md](SECURITY.md).
 
-## Licencia
+## License
 
-Al contribuir aceptas que tu aportación se distribuya bajo la [Elastic License 2.0](LICENSE) del proyecto.
+By contributing you agree that your contribution will be distributed under the project's [Elastic License 2.0](LICENSE).

@@ -1,34 +1,34 @@
-# Política de seguridad
+# Security Policy
 
-## Versiones soportadas
+## Supported versions
 
-Solo se mantiene la rama `main`. Las correcciones de seguridad no se portan a versiones anteriores.
+Only the `main` branch is maintained. Security fixes are not backported to earlier versions.
 
-## Reportar una vulnerabilidad
+## Reporting a vulnerability
 
-No abras un issue público. Usa el reporte privado de GitHub:
-**Security → Report a vulnerability** en este repositorio.
+Do not open a public issue. Use GitHub's private reporting:
+**Security → Report a vulnerability** in this repository.
 
-Incluye, si puedes:
+If you can, include:
 
-- Versión o commit afectado y forma de despliegue (`run.sh`, Docker, systemd).
-- Pasos para reproducirlo o una prueba de concepto.
-- Impacto que estimas.
+- Affected version or commit and deployment method (`run.sh`, Docker, systemd).
+- Steps to reproduce it or a proof of concept.
+- The impact you estimate.
 
-Respuesta inicial en un plazo de 7 días. Coordinaremos la publicación del aviso cuando haya corrección.
+Initial response within 7 days. We will coordinate publication of the advisory once a fix is available.
 
-## Modelo de amenazas
+## Threat model
 
-Dédalo es una herramienta de automatización autoalojada que **ejecuta código** con los permisos del usuario que la ejecuta y **no incluye autenticación**. Está diseñada para escuchar en `localhost` o en una red privada de confianza (Tailscale, VPN, túnel SSH, proxy inverso con autenticación).
+Dédalo is a self-hosted automation tool that **runs code** with the permissions of the user running it and **does not include authentication**. It is designed to listen on `localhost` or on a trusted private network (Tailscale, VPN, SSH tunnel, reverse proxy with authentication).
 
-Fuera de alcance:
+Out of scope:
 
-- Ejecución de código por quien ya tiene acceso a la interfaz o a la API: es la funcionalidad prevista.
-- Despliegues expuestos a internet sin un proxy con autenticación.
-- Flujos importados de terceros que ejecuten código malicioso.
+- Code execution by someone who already has access to the interface or the API: this is the intended functionality.
+- Deployments exposed to the internet without an authenticating proxy.
+- Imported third-party flows that run malicious code.
 
-Dentro de alcance, entre otros:
+In scope, among others:
 
-- Ejecución de código o lectura de secretos sin acceso a la interfaz (por ejemplo, desde otra web visitada en el navegador, desde el contenido procesado por un flujo o mediante prompt injection hacia `transform.agent` o `transform.coder`).
-- Escritura o lectura de ficheros fuera de `data/`.
-- Exposición de secretos en logs, historial o exportaciones.
+- Code execution or secret disclosure without access to the interface (for example, from another website visited in the browser, from content processed by a flow, or through prompt injection targeting `transform.agent` or `transform.coder`).
+- Writing or reading files outside `data/`.
+- Exposure of secrets in logs, history or exports.

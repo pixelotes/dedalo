@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Vulnerabilidad de seguridad
+  - name: Security vulnerability
     url: https://github.com/pixelotes/dedalo/security/advisories/new
-    about: Repórtala en privado, no en un issue público.
+    about: Report it privately, not in a public issue.
