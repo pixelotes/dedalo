@@ -62,14 +62,24 @@ ALLOWED_HOSTS = [
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 
-@app.middleware("http")
-async def same_origin_only(request: Request, call_next):
-    """Rechaza peticiones que modifican estado si el Origin del navegador no coincide con el Host."""
-    origin = request.headers.get("origin")
-    if origin and request.method not in SAFE_METHODS and urlsplit(origin).netloc != request.headers.get("host"):
-        return JSONResponse({"detail": "Origen no permitido"}, status_code=403)
-    return await call_next(request)
+class SameOriginMiddleware:
+    """ASGI puro (sin BaseHTTPMiddleware, para no añadir latencia): rechaza con 403 las peticiones que
+    modifican estado si el Origin del navegador no coincide con el Host."""
 
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope["method"] not in SAFE_METHODS:
+            headers = {k: v for k, v in scope["headers"] if k in (b"origin", b"host")}
+            origin = headers.get(b"origin")
+            if origin and urlsplit(origin.decode("latin-1")).netloc != headers.get(b"host", b"").decode("latin-1"):
+                await JSONResponse({"detail": "Origen no permitido"}, status_code=403)(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(SameOriginMiddleware)
 
 # Se añade después para que sea la capa más externa y filtre el Host antes que nada.
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
