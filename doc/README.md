@@ -9,7 +9,7 @@ Welcome to the technical documentation and architecture guide for **Dédalo**, t
 1. **[Philosophy and Architecture](philosophy_and_architecture.md)**
    - The project's mission and motivation.
    - Why we compile to plain Python instead of using reactive engines or heavy queues.
-   - Key technical decisions: no frontend bundlers, a deterministic execution model, on-disk secret management (`0600`) and skip sentinels (`SKIPPED`).
+   - Key technical decisions: no frontend bundlers, a deterministic execution model, secrets encrypted at rest and skip sentinels (`SKIPPED`).
 
 2. **[Complete Node Catalog](node_catalog.md)**
    - Exhaustive catalog of the **72 available nodes**:

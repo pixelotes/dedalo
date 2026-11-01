@@ -20,7 +20,7 @@ This document summarizes the current technical state of **Dédalo Standalone**, 
 - **Change tracking**: Detection of unsaved changes with a confirmation modal before switching flows.
 - **Active Memory Optimization**: Periodic heap compaction with forced garbage collection and returning pages to the OS via `malloc_trim(0)`.
 - **Anti-bot Evasion Without a Heavy Browser**: Dual HTTP engine with `curl_cffi` (Chrome/Safari/Firefox TLS/HTTP/2 impersonation and User-Agents) and transparent fallback to `httpx`.
-- **Test suite**: 104 automated tests passing 100% in `pytest`.
+- **Test suite**: 196 automated tests passing 100% in `pytest`.
 
 ---
 
@@ -45,7 +45,7 @@ Despite the separation, Dédalo maintains data-level and conceptual-model compat
 | Aspect | Tomos (Internal module) | Dédalo Standalone |
 | :--- | :--- | :--- |
 | **Server** | Integrated into the Tomos web app | Standalone FastAPI server on a configurable port (8080) |
-| **Secret Management** | Inherits environment variables from Tomos | Own encrypted/protected store in `data/secrets.json` with `0600` permissions |
+| **Secret Management** | Inherits environment variables from Tomos | Own store in `data/secrets/` encrypted at rest with Fernet (master key from `DEDALO_MASTER_KEY` or `data/master.key`), `0600` permissions; optional external stores (see [external_secrets_evaluation.md](external_secrets_evaluation.md)) |
 | **History** | Not persisted or in ephemeral memory | SQLite with WAL (`data/history.db`) and periodic 30-day purge |
 | **Canvas** | Static position with container scroll | Fluid panning by dragging the background and free zoom with controls |
 | **Node Palette** | Basic selection by click | Click or native drag (`HTML5 Drag & Drop`) to the exact spot |
@@ -74,7 +74,7 @@ Despite the separation, Dédalo maintains data-level and conceptual-model compat
    - A background thread checks every 24 hours and purges records older than 30 days.
 
 5. **Reactive Triggers via Webhooks**:
-   Any flow that starts with an `input.webhook` node is immediately exposed at the `/api/webhook/{flow_id}` endpoint. Upon receiving an HTTP request (POST, GET or PUT), the server compiles and runs the flow in the background, passing the body, headers and query parameters as input data.
+   Any flow that starts with an `input.webhook` node is immediately exposed at the `/api/webhook/{flow_id}` endpoint. Upon receiving an HTTP request (POST, GET or PUT), the server compiles and runs the flow in the background, passing the body, headers and query parameters as input data. The flow runs in a worker thread (it never blocks the server), and an optional shared token (`DEDALO_WEBHOOK_TOKEN`) can be required.
 
 ---
 
@@ -141,7 +141,7 @@ The improvements made on top of the standalone base are detailed below:
 
 ### C. Expanded Node Catalog (14 New Ultralight Types)
 Without adding heavy dependencies and taking advantage of Python's standard library:
-- **Inputs**: `input.webhook` (HTTP trigger), `input.sqlite_query` (local SQL queries), `input.command` (controlled shell execution), `input.pi_health` (Raspberry Pi CPU/RAM telemetry), `input.directory_scan` (file scanning), `input.http_health` (web latency/status check).
+- **Inputs**: `input.webhook` (HTTP trigger), `input.sqlite_query` (local SQL queries), `input.command` (controlled shell execution, with filtered environment and optional bubblewrap isolation), `input.pi_health` (Raspberry Pi CPU/RAM telemetry), `input.directory_scan` (file scanning), `input.http_health` (web latency/status check).
 - **Transforms**: `transform.html_extract` (CSS selector and HTML data extraction with no dependencies), `transform.template` (template substitution with variables), `transform.array_ops` (sort, filter, trim lists), `transform.regex` (extractions and replacements with regular expressions), `transform.router` (conditional splitter to the `ok` or `error` port).
 - **Outputs**: `output.sqlite_exec` (write to a local database), `output.email_smtp` (send email via SMTP), `output.ntfy` (push notifications to phones via ntfy.sh), `output.discord` (webhooks with messages and embeds), `output.slack` (team notifications), `output.command` (output system command execution).
 
@@ -149,6 +149,7 @@ Without adding heavy dependencies and taking advantage of Python's standard libr
 Designed to operate indefinitely on small servers and Raspberry Pis with guaranteed low consumption:
 1. **Level 1: Immediate SQLite and Concurrency Tuning**:
    - Strict limit on SQLite cache in `dedalo/history.py`: `PRAGMA cache_size = -2000` (maximum 2 MB instead of the default of up to tens of MB), `PRAGMA mmap_size = 0` (avoids aggressive mapping into virtual memory), `PRAGMA temp_store = FILE`.
+   - Scheduled flows run concurrently (`DEDALO_MAX_CONCURRENT_FLOWS`, 2 by default) and never overlap themselves.
    - Uvicorn flags in `run.sh`: `--limit-concurrency 15`, `--timeout-keep-alive 5`, `--no-access-log`.
 2. **Level 2: Dependency Removal, Headless Modes and Active Compaction**:
    - **Native Cron Evaluator (`dedalo/cron.py`)**: Complete replacement of the external `croniter` library (and its heavy dependency `python-dateutil`). Direct savings: **~5.4 MB of RAM** at load time. Supports `@every 30m` intervals, `@hourly`, `@daily` shortcuts and classic 5-field cron syntax.
@@ -253,7 +254,7 @@ To ease portability, deployment between different machines (e.g. development wor
   - Endpoint `POST /api/flows/import` and a file picker in the sidebar with support for `.zip` and `.json` files.
   - **Zero Dependencies**: Implemented with Python standard modules (`zipfile`, `io`) and a native multipart parser to avoid the `python-multipart` dependency.
   - **Zip-Slip Security**: Thorough sanitization of relative paths with strict rejection of directory-escape sequences (`..`).
-  - **DoS Protection**: 25 MB decompression limit.
+  - **DoS Protection**: 25 MB decompression limit, plus a global request body limit (`DEDALO_MAX_BODY_MB`, 25 MB by default).
   - **Automatic Recompilation**: Saves the graph and invokes `save_flow()`, immediately compiling it into executable Python (`<flow_id>.py`).
 
 ### K. Step-by-Step Debugging, Full Inspection and Real-Time Transformations
@@ -311,7 +312,7 @@ To enable autonomous resolution of coding tasks, regression testing and guided r
   - `read` tool: reading with line numbering and bounded ranges.
   - `edit` tool: atomic replacement verifying strict uniqueness of the `old_str` block.
   - `write` tool: writing to disk, creating subdirectories automatically.
-  - `bash` tool: execution in the workspace with timeout and exit code capture.
+  - `bash` tool: execution in the workspace with timeout and exit code capture; it gets a filtered environment and, when bubblewrap is available, runs isolated by default (`DEDALO_SANDBOX=auto`).
   - `grep`, `find` and `ls` tools: selective exploration ignoring dependency folders and binaries (`.git`, `.venv`, etc.).
 - **Path Sandboxing**:
   - Strict confinement to `workspace_dir` via `Path.resolve().is_relative_to(base_dir)`. Any attempt to read or modify outside the workspace is blocked with a security error.
@@ -336,7 +337,8 @@ dedalo/
 ├── data/
 │   ├── flows/              # JSON definitions and compiled Python scripts
 │   ├── history.db          # Execution history in SQLite (WAL mode, 2MB cache)
-│   ├── secrets.json        # Tokens and credentials (0600 permissions)
+│   ├── secrets/            # Encrypted secrets, one file each (0600 permissions)
+│   ├── master.key          # Generated master key (unless DEDALO_MASTER_KEY is set)
 │   └── state/              # State persisted between executions (e.g. RSS)
 ├── dedalo/
 │   ├── __init__.py
@@ -348,14 +350,17 @@ dedalo/
 │   ├── llms.py             # Multi-endpoint LLM management and secret resolution
 │   ├── runtime.py          # Node executor, sandbox and compact_memory()
 │   ├── scheduler.py        # Task scheduler with native cron and compaction
-│   ├── secrets.py          # Secure loading and storage of secrets
+│   ├── secrets.py          # Encrypted loading and storage of secrets (Fernet)
+│   ├── sandbox.py          # Filtered environment and optional bubblewrap isolation for shell commands
+│   ├── security.py         # ASGI middlewares: Origin check, body limit, security headers
+│   ├── i18n.py             # Message translation (English ids, locales/es.json)
 │   ├── static/             # Standalone frontend (unbundled HTML, CSS and JS)
 │   │   ├── dedalo.css
 │   │   ├── dedalo.js
 │   │   └── index.html
 │   ├── store.py            # Flow persistence as JSON/PY and ZIP packaging
 │   └── templates.py        # Quick-start templates
-├── tests/                  # Automated tests (pytest - 119 tests)
+├── tests/                  # Automated tests (pytest - 196 tests)
 │   ├── test_api.py
 │   ├── test_coder.py       # Tests for transform.coder, tools, sandboxing and Luhn+
 │   ├── test_compiler.py

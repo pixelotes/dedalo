@@ -8,6 +8,7 @@ Dédalo is built with a strict policy of **minimal external dependencies**. Whil
 | :--- | :--- | :--- |
 | **Web Server and REST API** | `fastapi` / `starlette` + `uvicorn` | External (Only required one) |
 | **HTTP Requests and LLMs** | `httpx` | External |
+| **Secrets Encrypted at Rest** | `cryptography` (Fernet, imported only when a secret is read) | External |
 | **Anti-Bot Evasion and TLS Impersonation** | `curl_cffi` | External (Optional) |
 | **Forensic Evidence Vault** | `gzip`, `tarfile`, `hashlib` | Python Standard |
 | **Execution Audit and History** | `sqlite3` | Python Standard |
@@ -27,7 +28,7 @@ Dédalo is built with a strict policy of **minimal external dependencies**. Whil
 
 ### 2.2. Rejecting Redis, RabbitMQ or Celery
 - **Reason**: Maintaining a message broker and a distributed queue is essential for systems that process tens of thousands of events per second, but it is an unaffordable cost for home automation or small servers (60-150 MB of extra RAM).
-- **Benefit in Dédalo**: Dédalo uses a direct execution model in a lightweight thread or subprocess. Persistence and history live in SQLite (`data/history.db`), with direct writes in microseconds and native ACID transactions.
+- **Benefit in Dédalo**: Dédalo uses a direct execution model in a lightweight worker thread (scheduled flows run concurrently up to `DEDALO_MAX_CONCURRENT_FLOWS`, 2 by default) or subprocess. Persistence and history live in SQLite (`data/history.db`), with direct writes in microseconds and native ACID transactions.
 
 ### 2.3. Rejecting LangChain / LangGraph
 - **Reason**: LangChain introduces more than 40 transitive dependencies (Pydantic, Tenacity, dataclasses-json, etc.), multiplying startup times and causing version incompatibilities.

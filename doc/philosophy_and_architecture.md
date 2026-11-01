@@ -80,14 +80,15 @@ Artificial Intelligence is reserved for tasks where non-deterministic reasoning 
 │   (dedalo/compiler.py - TopoSort + Code Generation)    │
 ├────────────────────────────────────────────────────────┤
 │                     Task Scheduler                     │
-│   (dedalo/cron.py - Native cron parser, no ext daemon) │
+│   (dedalo/scheduler.py + cron.py - native cron, concurrent)│
 ├────────────────────────────────────────────────────────┤
 │                      Node Runtime                      │
 │   (dedalo/runtime.py - 64 modular functions)           │
 ├────────────────────────────────────────────────────────┤
 │                       Data Store                       │
 │  - data/flows/*.py (generated scripts)                 │
-│  - data/secrets/*  (0600 files)                        │
+│  - data/secrets/*  (encrypted, 0600 files)             │
+│  - data/master.key (encryption key, 0600)              │
 │  - data/state/*    (diff state and persistence)        │
 │  - data/history.db (SQLite audit)                      │
 └────────────────────────────────────────────────────────┘
@@ -97,11 +98,19 @@ Artificial Intelligence is reserved for tasks where non-deterministic reasoning 
 
 ## 4. Security and Secrets Management
 
-1. **On-Disk Isolation with Restricted Permissions**:
-   - Secrets (Jira tokens, mail credentials, API keys) are stored in `data/secrets/<name>.secret` with POSIX `0600` permissions (read/write exclusively for the process user).
-   - Alternatively, they can be injected as standard environment variables.
+1. **Encrypted Secrets at Rest**:
+   - Secrets (Jira tokens, mail credentials, API keys) are stored in `data/secrets/<name>.secret`, encrypted with Fernet (AES + HMAC) and written atomically with POSIX `0600` permissions (directory `0700`). Legacy plaintext files are still read and are encrypted automatically at startup.
+   - The master key comes from `DEDALO_MASTER_KEY` or `DEDALO_MASTER_KEY_FILE`; if neither is set, `data/master.key` is generated (`0600`). The generated key only protects against partial copies of `data/`; keep the key outside `data/` for real protection.
+   - Alternatively, secrets can be injected as `DEDALO_SECRET_<NAME>` environment variables (never written to disk). See [external_secrets_evaluation.md](external_secrets_evaluation.md) for external stores such as 1Password.
 2. **No Leaks in the Compiled Code**:
    - The compiler never writes credential values into the generated `.py` files.
    - The code is generated with `secret="secret_name"`, and at runtime the runtime invokes `dedalo.secrets.get("secret_name")`, resolving it in volatile memory.
 3. **Dynamic Telemetry Masking**:
    - Nodes such as `transform.analyzer` have the `sanitize_secrets: True` parameter, which applies prior regular expressions to obfuscate JWT tokens, Bearer tokens, RSA private keys, and passwords before any text leaves for an LLM or third-party service.
+4. **Network Perimeter of the API** (no authentication by design, so keep it on localhost or a trusted network):
+   - No CORS. The `Host` header is validated against `DEDALO_ALLOWED_HOSTS` (default: localhost only) to stop DNS rebinding, and state-changing requests whose `Origin` differs from `Host` are rejected (CSRF).
+   - Every response carries a strict `Content-Security-Policy`, `X-Frame-Options: DENY`, `nosniff` and `Referrer-Policy`; request bodies are limited to `DEDALO_MAX_BODY_MB` (25 MB by default).
+   - Webhooks accept an optional shared token (`DEDALO_WEBHOOK_TOKEN`) that never reaches the flow or the history.
+5. **Shell Execution Hardening**:
+   - Subprocesses started by `input.command`, `output.command` and the `bash` tool of `transform.coder` do not inherit Dédalo's secrets from the environment (`DEDALO_SECRET_*`, `DEDALO_MASTER_KEY*`, `DEDALO_LLM_KEY`, `DEDALO_TELEGRAM_*`; extend with `DEDALO_ENV_DENY`).
+   - Optional isolation with bubblewrap (`DEDALO_SANDBOX=off|auto|on`, per-node `sandbox` option): read-only `/usr` and `/etc`, empty `/tmp`, only the working directory writable, `data/` hidden.

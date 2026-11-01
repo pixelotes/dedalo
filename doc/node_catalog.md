@@ -35,7 +35,7 @@ Dédalo has **72 modular nodes** grouped into three families:
 
 ### `input.webhook`
 - **Label**: Incoming Webhook.
-- **Description**: Automatically exposes an HTTP endpoint on the Dédalo server (`/api/webhook/{flow_name}`) to receive external payloads (Grafana alerts, GitHub Actions, Defender, etc.).
+- **Description**: Automatically exposes an HTTP endpoint on the Dédalo server (`/api/webhook/{flow_name}`) to receive external payloads (Grafana alerts, GitHub Actions, Defender, etc.). The flow runs in a worker thread, and an optional shared token (`DEDALO_WEBHOOK_TOKEN`: `Authorization: Bearer`, `X-Dedalo-Token` or `?token=`) can be required.
 - **Output**: Dictionary with the received JSON or the HTTP body text.
 
 ### `input.http_call`
@@ -61,7 +61,7 @@ Dédalo has **72 modular nodes** grouped into three families:
 
 ### `input.command`
 - **Label**: System Command (Shell).
-- **Description**: Runs a command in the shell of the server or local container and captures the combined standard output and error.
+- **Description**: Runs a command in the shell of the server or local container and captures the combined standard output and error. The subprocess does not inherit Dédalo's secrets from the environment, and the optional `sandbox` setting (`on`/`off`; default from `DEDALO_SANDBOX`) isolates it with bubblewrap: read-only `/usr` and `/etc`, empty `/tmp`, only `cwd` writable, `data/` hidden.
 
 ### `input.csv_file` and `input.json_file`
 - **Labels**: CSV File / JSON File.
@@ -113,7 +113,7 @@ Dédalo has **72 modular nodes** grouped into three families:
 - **Available tools**:
   - `read`, `grep`, `find`, `ls`: Safe exploration and reading of the workspace.
   - `edit`, `write`: Atomic modification and creation of files on disk.
-  - `bash`: Running terminal commands, tests and linters in the working environment.
+  - `bash`: Running terminal commands, tests and linters in the working environment (filtered environment; isolated with bubblewrap by default when available, see `DEDALO_SANDBOX`).
   - `web_search`: Internet search (DuckDuckGo, no API key) to look up documentation, libraries and technical errors.
 - **Interactive Inspector Panel**: Lets you enable or revoke individual tools with checkboxes grouped by permission category (Read, Write, Shell and Network), or pick quick profiles (`Coding`, `Read-Only`, `All`, `Custom`).
 - **Compaction**: When the context reaches 90% of the model's window, the history is compacted automatically using the **Blackhole** or **Luhn+** algorithms.
@@ -238,7 +238,7 @@ Dédalo has **72 modular nodes** grouped into three families:
 
 ### `output.command`
 - **Label**: Run Action (Shell).
-- **Description**: Runs commands or scripts on the host system as the final step of the flow (restarting services, running ansible, etc.).
+- **Description**: Runs commands or scripts on the host system as the final step of the flow (restarting services, running ansible, etc.). It has the same filtered environment and optional `sandbox` setting as `input.command`; note that an isolated command cannot reach host services such as `systemctl`.
 
 ### `output.healthcheck`
 - **Label**: Monitoring Ping (Heartbeat).

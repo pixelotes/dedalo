@@ -29,7 +29,7 @@ Periodically inspect the state of a Kubernetes cluster, preserve the original ev
 ```
 
 ### Step-by-Step Configuration:
-1. **Extraction**: A `transform.script` node runs `kubectl` with a secure kubeconfig mounted in memory, extracting the pods that are not in `Running` state.
+1. **Extraction**: A `transform.script` node runs `kubectl` with a secure kubeconfig mounted in memory, extracting the pods that are not in `Running` state. (Shell commands do not inherit Dédalo's secrets from the environment; the kubeconfig must be mounted explicitly, and with `DEDALO_SANDBOX` enabled its directory must be exposed via `DEDALO_SANDBOX_RO`.)
 2. **Evidence Custody (`output.evidence_vault`)**:
    - `vault_directory: "data/vault/k8s"`
    - Generates `k8s-evidence-20260914-1530.json.gz` and its `.meta.json` manifest with the tamper-proof SHA-256 hash.

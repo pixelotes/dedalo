@@ -50,7 +50,7 @@ The `transform.coder` node is not a simple text generator; it is an **interactiv
 ### 3.1. Available Tools and Permission Management
 The agent has a list of native tools depending on the `tools_preset` or the custom permission configuration in the inspector:
 - **`read`**: Reads whole files or specific line ranges with clear numbering.
-- **`bash`**: Runs real commands in the server console (inside the `workspace_dir`) with a time limit and stdout/stderr capture.
+- **`bash`**: Runs real commands in the server console (inside the `workspace_dir`) with a time limit and stdout/stderr capture. The command gets a filtered environment (no Dédalo secrets) and, when bubblewrap is available, runs isolated with only the workspace writable (`DEDALO_SANDBOX=auto` by default for this tool).
 - **`edit`**: Performs atomic string replacements (`old_str` -> `new_str`), requiring the occurrence to be unique to avoid ambiguous edits.
 - **`write`**: Writes new files to disk.
 - **`grep`**: Fast search for expressions or patterns within the working tree.
