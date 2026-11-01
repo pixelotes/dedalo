@@ -37,7 +37,7 @@ def test_standalone_basic_compilation():
     # Metadatos PEP 723 y docstring
     assert "# /// script" in src
     assert "# requires-python = \">=3.11\"" in src
-    assert "Flujo Dédalo: flujo_basico" in src
+    assert "Dédalo Flow: flujo_basico" in src
 
     # Switches estándar
     assert "--create-venv" in src

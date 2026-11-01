@@ -17,6 +17,7 @@ import os
 import re
 import tempfile
 from pathlib import Path
+from dedalo.i18n import tr
 
 log = logging.getLogger("dedalo.secrets")
 
@@ -45,7 +46,7 @@ def _master_key() -> bytes:
         try:
             return Path(key_path).read_bytes().strip()
         except OSError as exc:
-            raise SecretError(f"no se pudo leer DEDALO_MASTER_KEY_FILE: {exc}") from exc
+            raise SecretError(tr('could not read DEDALO_MASTER_KEY_FILE: {exc}', exc=exc)) from exc
 
     if not KEY_FILE.is_file():
         from cryptography.fernet import Fernet
@@ -76,7 +77,7 @@ def _fernet():
             _fernet_cache = (marker, Fernet(_master_key()))
         except ValueError as exc:
             raise SecretError(
-                "clave maestra no válida: debe ser una clave Fernet (32 bytes en base64 url-safe)"
+                tr('invalid master key: it must be a Fernet key (32 bytes in url-safe base64)')
             ) from exc
     return _fernet_cache[1]
 
@@ -96,7 +97,7 @@ def decrypt(token: str) -> str:
         return _fernet().decrypt(token[len(PREFIX) :].encode("ascii")).decode("utf-8")
     except InvalidToken as exc:
         raise SecretError(
-            "no se pudo descifrar el secreto: la clave maestra no coincide con la usada al guardarlo"
+            tr('could not decrypt the secret: the master key does not match the one used when it was saved')
         ) from exc
 
 
@@ -119,7 +120,7 @@ def _write_private(p: Path, text: str) -> None:
 def _path(name: str) -> Path:
     if not _NAME.match(name or ""):
         raise SecretError(
-            f"nombre de secreto no válido: {name!r} (solo minúsculas, números, guión y guión bajo)"
+            tr('invalid secret name: {name!r} (lowercase letters, numbers, hyphen and underscore only)', name=name)
         )
     return DIR / f"{name}{SUFFIX}"
 
@@ -170,7 +171,7 @@ def set_secret(name: str, value: str) -> None:
     """Guarda un secreto en disco con permisos 0600."""
     val = (value or "").strip()
     if not val:
-        raise SecretError("el valor del secreto no puede estar vacío")
+        raise SecretError(tr('the secret value cannot be empty'))
 
     p = _path(name)
     DIR.mkdir(parents=True, exist_ok=True)
@@ -209,7 +210,7 @@ def migrate() -> int:
                 _write_private(p, encrypt(val))
                 done += 1
         except (OSError, SecretError) as exc:
-            log.warning("no se pudo cifrar %s: %s", p.name, exc)
+            log.warning(tr('could not encrypt %s: %s'), p.name, exc)
     if done:
-        log.info("cifrados %d secretos que estaban en claro", done)
+        log.info(tr('encrypted %d secrets that were stored in plaintext'), done)
     return done

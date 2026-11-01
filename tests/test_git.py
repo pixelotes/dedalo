@@ -130,11 +130,11 @@ def test_git_commit_push(tmp_path: Path):
 def test_git_invalid_repo_and_action():
     res_err_dir = git_read(None, [], repo_path="/ruta/que/no/existe/jamas")
     assert res_err_dir.status == "error"
-    assert "no es un repositorio Git válido" in res_err_dir.error
+    assert "is not a valid Git repository" in res_err_dir.error
 
     res_err_action = git_read(None, [], action="accion_invalida", repo_path=".")
     assert res_err_action.status == "error"
-    assert "Acción de git no reconocida" in res_err_action.error
+    assert "Unrecognized git action" in res_err_action.error
 
 
 def test_template_auditoria_commits_git_compiles():

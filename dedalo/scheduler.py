@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from dedalo import cron, history, runtime, store
+from dedalo.i18n import tr
 
 RUN_HISTORY: dict[str, dict[str, Any]] = {}
 
@@ -39,7 +40,7 @@ def run_flow_sync(flow_id: str, trigger_type: str = "schedule") -> dict[str, Any
     """Ejecuta el script .py compilado de un flujo de forma síncrona y almacena el resultado en el historial."""
     code_file = store.FLOWS_DIR / f"{flow_id}.py"
     if not code_file.is_file():
-        raise FileNotFoundError(f"No existe el script compilado para «{flow_id}»")
+        raise FileNotFoundError(tr('The compiled script for "{flow_id}" does not exist', flow_id=flow_id))
 
     flow_meta = store.load_meta(flow_id) or {}
     flow_name = flow_meta.get("name") or flow_id
@@ -60,7 +61,7 @@ def run_flow_sync(flow_id: str, trigger_type: str = "schedule") -> dict[str, Any
         exec(compile(source, f"<dedalo:{flow_id}>", "exec"), ns)
         run_fn = ns.get("run")
         if not callable(run_fn):
-            raise RuntimeError(f"El script de «{flow_id}» no define una función run(ctx)")
+            raise RuntimeError(tr('The script of "{flow_id}" does not define a run(ctx) function', flow_id=flow_id))
 
         res = run_fn(ctx)
         duration = time.time() - t0

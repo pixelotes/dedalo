@@ -38,6 +38,7 @@ import httpx
 
 # csv, difflib, imaplib, smtplib, statistics, xml.etree y email.mime se importan al usarse (~80 ms y ~5 MB de arranque)
 from dedalo import llms, secrets
+from dedalo.i18n import tr
 from dedalo import sandbox as sbx
 
 
@@ -104,7 +105,7 @@ class Inputs:
             if key in self._by_source:
                 res = self._by_source[key]
                 return res.data if res.ok else None
-            raise KeyError(f"No hay entrada conectada con el id «{key}»")
+            raise KeyError(tr('There is no connected input with id "{key}"', key=key))
         return self._items[key].data if self._items[key].ok else None
 
     def get(self, key: str, default: Any = None) -> Any:
@@ -199,12 +200,12 @@ def call_llm(
             resp = client.post(endpoint, headers=headers, json=payload)
             if resp.status_code >= 400:
                 raise RuntimeError(
-                    f"LLM API devolvió HTTP {resp.status_code}: {resp.text[:200]}"
+                    tr('LLM API returned HTTP {status_code}: {text}', status_code=resp.status_code, text=resp.text[:200])
                 )
             data = resp.json()
             return data["choices"][0]["message"]["content"].strip()
     except Exception as exc:
-        raise RuntimeError(f"Error al conectar con el LLM en {endpoint}: {exc}") from exc
+        raise RuntimeError(tr('Error connecting to the LLM at {endpoint}: {exc}', endpoint=endpoint, exc=exc)) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -275,7 +276,7 @@ def http_call(
 
     if engine_choice == "curl_cffi":
         if not has_curl:
-            return NodeResult("error", error="El motor 'curl_cffi' no está instalado en este entorno.")
+            return NodeResult("error", error=tr("The 'curl_cffi' engine is not installed in this environment."))
         use_curl = True
     elif engine_choice == "httpx":
         use_curl = False
@@ -371,7 +372,7 @@ def rss(
         user_agent=user_agent,
     )
     if not fetch_res.ok:
-        return NodeResult("error", error=f"No se pudo descargar el feed: {fetch_res.error}")
+        return NodeResult("error", error=tr('Could not download the feed: {error}', error=fetch_res.error))
 
     xml_text = fetch_res.data if isinstance(fetch_res.data, str) else json.dumps(fetch_res.data)
 
@@ -380,7 +381,7 @@ def rss(
 
         root = ET.fromstring(xml_text)
     except Exception as exc:
-        return NodeResult("error", error=f"XML RSS inválido: {exc}")
+        return NodeResult("error", error=tr('Invalid RSS XML: {exc}', exc=exc))
 
     items = []
     # Soporta RSS estándar <channel><item> y Atom <entry>
@@ -466,7 +467,7 @@ def csv_file(
     """Lee un fichero CSV local y devuelve lista de diccionarios."""
     p = Path(path)
     if not p.is_file():
-        return NodeResult("error", error=f"Fichero no encontrado: {path}")
+        return NodeResult("error", error=tr('File not found: {path}', path=path))
     try:
         delim = delimiter.replace("\\t", "\t") if delimiter else ","
         with p.open(encoding=encoding or "utf-8", newline="") as f:
@@ -475,14 +476,14 @@ def csv_file(
             reader = csv.DictReader(f, delimiter=delim)
             return NodeResult("ok", data=list(reader))
     except Exception as exc:
-        return NodeResult("error", error=f"Error al leer CSV: {exc}")
+        return NodeResult("error", error=tr('Error reading CSV: {exc}', exc=exc))
 
 
 def webhook_trigger(ctx: Any, inputs: list[NodeResult], **config) -> NodeResult:
     """Recibe datos desde un webhook entrante HTTP."""
     payload = getattr(ctx, "payload", None)
     if payload is None:
-        return NodeResult("ok", data={"event": "manual_preview", "message": "Disparado manualmente sin payload"})
+        return NodeResult("ok", data={"event": "manual_preview", "message": tr('Triggered manually without payload')})
     return NodeResult("ok", data=payload)
 
 
@@ -495,10 +496,10 @@ def sqlite_query(
 ) -> NodeResult:
     """Ejecuta una consulta SELECT sobre una base de datos SQLite local."""
     if not query.strip():
-        return NodeResult("error", error="Falta la consulta SQL")
+        return NodeResult("error", error=tr('Missing SQL query'))
     p = Path(path)
     if not p.is_file():
-        return NodeResult("error", error=f"Base de datos SQLite no encontrada: {path}")
+        return NodeResult("error", error=tr('SQLite database not found: {path}', path=path))
     try:
         with sqlite3.connect(p) as conn:
             conn.row_factory = sqlite3.Row
@@ -521,7 +522,7 @@ def command_input(
 ) -> NodeResult:
     """Ejecuta un comando en la shell del sistema y captura su salida."""
     if not cmd.strip():
-        return NodeResult("error", error="Falta el comando a ejecutar")
+        return NodeResult("error", error=tr('Missing command to run'))
     inp = Inputs(inputs)
     rendered_cmd = cmd.replace("{entrada}", inp.text())
     work_dir = Path(cwd) if cwd.strip() else None
@@ -533,14 +534,14 @@ def command_input(
             "exit_code": res.returncode,
         }
         if res.returncode != 0:
-            return NodeResult("error", data=data, error=f"Comando devolvió código {res.returncode}: {res.stderr[:200]}")
+            return NodeResult("error", data=data, error=tr('Command returned code {returncode}: {stderr}', returncode=res.returncode, stderr=res.stderr[:200]))
         return NodeResult("ok", data=data)
     except subprocess.TimeoutExpired:
-        return NodeResult("error", error=f"Tiempo de ejecución agotado ({timeout}s) para el comando")
+        return NodeResult("error", error=tr('Execution time exceeded ({timeout}s) for the command', timeout=timeout))
     except sbx.SandboxUnavailable as exc:
         return NodeResult("error", error=str(exc))
     except Exception as exc:
-        return NodeResult("error", error=f"Error al ejecutar comando: {exc}")
+        return NodeResult("error", error=tr('Error running command: {exc}', exc=exc))
 
 
 def pi_health(ctx: Any, inputs: list[NodeResult], **config) -> NodeResult:
@@ -615,7 +616,7 @@ def directory_scan(
     """Escanea un directorio buscando ficheros que cumplan un patrón glob."""
     base = Path(path)
     if not base.exists() or not base.is_dir():
-        return NodeResult("error", error=f"El directorio no existe: {path}")
+        return NodeResult("error", error=tr('The directory does not exist: {path}', path=path))
     try:
         iterator = base.rglob(pattern) if recursive else base.glob(pattern)
         files = []
@@ -633,7 +634,7 @@ def directory_scan(
                     break
         return NodeResult("ok", data=files)
     except Exception as exc:
-        return NodeResult("error", error=f"Error escaneando directorio: {exc}")
+        return NodeResult("error", error=tr('Error scanning directory: {exc}', exc=exc))
 
 
 def telemetry_input(
@@ -653,7 +654,7 @@ def telemetry_input(
     if file_path.strip():
         p = Path(file_path.strip())
         if not p.exists() or not p.is_file():
-            return NodeResult("error", error=f"Fichero de telemetría no encontrado: {file_path}")
+            return NodeResult("error", error=tr('Telemetry file not found: {file_path}', file_path=file_path))
         try:
             content = p.read_text(encoding="utf-8", errors="replace")
             try:
@@ -661,7 +662,7 @@ def telemetry_input(
             except Exception:
                 payload_data = content
         except Exception as exc:
-            return NodeResult("error", error=f"Error leyendo telemetría de {file_path}: {exc}")
+            return NodeResult("error", error=tr('Error reading telemetry from {file_path}: {exc}', file_path=file_path, exc=exc))
 
     # 2. JSON inline si no hubo archivo
     elif telemetry_json.strip():
@@ -730,7 +731,7 @@ def jira_issues_input(
     """Busca y extrae issues de Jira Cloud mediante JQL usando la REST API oficial."""
     base_url = instance_url.strip().rstrip("/")
     if not base_url:
-        return NodeResult("error", error="Falta la URL de la instancia de Jira (ej. https://mi-dominio.atlassian.net)")
+        return NodeResult("error", error=tr('Missing Jira instance URL (e.g. https://my-domain.atlassian.net)'))
 
     headers = _build_atlassian_auth_header(email, secret)
     endpoint = f"{base_url}/rest/api/3/search"
@@ -796,7 +797,7 @@ def confluence_pages_input(
     """Busca y lee páginas de Confluence Cloud mediante CQL o parámetros de espacio/título."""
     base_url = instance_url.strip().rstrip("/")
     if not base_url:
-        return NodeResult("error", error="Falta la URL de la instancia de Confluence (ej. https://mi-dominio.atlassian.net/wiki)")
+        return NodeResult("error", error=tr('Missing Confluence instance URL (e.g. https://my-domain.atlassian.net/wiki)'))
 
     # Asegurar sufijo /wiki si no se incluyó en la URL de Atlassian
     wiki_base = base_url if base_url.endswith("/wiki") else f"{base_url}/wiki"
@@ -862,7 +863,7 @@ def http_health(
 ) -> NodeResult:
     """Comprueba la disponibilidad y latencia de una URL."""
     if not url.strip():
-        return NodeResult("error", error="Falta la URL para verificar salud")
+        return NodeResult("error", error=tr('Missing URL for health check'))
     t0 = time.time()
     try:
         with httpx.Client(timeout=float(timeout), follow_redirects=True) as client:
@@ -876,14 +877,14 @@ def http_health(
                 "is_healthy": is_healthy,
             }
             status = "ok" if is_healthy else "error"
-            err = "" if is_healthy else f"Estado HTTP {resp.status_code} != esperado {expected_status}"
+            err = "" if is_healthy else tr('HTTP status {status_code} != expected {expected_status}', status_code=resp.status_code, expected_status=expected_status)
             return NodeResult(status, data=data, error=err)
     except Exception as exc:
         latency_ms = round((time.time() - t0) * 1000, 1)
         return NodeResult(
             "error",
             data={"url": url, "status_code": 0, "latency_ms": latency_ms, "is_healthy": False},
-            error=f"Fallo de conexión en health check: {exc}",
+            error=tr('Connection failure in health check: {exc}', exc=exc),
         )
 
 
@@ -891,11 +892,11 @@ def json_file(ctx: Any, inputs: list[NodeResult], *, path: str) -> NodeResult:
     """Lee un fichero JSON local."""
     p = Path(path)
     if not p.is_file():
-        return NodeResult("error", error=f"Fichero no encontrado: {path}")
+        return NodeResult("error", error=tr('File not found: {path}', path=path))
     try:
         return NodeResult("ok", data=json.loads(p.read_text(encoding="utf-8")))
     except Exception as exc:
-        return NodeResult("error", error=f"Error al leer JSON: {exc}")
+        return NodeResult("error", error=tr('Error reading JSON: {exc}', exc=exc))
 
 
 def disk_free(ctx: Any, inputs: list[NodeResult], *, path: str = "") -> NodeResult:
@@ -906,7 +907,7 @@ def disk_free(ctx: Any, inputs: list[NodeResult], *, path: str = "") -> NodeResu
         pct = (free / total) * 100.0 if total > 0 else 0.0
         return NodeResult("ok", data=round(pct, 2))
     except Exception as exc:
-        return NodeResult("error", error=f"Error al medir disco: {exc}")
+        return NodeResult("error", error=tr('Error measuring disk: {exc}', exc=exc))
 
 
 def cpu_load(ctx: Any, inputs: list[NodeResult], *, seconds: float = 1.0) -> NodeResult:
@@ -918,7 +919,7 @@ def cpu_load(ctx: Any, inputs: list[NodeResult], *, seconds: float = 1.0) -> Nod
         pct = min(100.0, (load1 / cpu_count) * 100.0)
         return NodeResult("ok", data=round(pct, 2))
     except Exception as exc:
-        return NodeResult("error", error=f"Error al medir CPU: {exc}")
+        return NodeResult("error", error=tr('Error measuring CPU: {exc}', exc=exc))
 
 
 # ---------------------------------------------------------------------------
@@ -966,7 +967,7 @@ def threshold(
         num = float(val)
         lim = float(limit)
     except (ValueError, TypeError):
-        return NodeResult("error", error=f"El valor de entrada o límite no es numérico: {val!r}, {limit!r}")
+        return NodeResult("error", error=tr('The input or limit value is not numeric: {val!r}, {limit!r}', val=val, limit=limit))
 
     ok = False
     if comparison == "menor_que":
@@ -997,7 +998,7 @@ def filter_items(
     inp = Inputs(inputs)
     data = inp.first_data()
     if not isinstance(data, list):
-        return NodeResult("error", error="La entrada para filtrar debe ser una lista")
+        return NodeResult("error", error=tr('The input to filter must be a list'))
 
     term = (contains or "").lower()
     out = []
@@ -1156,7 +1157,7 @@ def html_extract(
     try:
         parser.feed(html_content)
     except Exception as exc:
-        return NodeResult("error", error=f"Error al procesar HTML: {exc}")
+        return NodeResult("error", error=tr('Error processing HTML: {exc}', exc=exc))
 
     matched_elements = _query_selector_all(parser.root, selector)
     if limit and int(limit) > 0:
@@ -1328,7 +1329,7 @@ def array_ops(
     inp = Inputs(inputs)
     data = inp.first_data()
     if not isinstance(data, list):
-        return NodeResult("error", error="La entrada de array_ops debe ser una lista")
+        return NodeResult("error", error=tr('The array_ops input must be a list'))
     items = list(data)
     if operation == "head":
         items = items[:int(count)]
@@ -1367,7 +1368,7 @@ def regex(
 ) -> NodeResult:
     """Aplica expresiones regulares para buscar o sustituir texto."""
     if not pattern:
-        return NodeResult("error", error="Falta el patrón de expresión regular")
+        return NodeResult("error", error=tr('Missing regular expression pattern'))
     inp = Inputs(inputs)
     first = inp.first_data()
     target_text = ""
@@ -1386,9 +1387,9 @@ def regex(
         elif action == "sub":
             replaced = rx.sub(replace_with, target_text)
             return NodeResult("ok", data=replaced)
-        return NodeResult("error", error=f"Acción regex desconocida: {action}")
+        return NodeResult("error", error=tr('Unknown regex action: {action}', action=action))
     except Exception as exc:
-        return NodeResult("error", error=f"Error al evaluar regex: {exc}")
+        return NodeResult("error", error=tr('Error evaluating regex: {exc}', exc=exc))
 
 
 def router(
@@ -1421,7 +1422,7 @@ def router(
     if ok:
         return NodeResult("ok", data=data)
     else:
-        return NodeResult("error", data=data, error=f"Condición de router no cumplida ({condition})")
+        return NodeResult("error", data=data, error=tr('Router condition not met ({condition})', condition=condition))
 
 
 def agent(
@@ -1474,20 +1475,23 @@ def agent(
             compacted = _run_luhn_plus(content_text, target_count=target_sentences, output_format="paragraph")
             if len(compacted) > target_chars:
                 compacted = compacted[:target_chars] + "..."
-            return f"[Contenido compactado con Luhn+ por límite de contexto ({current_content_tokens} -> {int(len(compacted) / 3.5)} tokens)]:\n{compacted}"
+            return tr((
+                '[Content compacted with Luhn+ due to context limit ({current_content_tokens} -> {compacted} tokens)]:\n'
+                '{compacted2}'
+            ), current_content_tokens=current_content_tokens, compacted=int(len(compacted) / 3.5), compacted2=compacted)
         return content_text
 
     if per_item:
         first = inp.first_data()
         if not isinstance(first, list):
-            return NodeResult("error", error="El modo per_item requiere una lista de entrada")
+            return NodeResult("error", error=tr('The per_item mode requires an input list'))
         results = []
         field_name = as_field.strip()
         for item in first[:MAX_ITEMS]:
             item_str = json.dumps(item, ensure_ascii=False) if isinstance(item, (dict, list)) else str(item)
             if effective_ctx and int(effective_ctx) > 0:
                 item_str = _compact_if_needed(item_str)
-            user_msg = f"{prompt}\n\nElemento:\n{item_str}"
+            user_msg = tr('{prompt}\n\nItem:\n{item_str}', prompt=prompt, item_str=item_str)
             try:
                 ans = call_llm(
                     user_msg,
@@ -1516,7 +1520,7 @@ def agent(
     input_text = inp.text()
     if input_text and effective_ctx and int(effective_ctx) > 0:
         input_text = _compact_if_needed(input_text)
-    user_msg = f"{prompt}\n\nEntrada:\n{input_text}" if input_text else prompt
+    user_msg = tr('{prompt}\n\nInput:\n{input_text}', prompt=prompt, input_text=input_text) if input_text else prompt
     try:
         ans = call_llm(
             user_msg,
@@ -1534,14 +1538,18 @@ def agent(
         return NodeResult("error", error=f"Error en llamada LLM: {exc}")
 
 
-_DEFAULT_ANALYZER_PROMPT = """Analiza la telemetría, eventos o logs proporcionados.
-Identifica la causa raíz del problema, clasifica la severidad (crítica, alta, media, baja o falso positivo),
-indica los componentes afectados y resume el hallazgo de forma clara y técnica.
-Devuelve un informe estructurado."""
+_DEFAULT_ANALYZER_PROMPT = tr((
+    'Analyze the provided telemetry, events or logs.\n'
+    'Identify the root cause of the problem, classify its severity (critical, high, medium, low or false positive),\n'
+    'indicate the affected components and summarize the finding clearly and technically.\n'
+    'Return a structured report.'
+))
 
-_DEFAULT_PLANNER_PROMPT = """A partir del diagnóstico y causa raíz proporcionados,
-genera un plan de acción paso a paso para resolver o mitigar la incidencia.
-Incluye pasos preventivos, verificaciones y comandos o configuraciones sugeridas (declarativas o seguras)."""
+_DEFAULT_PLANNER_PROMPT = tr((
+    'Based on the provided diagnosis and root cause,\n'
+    'generate a step-by-step action plan to resolve or mitigate the incident.\n'
+    'Include preventive steps, verifications and suggested commands or configurations (declarative or safe).'
+))
 
 _SECRET_MASK_PATTERNS = [
     re.compile(r'(?i)(bearer\s+)[A-Za-z0-9_\-\.]{15,}'),
@@ -1582,13 +1590,11 @@ def analyzer_agent(
     first = inp.first_data()
 
     if not raw_text and first is None:
-        return NodeResult("error", error="El nodo analizador requiere datos de entrada (telemetría o incidente)")
+        return NodeResult("error", error=tr('The analyzer node requires input data (telemetry or incident)'))
 
     analysis_instruction = prompt.strip() or _DEFAULT_ANALYZER_PROMPT
     sys_instruction = system_prompt.strip() or (
-        "Eres un analista senior de ciberseguridad e infraestructura (SecOps / SRE). "
-        "Tu objetivo es diagnosticar incidentes, identificar causas raíz con precisión "
-        "y evaluar impacto sin inventar hechos no respaldados por la evidencia."
+        tr('You are a senior cybersecurity and infrastructure analyst (SecOps / SRE). Your goal is to diagnose incidents, identify root causes precisely and assess impact without inventing facts not backed by the evidence.')
     )
 
     overrides: dict[str, Any] = {
@@ -1616,7 +1622,7 @@ def analyzer_agent(
             item_str = json.dumps(item, ensure_ascii=False) if isinstance(item, (dict, list)) else str(item)
             if sanitize_secrets:
                 item_str = _mask_secrets_in_text(item_str)
-            item_msg = f"{analysis_instruction}\n\n=== ELEMENTO / TICKET ===\n{item_str}"
+            item_msg = tr('{analysis_instruction}\n\n=== ITEM / TICKET ===\n{item_str}', analysis_instruction=analysis_instruction, item_str=item_str)
             try:
                 ans = call_llm(
                     item_msg,
@@ -1642,7 +1648,7 @@ def analyzer_agent(
     if sanitize_secrets:
         raw_text = _mask_secrets_in_text(raw_text)
 
-    full_user_msg = f"{analysis_instruction}\n\n=== EVIDENCIA / TELEMETRÍA ===\n{raw_text}"
+    full_user_msg = tr('{analysis_instruction}\n\n=== EVIDENCE / TELEMETRY ===\n{raw_text}', analysis_instruction=analysis_instruction, raw_text=raw_text)
 
     try:
         ans = call_llm(
@@ -1704,7 +1710,7 @@ def planner_agent(
     raw_text = inp.text()
 
     if not raw_text and not first:
-        return NodeResult("error", error="El nodo planificador requiere datos de entrada (diagnóstico previo)")
+        return NodeResult("error", error=tr('The planner node requires input data (previous diagnosis)'))
 
     diagnosis_context = ""
     if isinstance(first, dict) and "analysis" in first:
@@ -1714,14 +1720,16 @@ def planner_agent(
 
     plan_instruction = prompt.strip() or _DEFAULT_PLANNER_PROMPT
     sys_instruction = system_prompt.strip() or (
-        "Eres un arquitecto de operaciones y remediación de infraestructura y seguridad. "
-        "Diseñas planes de mitigación claros, seguros, verificables y paso a paso. "
-        "Diferencia siempre entre acciones de contención inmediata y soluciones definitivas."
+        tr('You are an infrastructure and security operations and remediation architect. You design clear, safe, verifiable, step-by-step mitigation plans. Always distinguish between immediate containment actions and definitive solutions.')
     )
 
-    user_msg = f"{plan_instruction}\n\n=== DIAGNÓSTICO / CAUSA RAÍZ ===\n{diagnosis_context}"
+    user_msg = tr('{plan_instruction}\n\n=== DIAGNOSIS / ROOT CAUSE ===\n{diagnosis_context}', plan_instruction=plan_instruction, diagnosis_context=diagnosis_context)
     if output_format == "json" or json_mode:
-        user_msg += "\n\nResponde en formato JSON estructurado con los campos 'summary', 'immediate_steps', 'long_term_steps' y 'verification'."
+        user_msg += tr((
+            '\n'
+            '\n'
+            "Respond in structured JSON format with the fields 'summary', 'immediate_steps', 'long_term_steps' and 'verification'."
+        ))
         json_mode = True
 
     overrides: dict[str, Any] = {
@@ -1899,14 +1907,14 @@ def _is_tool_failure(tool_name: str, result_str: str) -> bool:
     r = result_str.strip()
     if r.startswith("Error:") or r.startswith("Error ") or r.startswith("Error\n"):
         return True
-    if "Error de seguridad" in r:
+    if "Security error" in r or "Error de seguridad" in r:
         return True
-    if "No se encontró 'old_str'" in r or "aparece repetido" in r or ("aparece" in r and "veces en" in r):
+    if "'old_str' not found" in r or "No se encontró 'old_str'" in r or "aparece repetido" in r or ("aparece" in r and "veces en" in r):
         return True
-    if "no está disponible o no está autorizada" in r:
+    if "is not available or is not authorized" in r or "no está disponible o no está autorizada" in r:
         return True
     if tool_name == "bash":
-        match = re.search(r"\[Código de salida:\s*(-?\d+)\]", r)
+        match = re.search(r"\[(?:Exit code|Código de salida):\s*(-?\d+)\]", r)
         if match and match.group(1) != "0":
             return True
         if "command not found" in r.lower() or "traceback (most recent call last)" in r.lower():
@@ -1973,7 +1981,7 @@ def _extract_blackhole_summary(
                 if first_err_line and first_err_line not in errors:
                     errors.append(f"{fn_name}: {first_err_line[:140]}")
 
-    sections = ["[Memoria compactada de la sesión (Modo Blackhole)]:"]
+    sections = [tr('[Compacted session memory (Blackhole Mode)]:')]
 
     # 1. Objetivo
     goal_line = user_goal.strip() if user_goal else ""
@@ -1981,31 +1989,31 @@ def _extract_blackhole_summary(
         primary_goal = goal_line.splitlines()[0][:200]
         sections.append(f"### Objetivo Principal\n- {primary_goal}")
     if user_notes:
-        sections.append("### Instrucciones Intermedias del Usuario\n" + "\n".join(f"- {note}" for note in user_notes[-3:]))
+        sections.append(tr('### User Intermediate Instructions\n') + "\n".join(f"- {note}" for note in user_notes[-3:]))
 
     # 2. Archivos intervenidos
     files_sec = []
     if files_modified:
-        files_sec.append(f"- Modificados / Creados: {', '.join(files_modified)}")
+        files_sec.append(tr('- Modified / Created: {files_modified}', files_modified=', '.join(files_modified)))
     if files_read:
-        files_sec.append(f"- Leídos: {', '.join(files_read)}")
+        files_sec.append(tr('- Read: {files_read}', files_read=', '.join(files_read)))
     if files_explored:
-        files_sec.append(f"- Explorados / Listados: {', '.join(files_explored[:6])}")
+        files_sec.append(tr('- Explored / Listed: {files_explored}', files_explored=', '.join(files_explored[:6])))
     if files_sec:
-        sections.append("### Archivos y Rutas\n" + "\n".join(files_sec))
+        sections.append(tr('### Files and Paths\n') + "\n".join(files_sec))
 
     # 3. Acciones ejecutadas (últimas 10 acciones)
     if actions:
         recent_actions = actions[-10:] if len(actions) > 10 else actions
-        prefix = f"(... {len(actions) - 10} acciones previas omitidas ...)\n" if len(actions) > 10 else ""
-        sections.append("### Registro de Acciones Recientes\n" + prefix + "\n".join(f"- {act}" for act in recent_actions))
+        prefix = tr('(... {actions} earlier actions omitted ...)\n', actions=len(actions) - 10) if len(actions) > 10 else ""
+        sections.append(tr('### Recent Action Log\n') + prefix + "\n".join(f"- {act}" for act in recent_actions))
 
     # 4. Errores detectados
     if errors:
         recent_errors = errors[-4:]
-        sections.append("### Errores e Incidencias Detectadas\n" + "\n".join(f"- {err}" for err in recent_errors))
+        sections.append(tr('### Errors and Incidents Detected\n') + "\n".join(f"- {err}" for err in recent_errors))
     else:
-        sections.append("### Estado de Errores\n- Sin errores persistentes registrados.")
+        sections.append(tr('### Error Status\n- No persistent errors recorded.'))
 
     return "\n\n".join(sections)
 
@@ -2020,16 +2028,16 @@ def _synthesize_with_local_llm(
 ) -> str:
     """Realiza una única llamada al LLM local ya cargado para sintetizar 2-3 reflexiones clave."""
     prompt = (
-        "Eres el asistente del motor de compactación de Dédalo. "
-        "A partir de este registro estructurado de la sesión, sintetiza en un máximo de 3 viñetas breves "
-        "(1 o 2 líneas cada una) las decisiones arquitectónicas clave adoptadas, los hallazgos confirmados "
-        "y el estado actual para continuar la tarea:\n\n"
-        f"{blackhole_summary}"
+        tr((
+            "You are the assistant of Dédalo's compaction engine. From this structured session record, synthesize in at most 3 brief bullets (1 or 2 lines each) the key architectural decisions made, the confirmed findings and the current state in order to continue the task:\n"
+            '\n'
+            '{blackhole_summary}'
+        ), blackhole_summary=blackhole_summary)
     )
     payload = {
         "model": target_model,
         "messages": [
-            {"role": "system", "content": "Sé extremadamente conciso y factual. Solo devuelve viñetas con guiones."},
+            {"role": "system", "content": tr('Be extremely concise and factual. Return only bullets with dashes.')},
             {"role": "user", "content": prompt},
         ],
         "temperature": 0.0,
@@ -2074,17 +2082,17 @@ def _compact_conversation_history(
                 if eng in ("luhn", "luhn+", "luhn_plus", "luhnplus"):
                     summary = _run_luhn_plus(c_text, target_count=8, output_format="bullets")
                     compacted_m = dict(m)
-                    compacted_m["content"] = f"[Salida de herramienta compactada con Luhn+ (superado 90% contexto)]:\n{summary}"
+                    compacted_m["content"] = tr('[Tool output compacted with Luhn+ (90% context exceeded)]:\n{summary}', summary=summary)
                     new_msgs[idx] = compacted_m
                     did_compact = True
                 else:
                     lines = c_text.splitlines()
                     if len(lines) > 30:
-                        folded = "\n".join(lines[:10]) + f"\n\n[... {len(lines) - 20} líneas omitidas por compactador Blackhole ...]\n\n" + "\n".join(lines[-10:])
+                        folded = "\n".join(lines[:10]) + tr('\n\n[... {lines} lines omitted by Blackhole compactor ...]\n\n', lines=len(lines) - 20) + "\n".join(lines[-10:])
                     else:
-                        folded = c_text[:1000] + f"\n\n[... {max(0, len(c_text) - 1500)} caracteres omitidos por compactador Blackhole ...]\n\n" + c_text[-500:]
+                        folded = c_text[:1000] + tr('\n\n[... {c_text} characters omitted by Blackhole compactor ...]\n\n', c_text=max(0, len(c_text) - 1500)) + c_text[-500:]
                     compacted_m = dict(m)
-                    compacted_m["content"] = f"[Salida de herramienta colapsada por Blackhole (superado contexto)]:\n{folded}"
+                    compacted_m["content"] = tr('[Tool output collapsed by Blackhole (context exceeded)]:\n{folded}', folded=folded)
                     new_msgs[idx] = compacted_m
                     did_compact = True
 
@@ -2113,15 +2121,17 @@ def _compact_conversation_history(
                             fn_names = [c.get("function", {}).get("name", "") for c in m["tool_calls"]]
                             chunks.append(f"Llamadas a herramientas: {', '.join(filter(None, fn_names))}")
                     elif role == "tool":
-                        chunks.append(f"Herramienta {name or 'tool'}:\n{content}")
+                        chunks.append(tr('Tool {tool}:\n{content}', tool=name or 'tool', content=content))
                     elif role == "user":
-                        chunks.append(f"Usuario: {content}")
+                        chunks.append(tr('User: {content}', content=content))
 
                 raw_middle = "\n\n".join(chunks)
                 summary_bullets = _run_luhn_plus(raw_middle, target_count=8, output_format="bullets")
                 summary_content = (
-                    f"[Memoria resumida del progreso previo mediante Luhn+ (alcanzado 90% de contexto: {current_tokens}/{context_window} tokens)]:\n"
-                    f"{summary_bullets}"
+                    tr((
+                        '[Summarized memory of previous progress via Luhn+ (90% of context reached: {current_tokens}/{context_window} tokens)]:\n'
+                        '{summary_bullets}'
+                    ), current_tokens=current_tokens, context_window=context_window, summary_bullets=summary_bullets)
                 )
             elif eng in ("blackhole_llm", "blackhole+llm", "mixed"):
                 bh_summary = _extract_blackhole_summary(middle, user_goal=user_goal)
@@ -2139,17 +2149,21 @@ def _compact_conversation_history(
                     except Exception:
                         reflections = ""
                 if reflections:
-                    bh_summary += f"\n\n### Reflexiones y Decisiones Clave (LLM local)\n{reflections}"
+                    bh_summary += tr('\n\n### Key Reflections and Decisions (local LLM)\n{reflections}', reflections=reflections)
 
                 summary_content = (
-                    f"[Memoria resumida del progreso previo mediante Blackhole con LLM (alcanzado 90% de contexto: {current_tokens}/{context_window} tokens)]:\n"
-                    f"{bh_summary}"
+                    tr((
+                        '[Summarized memory of previous progress via LLM Blackhole (90% of context reached: {current_tokens}/{context_window} tokens)]:\n'
+                        '{bh_summary}'
+                    ), current_tokens=current_tokens, context_window=context_window, bh_summary=bh_summary)
                 )
             else:  # "blackhole" por defecto
                 bh_summary = _extract_blackhole_summary(middle, user_goal=user_goal)
                 summary_content = (
-                    f"[Memoria resumida del progreso previo mediante Blackhole (alcanzado 90% de contexto: {current_tokens}/{context_window} tokens)]:\n"
-                    f"{bh_summary}"
+                    tr((
+                        '[Summarized memory of previous progress via Blackhole (90% of context reached: {current_tokens}/{context_window} tokens)]:\n'
+                        '{bh_summary}'
+                    ), current_tokens=current_tokens, context_window=context_window, bh_summary=bh_summary)
                 )
 
             summary_msg = {
@@ -2158,7 +2172,7 @@ def _compact_conversation_history(
             }
             ack_msg = {
                 "role": "assistant",
-                "content": "Comprendido. Mantengo la memoria compactada de las acciones previas y continúo.",
+                "content": tr('Understood. I keep the compacted memory of the previous actions and continue.'),
             }
 
             new_msgs = [*head, summary_msg, ack_msg, *tail]
@@ -2258,7 +2272,7 @@ def _resolve_safe_path(base_dir: Path, rel_path: str) -> Path:
     clean_rel = rel_path.strip() if rel_path else "."
     target = (base_dir / clean_rel).resolve()
     if target != base_dir and not target.is_relative_to(base_dir):
-        raise PermissionError(f"Ruta fuera del espacio de trabajo permitido: '{rel_path}'")
+        raise PermissionError(tr("Path outside the allowed workspace: '{rel_path}'", rel_path=rel_path))
     return target
 
 
@@ -2269,45 +2283,45 @@ def _clip_tool_output(text: str, max_chars: int = 4000) -> str:
         return s
     head_len = (max_chars - 60) // 2
     tail_len = max_chars - 60 - head_len
-    return f"{s[:head_len]}\n... [truncado {len(s) - max_chars} caracteres] ...\n{s[-tail_len:]}"
+    return tr('{head_len}\n... [truncated {max_chars} characters] ...\n{tail_len}', head_len=s[:head_len], max_chars=len(s) - max_chars, tail_len=s[-tail_len:])
 
 
 def _tool_read(base_dir: Path, path: str, start_line: int = 1, end_line: int | None = None) -> str:
     """Lee el contenido de un archivo dentro de base_dir con numeración de líneas opcional."""
     if not path or not path.strip():
-        return "Error: Debes especificar el parámetro 'path'."
+        return tr("Error: You must specify the 'path' parameter.")
     try:
         target = _resolve_safe_path(base_dir, path.strip())
     except PermissionError as pe:
-        return f"Error de seguridad: {pe}"
+        return tr('Security error: {pe}', pe=pe)
     if not target.exists():
-        return f"Error: El archivo '{path}' no existe."
+        return tr("Error: The file '{path}' does not exist.", path=path)
     if target.is_dir():
-        return f"Error: '{path}' es un directorio. Utiliza la herramienta 'ls' para ver su contenido."
+        return tr("Error: '{path}' is a directory. Use the 'ls' tool to see its contents.", path=path)
     try:
         content = target.read_text(encoding="utf-8", errors="replace")
     except Exception as exc:
-        return f"Error al leer '{path}': {exc}"
+        return tr("Error reading '{path}': {exc}", path=path, exc=exc)
 
     lines = content.splitlines()
     total_lines = len(lines)
     if total_lines == 0:
-        return f"Archivo '{path}' (vacío, 0 líneas)."
+        return tr("File '{path}' (empty, 0 lines).", path=path)
 
     start = max(1, int(start_line or 1))
     end = min(total_lines, int(end_line or total_lines)) if end_line is not None else total_lines
     if start > total_lines:
-        return f"Archivo con {total_lines} líneas. Rango solicitado ({start}-{end}) fuera de límites."
+        return tr('File has {total_lines} lines. Requested range ({start}-{end}) is out of bounds.', total_lines=total_lines, start=start, end=end)
     selected = lines[start - 1 : end]
     numbered = [f"{i:4d} | {line}" for i, line in enumerate(selected, start=start)]
-    header = f"Archivo: {path} (líneas {start}-{end} de {total_lines})"
+    header = tr('File: {path} (lines {start}-{end} of {total_lines})', path=path, start=start, end=end, total_lines=total_lines)
     return header + "\n" + "\n".join(numbered)
 
 
 def _tool_bash(base_dir: Path, command: str, timeout: float = 30.0) -> str:
     """Ejecuta un comando en la consola dentro de base_dir y retorna la salida combinada."""
     if not command or not command.strip():
-        return "Error: Comando vacío."
+        return tr('Error: Empty command.')
     try:
         proc = sbx.run_shell(command, kind="coder", timeout=timeout, cwd=base_dir)
         parts = []
@@ -2315,81 +2329,81 @@ def _tool_bash(base_dir: Path, command: str, timeout: float = 30.0) -> str:
             parts.append(proc.stdout)
         if proc.stderr:
             parts.append(f"[STDERR]\n{proc.stderr}")
-        parts.append(f"[Código de salida: {proc.returncode}]")
+        parts.append(f"[Exit code: {proc.returncode}]")  # marcador fijo: _is_tool_failure lo interpreta
         return "\n".join(parts)
     except subprocess.TimeoutExpired:
-        return f"Error: El comando superó el tiempo límite de {timeout} segundos."
+        return tr('Error: The command exceeded the time limit of {timeout} seconds.', timeout=timeout)
     except sbx.SandboxUnavailable as exc:
         return f"Error: {exc}"
     except Exception as exc:
-        return f"Error al ejecutar comando: {exc}"
+        return tr('Error running command: {exc}', exc=exc)
 
 
 def _tool_edit(base_dir: Path, path: str, old_str: str, new_str: str) -> str:
     """Edita un archivo reemplazando una única ocurrencia exacta de old_str por new_str."""
     if not path or not path.strip():
-        return "Error: Debes especificar el parámetro 'path'."
+        return tr("Error: You must specify the 'path' parameter.")
     if not old_str:
-        return "Error: 'old_str' no puede estar vacío."
+        return tr("Error: 'old_str' cannot be empty.")
     try:
         target = _resolve_safe_path(base_dir, path.strip())
     except PermissionError as pe:
-        return f"Error de seguridad: {pe}"
+        return tr('Security error: {pe}', pe=pe)
     if not target.exists():
-        return f"Error: El archivo '{path}' no existe."
+        return tr("Error: The file '{path}' does not exist.", path=path)
     if target.is_dir():
-        return f"Error: '{path}' es un directorio."
+        return tr("Error: '{path}' is a directory.", path=path)
     try:
         content = target.read_text(encoding="utf-8", errors="replace")
     except Exception as exc:
-        return f"Error al leer '{path}': {exc}"
+        return tr("Error reading '{path}': {exc}", path=path, exc=exc)
 
     count = content.count(old_str)
     if count == 0:
-        return f"Error: No se encontró 'old_str' en '{path}'. Verifica caracteres, saltos de línea e indentación."
+        return tr("Error: 'old_str' not found in '{path}'. Check characters, line breaks and indentation.", path=path)
     if count > 1:
-        return f"Error: 'old_str' aparece {count} veces en '{path}'. Debe ser único para editarlo con seguridad. Añade más contexto circundante."
+        return tr("Error: 'old_str' appears {count} times in '{path}'. It must be unique to edit safely. Add more surrounding context.", count=count, path=path)
 
     updated = content.replace(old_str, new_str, 1)
     try:
         target.write_text(updated, encoding="utf-8")
-        return f"Éxito: Archivo '{path}' editado correctamente."
+        return tr("Success: File '{path}' edited successfully.", path=path)
     except Exception as exc:
-        return f"Error al guardar cambios en '{path}': {exc}"
+        return tr("Error saving changes to '{path}': {exc}", path=path, exc=exc)
 
 
 def _tool_write(base_dir: Path, path: str, content: str) -> str:
     """Crea o sobreescribe un archivo en base_dir."""
     if not path or not path.strip():
-        return "Error: Debes especificar el parámetro 'path'."
+        return tr("Error: You must specify the 'path' parameter.")
     try:
         target = _resolve_safe_path(base_dir, path.strip())
     except PermissionError as pe:
-        return f"Error de seguridad: {pe}"
+        return tr('Security error: {pe}', pe=pe)
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
-        return f"Éxito: Archivo '{path}' guardado ({len(content)} caracteres)."
+        return tr("Success: File '{path}' saved ({content} characters).", path=path, content=len(content))
     except Exception as exc:
-        return f"Error al escribir en '{path}': {exc}"
+        return tr("Error writing to '{path}': {exc}", path=path, exc=exc)
 
 
 def _tool_grep(base_dir: Path, pattern: str, path: str = ".", case_insensitive: bool = False) -> str:
     """Busca un patrón de texto o expresión regular dentro de base_dir omitiendo carpetas binarias o caches."""
     if not pattern or not pattern.strip():
-        return "Error: Debes especificar el parámetro 'pattern'."
+        return tr("Error: You must specify the 'pattern' parameter.")
     try:
         target = _resolve_safe_path(base_dir, (path or ".").strip())
     except PermissionError as pe:
-        return f"Error de seguridad: {pe}"
+        return tr('Security error: {pe}', pe=pe)
     if not target.exists():
-        return f"Error: La ruta '{path}' no existe."
+        return tr("Error: The path '{path}' does not exist.", path=path)
 
     flags = re.IGNORECASE if case_insensitive else 0
     try:
         rx = re.compile(pattern, flags)
     except re.error as exc:
-        return f"Error en sintaxis de expresión regular '{pattern}': {exc}"
+        return tr("Error in regular expression syntax '{pattern}': {exc}", pattern=pattern, exc=exc)
 
     ignored_names = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", ".ruff_cache", "node_modules", "dist", "build"}
     matches = []
@@ -2416,12 +2430,12 @@ def _tool_grep(base_dir: Path, pattern: str, path: str = ".", case_insensitive: 
                 if rx.search(line):
                     matches.append(f"{rel}:{idx}: {line.strip()[:200]}")
                     if len(matches) >= max_matches:
-                        return "\n".join(matches) + f"\n... (límite de {max_matches} coincidencias alcanzado)"
+                        return "\n".join(matches) + tr('\n... (limit of {max_matches} matches reached)', max_matches=max_matches)
         except Exception:
             continue
 
     if not matches:
-        return f"Sin coincidencias para '{pattern}' en '{path}'."
+        return tr("No matches for '{pattern}' in '{path}'.", pattern=pattern, path=path)
     return "\n".join(matches)
 
 
@@ -2430,11 +2444,11 @@ def _tool_find(base_dir: Path, pattern: str = "*", path: str = ".") -> str:
     try:
         target = _resolve_safe_path(base_dir, (path or ".").strip())
     except PermissionError as pe:
-        return f"Error de seguridad: {pe}"
+        return tr('Security error: {pe}', pe=pe)
     if not target.exists():
-        return f"Error: La ruta '{path}' no existe."
+        return tr("Error: The path '{path}' does not exist.", path=path)
     if not target.is_dir():
-        return f"Error: '{path}' no es un directorio."
+        return tr("Error: '{path}' is not a directory.", path=path)
 
     ignored_names = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", ".ruff_cache", "node_modules", "dist", "build"}
     pat = pattern.strip() if pattern and pattern.strip() else "*"
@@ -2459,10 +2473,10 @@ def _tool_find(base_dir: Path, pattern: str = "*", path: str = ".") -> str:
                 except ValueError:
                     pass
             if len(matches) >= max_results:
-                return "\n".join(matches) + f"\n... (límite de {max_results} elementos alcanzado)"
+                return "\n".join(matches) + tr('\n... ({max_results} item limit reached)', max_results=max_results)
 
     if not matches:
-        return f"No se encontraron archivos con el patrón '{pat}' en '{path}'."
+        return tr("No files found matching the pattern '{pat}' in '{path}'.", pat=pat, path=path)
     return "\n".join(matches)
 
 
@@ -2471,9 +2485,9 @@ def _tool_ls(base_dir: Path, path: str = ".") -> str:
     try:
         target = _resolve_safe_path(base_dir, (path or ".").strip())
     except PermissionError as pe:
-        return f"Error de seguridad: {pe}"
+        return tr('Security error: {pe}', pe=pe)
     if not target.exists():
-        return f"Error: La ruta '{path}' no existe."
+        return tr("Error: The path '{path}' does not exist.", path=path)
     if target.is_file():
         size = target.stat().st_size
         return f"[FILE] {path} ({size} bytes)"
@@ -2490,26 +2504,26 @@ def _tool_ls(base_dir: Path, path: str = ".") -> str:
             else:
                 entries.append(f"[FILE] {item.name} ({item.stat().st_size} bytes)")
             if len(entries) >= 150:
-                entries.append("... (más elementos truncados)")
+                entries.append(tr('... (more items truncated)'))
                 break
     except Exception as exc:
-        return f"Error al listar '{path}': {exc}"
+        return tr("Error listing '{path}': {exc}", path=path, exc=exc)
 
-    return "\n".join(entries) if entries else "(directorio vacío)"
+    return "\n".join(entries) if entries else tr('(empty directory)')
 
 
 def _tool_web_search(query: str, limit: int = 5, timeout: float = 30.0) -> str:
     """Busca en internet usando DuckDuckGo (sin API key) y devuelve los resultados formateados en Markdown."""
     if not query or not query.strip():
-        return "Error: Debes especificar el parámetro 'query'."
+        return tr("Error: You must specify the 'query' parameter.")
     try:
         max_l = max(1, min(int(limit or 5), 10))
         res = web_search(None, [], query=query.strip(), engine="duckduckgo", limit=max_l, output_format="markdown", timeout=timeout)
         if res.ok:
-            return str(res.data) if res.data else "Sin resultados encontrados para la búsqueda."
-        return f"Error en búsqueda web: {res.error}"
+            return str(res.data) if res.data else tr('No results found for the search.')
+        return tr('Web search error: {error}', error=res.error)
     except Exception as exc:
-        return f"Error al ejecutar búsqueda web: {exc}"
+        return tr('Error running web search: {exc}', exc=exc)
 
 
 CODER_TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
@@ -2517,21 +2531,21 @@ CODER_TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "read",
-            "description": "Lee el contenido de un archivo dentro del espacio de trabajo con numeración de líneas opcional.",
+            "description": tr('Reads the contents of a file within the workspace with optional line numbering.'),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Ruta relativa del archivo a leer.",
+                        "description": tr('Relative path of the file to read.'),
                     },
                     "start_line": {
                         "type": "integer",
-                        "description": "Línea inicial a leer (1-indexed, opcional).",
+                        "description": tr('Starting line to read (1-indexed, optional).'),
                     },
                     "end_line": {
                         "type": "integer",
-                        "description": "Línea final a leer (1-indexed, opcional).",
+                        "description": tr('Ending line to read (1-indexed, optional).'),
                     },
                 },
                 "required": ["path"],
@@ -2542,13 +2556,13 @@ CODER_TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "bash",
-            "description": "Ejecuta un comando en la consola dentro del espacio de trabajo y devuelve la salida combinada y código de salida.",
+            "description": tr('Runs a command in the console within the workspace and returns the combined output and exit code.'),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "Comando de shell a ejecutar (ej. 'pytest tests/', 'ruff check .').",
+                        "description": tr("Shell command to run (e.g. 'pytest tests/', 'ruff check .')."),
                     },
                 },
                 "required": ["command"],
@@ -2559,21 +2573,21 @@ CODER_TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "edit",
-            "description": "Edita un archivo reemplazando una ocurrencia exacta y única de 'old_str' por 'new_str'.",
+            "description": tr("Edits a file by replacing one exact, unique occurrence of 'old_str' with 'new_str'."),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Ruta relativa del archivo a editar.",
+                        "description": tr('Relative path of the file to edit.'),
                     },
                     "old_str": {
                         "type": "string",
-                        "description": "Cadena de texto exacta existente que se desea reemplazar.",
+                        "description": tr('Exact existing text string to be replaced.'),
                     },
                     "new_str": {
                         "type": "string",
-                        "description": "Nueva cadena de texto que sustituirá a 'old_str'.",
+                        "description": tr("New text string that will replace 'old_str'."),
                     },
                 },
                 "required": ["path", "old_str", "new_str"],
@@ -2584,17 +2598,17 @@ CODER_TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "write",
-            "description": "Crea o sobreescribe un archivo completo con el contenido indicado en el espacio de trabajo.",
+            "description": tr('Creates or overwrites an entire file with the given content in the workspace.'),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Ruta relativa del archivo a escribir.",
+                        "description": tr('Relative path of the file to write.'),
                     },
                     "content": {
                         "type": "string",
-                        "description": "Contenido completo del archivo a guardar.",
+                        "description": tr('Full content of the file to save.'),
                     },
                 },
                 "required": ["path", "content"],
@@ -2605,21 +2619,21 @@ CODER_TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "grep",
-            "description": "Busca un patrón de texto o expresión regular en archivos del proyecto, omitiendo carpetas binarias o de dependencias.",
+            "description": tr('Searches for a text pattern or regular expression in project files, skipping binary or dependency folders.'),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "pattern": {
                         "type": "string",
-                        "description": "Patrón o expresión regular a buscar.",
+                        "description": tr('Pattern or regular expression to search for.'),
                     },
                     "path": {
                         "type": "string",
-                        "description": "Ruta relativa donde buscar (por defecto '.').",
+                        "description": tr("Relative path to search in (default '.')."),
                     },
                     "case_insensitive": {
                         "type": "boolean",
-                        "description": "Indica si la búsqueda debe ignorar mayúsculas y minúsculas (por defecto False).",
+                        "description": tr('Whether the search should ignore case (default False).'),
                     },
                 },
                 "required": ["pattern"],
@@ -2630,17 +2644,17 @@ CODER_TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "find",
-            "description": "Busca archivos y directorios que coincidan con un patrón glob en el espacio de trabajo.",
+            "description": tr('Searches for files and directories matching a glob pattern in the workspace.'),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "pattern": {
                         "type": "string",
-                        "description": "Patrón glob (ej. '*.py', '*test*'). Por defecto '*'.",
+                        "description": tr("Glob pattern (e.g. '*.py', '*test*'). Default '*'."),
                     },
                     "path": {
                         "type": "string",
-                        "description": "Ruta relativa inicial de búsqueda (por defecto '.').",
+                        "description": tr("Initial relative search path (default '.')."),
                     },
                 },
             },
@@ -2650,13 +2664,13 @@ CODER_TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "ls",
-            "description": "Lista el contenido de un directorio en el espacio de trabajo indicando si es archivo o carpeta y su tamaño.",
+            "description": tr('Lists the contents of a directory in the workspace, indicating whether each is a file or folder and its size.'),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Ruta relativa a listar (por defecto '.').",
+                        "description": tr("Relative path to list (default '.')."),
                     },
                 },
             },
@@ -2666,17 +2680,17 @@ CODER_TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "Busca información o documentación técnica en internet mediante DuckDuckGo sin necesidad de API key. Devuelve títulos, URLs y resúmenes de resultados.",
+            "description": tr('Searches the internet for technical information or documentation via DuckDuckGo without needing an API key. Returns titles, URLs and result summaries.'),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Consulta o términos de búsqueda a consultar en la web.",
+                        "description": tr('Query or search terms to look up on the web.'),
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Número máximo de resultados a recuperar (por defecto 5, máximo 10).",
+                        "description": tr('Maximum number of results to retrieve (default 5, maximum 10).'),
                     },
                 },
                 "required": ["query"],
@@ -2710,11 +2724,11 @@ def coder_agent(
     """Microarnés de agente programador con bucle ReAct multi-turno, detección de bucles y compactación Blackhole / Luhn+."""
     inp = Inputs(inputs)
     input_text = inp.text()
-    user_msg = f"{prompt}\n\nContexto / Entrada previa:\n{input_text}" if input_text else prompt
+    user_msg = tr('{prompt}\n\nContext / Previous input:\n{input_text}', prompt=prompt, input_text=input_text) if input_text else prompt
 
     base_path = Path(workspace_dir or ".").expanduser().resolve()
     if not base_path.exists():
-        return NodeResult("error", error=f"El directorio de trabajo no existe: '{workspace_dir}'")
+        return NodeResult("error", error=tr("The working directory does not exist: '{workspace_dir}'", workspace_dir=workspace_dir))
 
     preset = (tools_preset or "coding").lower().strip()
     if preset == "all":
@@ -2766,9 +2780,7 @@ def coder_agent(
     compactions_count = 0
 
     default_system = (
-        "Eres un agente de programación autónomo e inspección de código. "
-        "Tienes acceso a herramientas para explorar, leer, editar y ejecutar pruebas en el proyecto. "
-        "Sé riguroso, objetivo y conciso. Cuando completes la tarea solicitada, resume tus conclusiones o modificaciones."
+        tr('You are an autonomous programming and code inspection agent. You have access to tools to explore, read, edit and run tests in the project. Be rigorous, objective and concise. When you complete the requested task, summarize your conclusions or modifications.')
     )
     sys_content = system_prompt.strip() or default_system
 
@@ -2825,7 +2837,7 @@ def coder_agent(
                             "threshold": int(context_window * 0.90),
                             "engine": eng_clean,
                         },
-                        "output_preview": f"Contexto compactado al 90% con {eng_clean} ({_estimate_messages_tokens(messages)} tokens estimados)",
+                        "output_preview": tr('Context compacted to 90% with {eng_clean} ({messages} estimated tokens)', eng_clean=eng_clean, messages=_estimate_messages_tokens(messages)),
                     })
 
                 payload: dict[str, Any] = {
@@ -2838,7 +2850,7 @@ def coder_agent(
 
                 resp = client.post(endpoint, headers=headers, json=payload)
                 if resp.status_code >= 400:
-                    return NodeResult("error", error=f"LLM API devolvió HTTP {resp.status_code}: {resp.text[:300]}")
+                    return NodeResult("error", error=tr('LLM API returned HTTP {status_code}: {text}', status_code=resp.status_code, text=resp.text[:300]))
 
                 data = resp.json()
                 choice = data["choices"][0]
@@ -2865,14 +2877,14 @@ def coder_agent(
                         args = raw_args or {}
 
                     if fn_name not in active_tool_names or fn_name not in tool_handlers:
-                        result_str = f"Error: La herramienta '{fn_name}' no está disponible o no está autorizada en este nodo."
+                        result_str = tr("Error: The tool '{fn_name}' is not available or is not authorized on this node.", fn_name=fn_name)
                     else:
                         try:
                             result_str = tool_handlers[fn_name](args)
                             if fn_name in ("write", "edit") and "path" in args:
                                 modified_files.add(str(args["path"]))
                         except Exception as err:
-                            result_str = f"Error al ejecutar '{fn_name}': {err}"
+                            result_str = tr("Error running '{fn_name}': {err}", fn_name=fn_name, err=err)
 
                     # Detección de fallos para control de bucles
                     is_fail = _is_tool_failure(fn_name, result_str)
@@ -2899,15 +2911,14 @@ def coder_agent(
                 loop_warnings = []
                 for t_name, failures in list(consecutive_tool_failures.items()):
                     if failures >= 3:
-                        loop_warnings.append(f"La herramienta '{t_name}' ha fallado {failures} veces consecutivas.")
+                        loop_warnings.append(tr("Tool '{t_name}' has failed {failures} consecutive times.", t_name=t_name, failures=failures))
                         consecutive_tool_failures[t_name] = 0  # Reiniciar tras advertir para evitar repeticiones en cada turno
 
                 if loop_warnings:
                     warning_msg = (
-                        "[Aviso de bucle del sistema]: "
+                        tr('[System loop warning]: ')
                         + " ".join(loop_warnings)
-                        + " Detén los intentos repetitivos con los mismos parámetros. "
-                        "Analiza la causa raíz del error, inspecciona el estado de los archivos o cambia de estrategia antes de continuar."
+                        + tr(' Stop repeating attempts with the same parameters. Analyze the root cause of the error, inspect the state of the files, or change strategy before continuing.')
                     )
                     messages.append({
                         "role": "user",
@@ -2934,7 +2945,7 @@ def coder_agent(
                 )
                 messages.append({
                     "role": "user",
-                    "content": "Se ha alcanzado el límite de turnos. Resume brevemente las acciones realizadas y el estado actual.",
+                    "content": tr('The turn limit has been reached. Briefly summarize the actions performed and the current state.'),
                 })
                 try:
                     final_resp = client.post(
@@ -2950,10 +2961,10 @@ def coder_agent(
                         final_data = final_resp.json()
                         final_response = (final_data["choices"][0]["message"].get("content") or "").strip()
                 except Exception:
-                    final_response = (messages[-2].get("content") or "Límite de turnos alcanzado.").strip()
+                    final_response = (messages[-2].get("content") or tr('Turn limit reached.')).strip()
 
     except Exception as exc:
-        return NodeResult("error", error=f"Error en bucle del agente programador: {exc}")
+        return NodeResult("error", error=tr('Error in programming agent loop: {exc}', exc=exc))
 
     res_data = {
         "response": final_response,
@@ -3026,7 +3037,7 @@ def web_search(
         rendered_query = inp.text().strip()
 
     if not rendered_query:
-        return NodeResult("error", error="Se requiere un término de búsqueda en 'query'.")
+        return NodeResult("error", error=tr("A search term is required in 'query'."))
 
     eng = (engine or "duckduckgo").lower().strip()
     max_items = max(1, int(limit or 5))
@@ -3058,10 +3069,10 @@ def web_search(
                         if r_post.status_code == 200:
                             resp_text = r_post.text
             except Exception as exc:
-                return NodeResult("error", error=f"Fallo en búsqueda DuckDuckGo: {exc}")
+                return NodeResult("error", error=tr('DuckDuckGo search failed: {exc}', exc=exc))
 
         if not resp_text:
-            return NodeResult("error", error="No se pudo obtener respuesta de DuckDuckGo.")
+            return NodeResult("error", error=tr('Could not get a response from DuckDuckGo.'))
 
         blocks = re.split(r"<div[^>]+class=[\"\'][^\"\']*web-result", resp_text)[1:]
         for b in blocks[:max_items]:
@@ -3091,7 +3102,7 @@ def web_search(
     elif eng == "tavily":
         token = secrets.get(secret) if secret else ""
         if not token:
-            return NodeResult("error", error="El motor 'tavily' requiere configurar un secreto con la API Key.")
+            return NodeResult("error", error=tr("The 'tavily' engine requires configuring a secret with the API Key."))
 
         url = "https://api.tavily.com/search"
         payload = {
@@ -3114,12 +3125,12 @@ def web_search(
                         "score": item.get("score"),
                     })
         except Exception as exc:
-            return NodeResult("error", error=f"Fallo en búsqueda Tavily: {exc}")
+            return NodeResult("error", error=tr('Tavily search failed: {exc}', exc=exc))
 
     elif eng in ("exa", "metaphor"):
         token = secrets.get(secret) if secret else ""
         if not token:
-            return NodeResult("error", error="El motor 'exa' requiere configurar un secreto con la API Key.")
+            return NodeResult("error", error=tr("The 'exa' engine requires configuring a secret with the API Key."))
 
         url = "https://api.exa.ai/search"
         headers = {
@@ -3151,10 +3162,10 @@ def web_search(
                         "published_date": item.get("publishedDate"),
                     })
         except Exception as exc:
-            return NodeResult("error", error=f"Fallo en búsqueda Exa: {exc}")
+            return NodeResult("error", error=tr('Exa search failed: {exc}', exc=exc))
 
     else:
-        return NodeResult("error", error=f"Motor de búsqueda desconocido: '{engine}'. Use 'duckduckgo', 'tavily' o 'exa'.")
+        return NodeResult("error", error=tr("Unknown search engine: '{engine}'. Use 'duckduckgo', 'tavily' or 'exa'.", engine=engine))
 
     fmt = (output_format or "json").lower().strip()
     if fmt in ("markdown", "text", "texto"):
@@ -3324,9 +3335,9 @@ def summarize_text(
     # Motor LLM
     is_bullet = (format or "").lower().strip() in ("bullets", "bullet", "viñetas", "vineta", "list", "lista")
     default_sys = (
-        "Resume el siguiente texto manteniendo los puntos clave en una lista de viñetas."
+        tr('Summarize the following text, keeping the key points in a bulleted list.')
         if is_bullet
-        else "Resume el siguiente texto manteniendo los puntos clave."
+        else tr('Summarize the following text, keeping the key points.')
     )
     sys_prompt = prompt or default_sys
     limits = {"short": 512, "medium": 1024, "long": 2048, "full": 4096}
@@ -3338,7 +3349,7 @@ def summarize_text(
         summary = call_llm(text, system=sys_prompt, tokens=tokens, llm=llm)
         return NodeResult("ok", data=summary)
     except Exception as exc:
-        return NodeResult("error", error=f"Fallo en resumen con LLM: {exc}")
+        return NodeResult("error", error=tr('LLM summarization failed: {exc}', exc=exc))
 
 
 def merge(ctx: Any, inputs: list[NodeResult]) -> NodeResult:
@@ -3359,7 +3370,7 @@ def script(
         res = fn(inp, ctx)
         return NodeResult("ok", data=res)
     except Exception as exc:
-        return NodeResult("error", error=f"Error en código Python del nodo: {exc}")
+        return NodeResult("error", error=tr("Error in the node's Python code: {exc}", exc=exc))
 
 
 # ---------------------------------------------------------------------------
@@ -3416,7 +3427,7 @@ def file(
             target.write_text(payload, encoding="utf-8")
         return NodeResult("ok", data=str(target))
     except Exception as exc:
-        return NodeResult("error", error=f"Error al escribir fichero: {exc}")
+        return NodeResult("error", error=tr('Error writing file: {exc}', exc=exc))
 
 
 def evidence_vault(
@@ -3434,7 +3445,7 @@ def evidence_vault(
     raw_text = inp.text()
 
     if first is None and not raw_text:
-        return NodeResult("error", error="El nodo de custodia de evidencia (Evidence Vault) no recibió datos")
+        return NodeResult("error", error=tr('The Evidence Vault node did not receive any data'))
 
     incident_id = "inc"
     resource = ""
@@ -3514,7 +3525,7 @@ def evidence_vault(
         }
         return NodeResult("ok", data=result_data)
     except Exception as exc:
-        return NodeResult("error", error=f"Error al escribir en Evidence Vault: {exc}")
+        return NodeResult("error", error=tr('Error writing to Evidence Vault: {exc}', exc=exc))
 
 
 def _text_to_atlassian_doc(text: str) -> dict[str, Any]:
@@ -3565,7 +3576,7 @@ def jira_issue_output(
     """Crea, actualiza, comenta o transiciona tickets en Jira Cloud usando la REST API v3."""
     base_url = instance_url.strip().rstrip("/")
     if not base_url:
-        return NodeResult("error", error="Falta la URL de la instancia de Jira (ej. https://mi-dominio.atlassian.net)")
+        return NodeResult("error", error=tr('Missing Jira instance URL (e.g. https://my-domain.atlassian.net)'))
 
     headers = _build_atlassian_auth_header(email, secret)
     inp = Inputs(inputs)
@@ -3611,9 +3622,9 @@ def jira_issue_output(
         # 1. ACCIÓN: AÑADIR COMENTARIO
         if act == "add_comment":
             if not target_key:
-                raise ValueError("Se requiere issue_key para añadir un comentario al ticket")
+                raise ValueError(tr('issue_key is required to add a comment to the ticket'))
             if not comment_text:
-                raise ValueError(f"No hay contenido de comentario para el ticket {target_key}")
+                raise ValueError(tr('No comment content for ticket {target_key}', target_key=target_key))
 
             comment_endpoint = f"{base_url}/rest/api/3/issue/{target_key}/comment"
             comment_payload = {"body": _text_to_atlassian_doc(comment_text)}
@@ -3631,16 +3642,16 @@ def jira_issue_output(
         # 2. ACCIÓN: TRANSICIÓN DE ESTADO
         elif act in ("transition", "change_status"):
             if not target_key:
-                raise ValueError("Se requiere issue_key para transicionar el estado del ticket")
+                raise ValueError(tr('issue_key is required to transition the ticket status'))
             target_status = (status_transition.strip() or str(item_data.get("status_transition") or "")).strip()
             if not target_status:
-                raise ValueError("Falta especificar status_transition (ej. 'In Progress', 'Done', 'Triaged')")
+                raise ValueError(tr("status_transition is missing (e.g. 'In Progress', 'Done', 'Triaged')"))
 
             # Obtener transiciones disponibles para el issue
             trans_endpoint = f"{base_url}/rest/api/3/issue/{target_key}/transitions"
             t_resp = client.get(trans_endpoint, headers=headers)
             if t_resp.status_code >= 400:
-                raise RuntimeError(f"Error obteniendo transiciones para {target_key}: {t_resp.text[:200]}")
+                raise RuntimeError(tr('Error fetching transitions for {target_key}: {text}', target_key=target_key, text=t_resp.text[:200]))
             transitions = t_resp.json().get("transitions", [])
             match_trans = next(
                 (t for t in transitions if t.get("name", "").lower() == target_status.lower()),
@@ -3648,7 +3659,7 @@ def jira_issue_output(
             )
             if not match_trans:
                 available = ", ".join(t.get("name", "") for t in transitions)
-                raise ValueError(f"Transición '{target_status}' no disponible para {target_key}. Disponibles: {available or 'ninguna'}")
+                raise ValueError(tr("Transition '{target_status}' not available for {target_key}. Available: {ninguna}", target_status=target_status, target_key=target_key, ninguna=available or tr('none')))
 
             trans_payload = {"transition": {"id": match_trans["id"]}}
             if comment_text:
@@ -3656,7 +3667,7 @@ def jira_issue_output(
 
             post_t = client.post(trans_endpoint, headers=headers, json=trans_payload)
             if post_t.status_code >= 400:
-                raise RuntimeError(f"Error aplicando transición a {target_key}: {post_t.text[:200]}")
+                raise RuntimeError(tr('Error applying transition to {target_key}: {text}', target_key=target_key, text=post_t.text[:200]))
 
             return {
                 "key": target_key,
@@ -3668,7 +3679,7 @@ def jira_issue_output(
         # 3. ACCIÓN: ACTUALIZAR CAMPOS (Prioridad, etiquetas, resumen)
         elif act == "update":
             if not target_key:
-                raise ValueError("Se requiere issue_key para actualizar el ticket")
+                raise ValueError(tr('issue_key is required to update the ticket'))
             update_endpoint = f"{base_url}/rest/api/3/issue/{target_key}"
             fields_to_update: dict[str, Any] = {}
 
@@ -3686,7 +3697,7 @@ def jira_issue_output(
                 fields_to_update["description"] = _text_to_atlassian_doc(description.strip())
 
             if not fields_to_update and not comment_text:
-                raise ValueError("No se especificaron campos ni comentarios para actualizar en el ticket")
+                raise ValueError(tr('No fields or comments were specified to update on the ticket'))
 
             update_payload: dict[str, Any] = {}
             if fields_to_update:
@@ -3709,7 +3720,7 @@ def jira_issue_output(
         else:
             proj = (project_key.strip() or str(item_data.get("project_key") or "")).strip().upper()
             if not proj:
-                raise ValueError("Falta la clave del proyecto (project_key, ej. SEC, OPS) para crear el ticket")
+                raise ValueError(tr('The project key (project_key, e.g. SEC, OPS) is missing to create the ticket'))
 
             final_sum = summary.strip()
             if not final_sum:
@@ -3717,7 +3728,7 @@ def jira_issue_output(
                     item_data.get("summary")
                     or item_data.get("title")
                     or (item_data.get("meta") or {}).get("incident_id")
-                    or "Incidencia detectada por Dédalo"
+                    or tr('Incident detected by Dédalo')
                 )
 
             final_d = description.strip()
@@ -3749,7 +3760,7 @@ def jira_issue_output(
 
             resp = client.post(create_endpoint, headers=headers, json={"fields": fields_payload})
             if resp.status_code >= 400:
-                raise RuntimeError(f"Error al crear ticket en Jira ({resp.status_code}): {resp.text[:300]}")
+                raise RuntimeError(tr('Error creating Jira ticket ({status_code}): {text}', status_code=resp.status_code, text=resp.text[:300]))
             data = resp.json()
             k = data.get("key")
             return {
@@ -3774,7 +3785,7 @@ def jira_issue_output(
                 return NodeResult("ok", data=executed[0])
             return NodeResult("ok", data={"processed": len(executed), "results": executed})
     except Exception as exc:
-        return NodeResult("error", error=f"Error en operación de Jira ({act}): {exc}")
+        return NodeResult("error", error=tr('Error in Jira operation ({act}): {exc}', act=act, exc=exc))
 
 
 def confluence_page_output(
@@ -3794,7 +3805,7 @@ def confluence_page_output(
     """Crea o actualiza una página en Confluence Cloud usando XHTML/Storage format."""
     base_url = instance_url.strip().rstrip("/")
     if not base_url:
-        return NodeResult("error", error="Falta la URL de la instancia de Confluence (ej. https://mi-dominio.atlassian.net/wiki)")
+        return NodeResult("error", error=tr('Missing Confluence instance URL (e.g. https://my-domain.atlassian.net/wiki)'))
 
     wiki_base = base_url if base_url.endswith("/wiki") else f"{base_url}/wiki"
     headers = _build_atlassian_auth_header(email, secret)
@@ -3829,15 +3840,15 @@ def confluence_page_output(
             else:
                 final_content = json.dumps(first, ensure_ascii=False, indent=2)
     elif not final_title:
-        final_title = f"Documento Dédalo - {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        final_title = tr('Dédalo Document - {M}', M=datetime.datetime.now().strftime('%Y-%m-%d %H:%M'))
         if not final_content:
-            final_content = raw_text or "Contenido generado automáticamente."
+            final_content = raw_text or tr('Automatically generated content.')
 
     if not final_content:
-        final_content = "Documento vacío."
+        final_content = tr('Empty document.')
 
     if not target_page_id and not target_space:
-        return NodeResult("error", error="Falta la clave del espacio (space_key) o el ID de página (page_id) de Confluence")
+        return NodeResult("error", error=tr('Missing Confluence space key (space_key) or page ID (page_id)'))
 
     # Formatear el contenido nuevo en HTML/XHTML para Confluence Storage Format
     html_paragraphs = "".join(f"<p>{html.escape(p)}</p>" for p in final_content.split("\n\n") if p.strip())
@@ -3928,7 +3939,7 @@ def confluence_page_output(
                 "action": "updated" if existing_page else "created",
             })
     except Exception as exc:
-        return NodeResult("error", error=f"Error de conexión con Confluence: {exc}")
+        return NodeResult("error", error=tr('Connection error with Confluence: {exc}', exc=exc))
 
 
 def sqlite_exec(
@@ -3940,7 +3951,7 @@ def sqlite_exec(
 ) -> NodeResult:
     """Ejecuta sentencias INSERT, UPDATE o DELETE en SQLite local."""
     if not query.strip():
-        return NodeResult("error", error="Falta la sentencia SQL")
+        return NodeResult("error", error=tr('Missing SQL statement'))
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     inp = Inputs(inputs)
@@ -3959,7 +3970,7 @@ def sqlite_exec(
             conn.commit()
             return NodeResult("ok", data={"rows_affected": cur.rowcount})
     except Exception as exc:
-        return NodeResult("error", error=f"Error en ejecución SQLite: {exc}")
+        return NodeResult("error", error=tr('Error in SQLite execution: {exc}', exc=exc))
 
 
 def email_smtp(
@@ -3972,7 +3983,7 @@ def email_smtp(
     secret: str = "",
     from_addr: str = "",
     to_addr: str = "",
-    subject: str = "Aviso de Dédalo",
+    subject: str = 'Dédalo notice',
     use_tls: bool = True,
     is_html: bool = False,
 ) -> NodeResult:
@@ -3980,7 +3991,7 @@ def email_smtp(
     inp = Inputs(inputs)
     body = inp.text()
     if not to_addr.strip():
-        return NodeResult("error", error="Falta la dirección del destinatario (to_addr)")
+        return NodeResult("error", error=tr('Missing recipient address (to_addr)'))
     password = secrets.get(secret) if secret else ""
     sender = from_addr.strip() or user.strip()
 
@@ -4008,9 +4019,9 @@ def email_smtp(
             server.login(user, password)
         server.send_message(msg)
         server.quit()
-        return NodeResult("ok", data=f"Email enviado a {to_addr}")
+        return NodeResult("ok", data=tr('Email sent to {to_addr}', to_addr=to_addr))
     except Exception as exc:
-        return NodeResult("error", error=f"Error al enviar correo SMTP: {exc}")
+        return NodeResult("error", error=tr('Error sending SMTP email: {exc}', exc=exc))
 
 
 def ntfy(
@@ -4026,7 +4037,7 @@ def ntfy(
 ) -> NodeResult:
     """Envía una notificación push mediante ntfy.sh o servidor propio."""
     if not topic.strip():
-        return NodeResult("error", error="Falta el topic de ntfy")
+        return NodeResult("error", error=tr('Missing ntfy topic'))
     inp = Inputs(inputs)
     body = inp.text()
     base = server.rstrip("/")
@@ -4045,10 +4056,10 @@ def ntfy(
         with httpx.Client(timeout=15.0) as client:
             resp = client.post(url, data=body.encode("utf-8"), headers=headers)
             if resp.status_code >= 400:
-                return NodeResult("error", error=f"ntfy falló con HTTP {resp.status_code}: {resp.text[:100]}")
-            return NodeResult("ok", data=f"Notificación ntfy enviada a {topic}")
+                return NodeResult("error", error=tr('ntfy failed with HTTP {status_code}: {text}', status_code=resp.status_code, text=resp.text[:100]))
+            return NodeResult("ok", data=tr('ntfy notification sent to {topic}', topic=topic))
     except Exception as exc:
-        return NodeResult("error", error=f"Error enviando ntfy: {exc}")
+        return NodeResult("error", error=tr('Error sending ntfy: {exc}', exc=exc))
 
 
 def discord(
@@ -4069,13 +4080,13 @@ def discord(
         if token:
             url = token
     if not url.strip():
-        return NodeResult("error", error="Falta la URL del webhook de Discord")
+        return NodeResult("error", error=tr('Missing Discord webhook URL'))
     inp = Inputs(inputs)
     msg_content = content.replace("{entrada}", inp.text()) if content else inp.text()
     payload: dict[str, Any] = {"username": username or "Dédalo"}
     if use_embed:
         payload["embeds"] = [{
-            "title": title or "Aviso de Dédalo",
+            "title": title or tr('Dédalo notice'),
             "description": msg_content[:4000],
             "color": 3447003,
         }]
@@ -4085,10 +4096,10 @@ def discord(
         with httpx.Client(timeout=15.0) as client:
             resp = client.post(url, json=payload)
             if resp.status_code >= 400:
-                return NodeResult("error", error=f"Discord webhook falló: {resp.status_code}")
-            return NodeResult("ok", data="Mensaje enviado a Discord con éxito")
+                return NodeResult("error", error=tr('Discord webhook failed: {status_code}', status_code=resp.status_code))
+            return NodeResult("ok", data=tr('Message sent to Discord successfully'))
     except Exception as exc:
-        return NodeResult("error", error=f"Error enviando a Discord: {exc}")
+        return NodeResult("error", error=tr('Error sending to Discord: {exc}', exc=exc))
 
 
 def slack(
@@ -4107,7 +4118,7 @@ def slack(
         if token:
             url = token
     if not url.strip():
-        return NodeResult("error", error="Falta la URL del webhook de Slack")
+        return NodeResult("error", error=tr('Missing Slack webhook URL'))
     inp = Inputs(inputs)
     msg_text = text.replace("{entrada}", inp.text()) if text else inp.text()
     payload: dict[str, Any] = {"text": msg_text}
@@ -4117,10 +4128,10 @@ def slack(
         with httpx.Client(timeout=15.0) as client:
             resp = client.post(url, json=payload)
             if resp.status_code >= 400:
-                return NodeResult("error", error=f"Slack webhook falló: {resp.status_code}")
-            return NodeResult("ok", data="Mensaje enviado a Slack con éxito")
+                return NodeResult("error", error=tr('Slack webhook failed: {status_code}', status_code=resp.status_code))
+            return NodeResult("ok", data=tr('Message sent to Slack successfully'))
     except Exception as exc:
-        return NodeResult("error", error=f"Error enviando a Slack: {exc}")
+        return NodeResult("error", error=tr('Error sending to Slack: {exc}', exc=exc))
 
 
 def command_action(
@@ -4177,10 +4188,10 @@ def rest_webhook(
         with httpx.Client(timeout=DEFAULT_TIMEOUT) as client:
             resp = client.request(method.upper(), url, headers=req_headers, json=payload_data)
             if resp.status_code >= 400:
-                return NodeResult("error", error=f"Webhook falló con HTTP {resp.status_code}")
-            return NodeResult("ok", data=f"Webhook enviado (HTTP {resp.status_code})")
+                return NodeResult("error", error=tr('Webhook failed with HTTP {status_code}', status_code=resp.status_code))
+            return NodeResult("ok", data=tr('Webhook sent (HTTP {status_code})', status_code=resp.status_code))
     except Exception as exc:
-        return NodeResult("error", error=f"Error al enviar webhook: {exc}")
+        return NodeResult("error", error=tr('Error sending webhook: {exc}', exc=exc))
 
 
 def telegram(
@@ -4196,13 +4207,13 @@ def telegram(
     inp = Inputs(inputs)
     text = inp.text()
     if not text:
-        return NodeResult("ok", data="Sin contenido para enviar")
+        return NodeResult("ok", data=tr('No content to send'))
 
     token = secrets.get(token_secret) or os.environ.get("DEDALO_TELEGRAM_TOKEN")
     dest_chat = chat_id or os.environ.get("DEDALO_TELEGRAM_CHAT_ID")
 
     if not token or not dest_chat:
-        return NodeResult("error", error="Falta configurar el token del bot de Telegram o el chat_id")
+        return NodeResult("error", error=tr('Telegram bot token or chat_id not configured'))
 
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload: dict[str, Any] = {
@@ -4217,10 +4228,10 @@ def telegram(
         with httpx.Client(timeout=15.0) as client:
             resp = client.post(url, json=payload)
             if resp.status_code >= 400:
-                return NodeResult("error", error=f"Telegram API falló: {resp.text[:150]}")
-            return NodeResult("ok", data="Mensaje de Telegram enviado con éxito")
+                return NodeResult("error", error=tr('Telegram API failed: {text}', text=resp.text[:150]))
+            return NodeResult("ok", data=tr('Telegram message sent successfully'))
     except Exception as exc:
-        return NodeResult("error", error=f"Error al enviar Telegram: {exc}")
+        return NodeResult("error", error=tr('Error sending Telegram: {exc}', exc=exc))
 
 
 def alert(
@@ -4428,7 +4439,7 @@ def aggregate(
     inp = Inputs(inputs)
     raw_data = inp.first()
     if not isinstance(raw_data, list):
-        return NodeResult("error", error="La entrada debe ser una lista de elementos.")
+        return NodeResult("error", error=tr('The input must be a list of items.'))
 
     def _to_float(v: Any) -> float | None:
         if isinstance(v, (int, float)):
@@ -4517,7 +4528,7 @@ def format_table(
         if isinstance(raw_data, dict):
             raw_data = [raw_data]
         else:
-            return NodeResult("error", error="format_table requiere una lista de diccionarios.")
+            return NodeResult("error", error=tr('format_table requires a list of dictionaries.'))
 
     if not raw_data:
         return NodeResult("ok", data="")
@@ -4654,7 +4665,7 @@ def ssl_cert(
     target = (host or inp.text()).strip()
     target = target.replace("https://", "").replace("http://", "").split("/")[0].split(":")[0]
     if not target:
-        return NodeResult("error", error="Se requiere un nombre de host para verificar el certificado SSL.")
+        return NodeResult("error", error=tr('A hostname is required to verify the SSL certificate.'))
 
     target_port = int(port or 443)
     try:
@@ -4664,7 +4675,7 @@ def ssl_cert(
                 cert = ssock.getpeercert()
 
         if not cert:
-            return NodeResult("error", error=f"No se pudo obtener el certificado de {target}")
+            return NodeResult("error", error=tr('Could not get the certificate of {target}', target=target))
 
         exp_str = cert.get("notAfter", "")
         exp_date = datetime.datetime.strptime(exp_str, "%b %d %H:%M:%S %Y %Z").replace(tzinfo=datetime.timezone.utc)
@@ -4686,7 +4697,7 @@ def ssl_cert(
         }
         return NodeResult("ok", data=result)
     except Exception as exc:
-        return NodeResult("error", error=f"Fallo al comprobar certificado SSL de {target}: {exc}")
+        return NodeResult("error", error=tr('Failed to check SSL certificate of {target}: {exc}', target=target, exc=exc))
 
 
 def dns_check(
@@ -4702,7 +4713,7 @@ def dns_check(
     target = (host or inp.text()).strip()
     target = target.replace("https://", "").replace("http://", "").split("/")[0].split(":")[0]
     if not target:
-        return NodeResult("error", error="Se requiere un nombre de host para comprobar DNS.")
+        return NodeResult("error", error=tr('A hostname is required to check DNS.'))
 
     try:
         t0 = time.perf_counter()
@@ -4716,7 +4727,7 @@ def dns_check(
             "response_time_ms": duration_ms,
         })
     except Exception as exc:
-        return NodeResult("error", error=f"Fallo en resolución DNS de {target}: {exc}")
+        return NodeResult("error", error=tr('DNS resolution failed for {target}: {exc}', target=target, exc=exc))
 
 
 def ping_host(
@@ -4733,7 +4744,7 @@ def ping_host(
     target = (host or inp.text()).strip()
     target = target.replace("https://", "").replace("http://", "").split("/")[0].split(":")[0]
     if not target:
-        return NodeResult("error", error="Se requiere un host para realizar ping.")
+        return NodeResult("error", error=tr('A host is required to ping.'))
 
     m = (mode or "tcp").lower().strip()
     to_val = float(timeout or 3.0)
@@ -4749,7 +4760,7 @@ def ping_host(
                 lat = float(m_lat.group(1)) if m_lat else duration_ms
                 return NodeResult("ok", data={"host": target, "alive": True, "latency_ms": lat, "mode": "icmp"})
             else:
-                return NodeResult("error", error=f"Host {target} inalcanzable por ICMP ping.")
+                return NodeResult("error", error=tr('Host {target} unreachable via ICMP ping.', target=target))
         except Exception as exc:
             return NodeResult("error", error=f"Error en ping ICMP: {exc}")
 
@@ -4767,7 +4778,7 @@ def ping_host(
             "mode": "tcp",
         })
     except Exception as exc:
-        return NodeResult("error", error=f"No se pudo conectar a {target}:{port} ({exc})")
+        return NodeResult("error", error=tr('Could not connect to {target}:{port} ({exc})', target=target, port=port, exc=exc))
 
 
 def _mqtt_encode_len(length: int) -> bytes:
@@ -4801,7 +4812,7 @@ def mqtt_publish(
     inp = Inputs(inputs)
     t = topic.strip()
     if not t:
-        return NodeResult("error", error="Se requiere un 'topic' MQTT.")
+        return NodeResult("error", error=tr("An MQTT 'topic' is required."))
 
     msg = payload.replace("{entrada}", inp.text()) if "{entrada}" in payload else (payload or inp.text())
     password = secrets.get(secret) if secret else ""
@@ -4836,11 +4847,11 @@ def mqtt_publish(
             connack = sock.recv(4)
             if len(connack) < 4 or connack[0] != 0x20 or connack[3] != 0:
                 err_code = connack[3] if len(connack) >= 4 else -1
-                return NodeResult("error", error=f"Fallo de conexión MQTT (CONNACK error code {err_code})")
+                return NodeResult("error", error=tr('MQTT connection failure (CONNACK error code {err_code})', err_code=err_code))
             sock.sendall(publish_packet)
             sock.sendall(disconnect_packet)
 
-        return NodeResult("ok", data=f"Publicado en {t}: {msg[:100]}")
+        return NodeResult("ok", data=tr('Published to {t}: {msg}', t=t, msg=msg[:100]))
     except Exception as exc:
         return NodeResult("error", error=f"Error en MQTT publish: {exc}")
 
@@ -4859,7 +4870,7 @@ def mqtt_read(
     """Lee o escucha un mensaje en un broker MQTT."""
     t = topic.strip()
     if not t:
-        return NodeResult("error", error="Se requiere un 'topic' MQTT para lectura.")
+        return NodeResult("error", error=tr("An MQTT 'topic' is required for reading."))
 
     password = secrets.get(secret) if secret else ""
     try:
@@ -4888,7 +4899,7 @@ def mqtt_read(
             sock.sendall(connect_packet)
             connack = sock.recv(4)
             if len(connack) < 4 or connack[0] != 0x20 or connack[3] != 0:
-                return NodeResult("error", error="Fallo al conectar con el broker MQTT.")
+                return NodeResult("error", error=tr('Failed to connect to the MQTT broker.'))
             sock.sendall(subscribe_packet)
             sock.recv(5)
 
@@ -5158,11 +5169,11 @@ def imap_read(
     h = host.strip()
     u = username.strip()
     if not h or not u:
-        return NodeResult("error", error="Se requiere 'host' y 'username' para la conexión IMAP.")
+        return NodeResult("error", error=tr("'host' and 'username' are required for the IMAP connection."))
 
     pwd = secrets.get(secret) if secret else ""
     if not pwd:
-        return NodeResult("error", error="Se requiere un secreto con la contraseña o App Password para IMAP.")
+        return NodeResult("error", error=tr('A secret with the password or App Password is required for IMAP.'))
 
     max_items = max(1, int(limit or 5))
     try:
@@ -5294,7 +5305,7 @@ def delay_execution(
     if first_data is not None:
         return NodeResult("ok", data=first_data)
     text_val = inp.text()
-    return NodeResult("ok", data=text_val or f"Espera completada ({wait_time:.1f}s)")
+    return NodeResult("ok", data=text_val or tr('Wait completed ({wait_time:.1f}s)', wait_time=wait_time))
 
 
 SPANISH_MONTHS = [
@@ -5422,7 +5433,7 @@ def sitemap_read(
     inp = Inputs(inputs)
     target_url = (url or inp.text()).strip()
     if not target_url:
-        return NodeResult("error", error="Falta la URL del sitemap.")
+        return NodeResult("error", error=tr('Missing sitemap URL.'))
     if not (target_url.startswith("http://") or target_url.startswith("https://")):
         target_url = "https://" + target_url
 
@@ -5532,7 +5543,7 @@ def healthcheck_ping(
     inp = Inputs(inputs)
     target_url = (url or inp.text()).strip()
     if not target_url:
-        return NodeResult("error", error="Falta la URL de monitorización (healthcheck).")
+        return NodeResult("error", error=tr('Missing monitoring (healthcheck) URL.'))
 
     has_prior_error = any(r.failed for r in inputs)
     is_success = not has_prior_error
@@ -5576,38 +5587,38 @@ def healthcheck_ping(
                 "status_code": resp.status_code,
                 "ok": resp.is_success,
                 "is_success_signal": is_success,
-                "message": f"Healthcheck ping enviado a {final_url} (HTTP {resp.status_code})",
+                "message": tr('Healthcheck ping sent to {final_url} (HTTP {status_code})', final_url=final_url, status_code=resp.status_code),
             },
         )
     except Exception as exc:
-        return NodeResult("error", error=f"Error enviando ping de healthcheck: {exc}")
+        return NodeResult("error", error=tr('Error sending healthcheck ping: {exc}', exc=exc))
 
 
 WMO_WEATHER_CODES: dict[int, tuple[str, str]] = {
-    0: ("Despejado", "☀️"),
-    1: ("Mayormente despejado", "🌤️"),
-    2: ("Parcialmente nublado", "⛅"),
-    3: ("Nublado", "☁️"),
-    45: ("Niebla", "🌫️"),
-    48: ("Niebla con escarcha", "🌫️"),
-    51: ("Llovizna ligera", "🌦️"),
-    53: ("Llovizna moderada", "🌦️"),
-    55: ("Llovizna densa", "🌧️"),
-    61: ("Lluvia ligera", "🌧️"),
-    63: ("Lluvia moderada", "🌧️"),
-    65: ("Lluvia intensa", "🌧️"),
-    71: ("Nieve ligera", "🌨️"),
-    73: ("Nieve moderada", "🌨️"),
-    75: ("Nieve intensa", "❄️"),
-    77: ("Granizo fino", "🌨️"),
-    80: ("Chubascos ligeros", "🌦️"),
-    81: ("Chubascos moderados", "🌧️"),
-    82: ("Chubascos violentos", "⛈️"),
-    85: ("Chubascos de nieve", "🌨️"),
-    86: ("Chubascos fuertes de nieve", "❄️"),
-    95: ("Tormenta eléctrica", "⛈️"),
-    96: ("Tormenta con granizo ligero", "⛈️"),
-    99: ("Tormenta con granizo fuerte", "⛈️"),
+    0: (tr('Clear'), "☀️"),
+    1: (tr('Mostly clear'), "🌤️"),
+    2: (tr('Partly cloudy'), "⛅"),
+    3: (tr('Overcast'), "☁️"),
+    45: (tr('Fog'), "🌫️"),
+    48: (tr('Rime fog'), "🌫️"),
+    51: (tr('Light drizzle'), "🌦️"),
+    53: (tr('Moderate drizzle'), "🌦️"),
+    55: (tr('Dense drizzle'), "🌧️"),
+    61: (tr('Light rain'), "🌧️"),
+    63: (tr('Moderate rain'), "🌧️"),
+    65: (tr('Heavy rain'), "🌧️"),
+    71: (tr('Light snow'), "🌨️"),
+    73: (tr('Moderate snow'), "🌨️"),
+    75: (tr('Heavy snow'), "❄️"),
+    77: (tr('Snow grains'), "🌨️"),
+    80: (tr('Light showers'), "🌦️"),
+    81: (tr('Moderate showers'), "🌧️"),
+    82: (tr('Violent showers'), "⛈️"),
+    85: (tr('Snow showers'), "🌨️"),
+    86: (tr('Heavy snow showers'), "❄️"),
+    95: (tr('Thunderstorm'), "⛈️"),
+    96: (tr('Thunderstorm with light hail'), "⛈️"),
+    99: (tr('Thunderstorm with heavy hail'), "⛈️"),
 }
 
 
@@ -5629,7 +5640,7 @@ def weather_forecast(
 
     lat = float(latitude)
     lon = float(longitude)
-    resolved_city = target_city or "Ubicación"
+    resolved_city = target_city or tr('Location')
 
     try:
         with httpx.Client(timeout=10.0) as client:
@@ -5640,7 +5651,7 @@ def weather_forecast(
                 geo_data = geo_resp.json()
                 results = geo_data.get("results")
                 if not results:
-                    return NodeResult("error", error=f"No se pudo geocodificar la ciudad '{target_city}'.")
+                    return NodeResult("error", error=tr("Could not geocode the city '{target_city}'.", target_city=target_city))
                 lat = results[0]["latitude"]
                 lon = results[0]["longitude"]
                 resolved_city = results[0].get("name", target_city)
@@ -5666,7 +5677,7 @@ def weather_forecast(
         daily = wdata.get("daily", {})
 
         w_code = curr.get("weather_code", 0)
-        desc, emoji = WMO_WEATHER_CODES.get(w_code, ("Desconocido", "🌡️"))
+        desc, emoji = WMO_WEATHER_CODES.get(w_code, (tr('Unknown'), "🌡️"))
         temp = curr.get("temperature_2m", 0.0)
         feels_like = curr.get("apparent_temperature", temp)
         humidity = curr.get("relative_humidity_2m", 0)
@@ -5677,7 +5688,7 @@ def weather_forecast(
         if daily and daily.get("time"):
             for i, d_date in enumerate(daily["time"]):
                 d_code = daily["weather_code"][i] if i < len(daily.get("weather_code", [])) else 0
-                d_desc, d_emoji = WMO_WEATHER_CODES.get(d_code, ("Desconocido", "🌡️"))
+                d_desc, d_emoji = WMO_WEATHER_CODES.get(d_code, (tr('Unknown'), "🌡️"))
                 daily_summary.append({
                     "date": d_date,
                     "max_temp": daily["temperature_2m_max"][i] if i < len(daily.get("temperature_2m_max", [])) else None,
@@ -5702,12 +5713,14 @@ def weather_forecast(
         }
 
         today_forecast = daily_summary[0] if daily_summary else {}
-        prob_str = f" · 🌧️ {today_forecast.get('precip_prob')}% lluvia" if today_forecast.get("precip_prob") is not None else ""
-        temp_range = f" (Mín: {today_forecast.get('min_temp')}°C / Máx: {today_forecast.get('max_temp')}°C)" if today_forecast.get("max_temp") is not None else ""
+        prob_str = tr(' · 🌧️ {precip_prob}% rain', precip_prob=today_forecast.get('precip_prob')) if today_forecast.get("precip_prob") is not None else ""
+        temp_range = tr(' (Min: {min_temp}°C / Max: {max_temp}°C)', min_temp=today_forecast.get('min_temp'), max_temp=today_forecast.get('max_temp')) if today_forecast.get("max_temp") is not None else ""
 
         markdown_text = (
-            f"{emoji} **{resolved_city}**: {temp}°C (Sensación {feels_like}°C) · {desc}\n"
-            f"💨 Viento {wind} km/h · 💧 Humedad {humidity}%{prob_str}{temp_range}"
+            tr((
+                '{emoji} **{resolved_city}**: {temp}°C (Feels like {feels_like}°C) · {desc}\n'
+                '💨 Wind {wind} km/h · 💧 Humidity {humidity}%{prob_str}{temp_range}'
+            ), emoji=emoji, resolved_city=resolved_city, temp=temp, feels_like=feels_like, desc=desc, wind=wind, humidity=humidity, prob_str=prob_str, temp_range=temp_range)
         )
         summary_dict["markdown"] = markdown_text
 
@@ -5760,7 +5773,7 @@ def execute_single_node(
     from dedalo import compiler
 
     if node_type not in compiler.NODE_TYPES:
-        return NodeResult("error", error=f"Tipo de nodo desconocido: «{node_type}»")
+        return NodeResult("error", error=tr('Unknown node type: "{node_type}"', node_type=node_type))
 
     spec = compiler.NODE_TYPES[node_type]
 
@@ -5818,10 +5831,10 @@ def execute_single_node(
         else:
             runtime_fn = getattr(sys.modules[__name__], spec.runtime_fn, None)
             if not runtime_fn or not callable(runtime_fn):
-                return NodeResult("error", error=f"Función runtime no encontrada para «{node_type}»")
+                return NodeResult("error", error=tr('Runtime function not found for "{node_type}"', node_type=node_type))
             res = runtime_fn(ctx, items, **cfg)
     except Exception as exc:
-        res = NodeResult("error", error=f"Excepción al ejecutar nodo: {exc}")
+        res = NodeResult("error", error=tr('Exception while running node: {exc}', exc=exc))
 
     elapsed_ms = round((time.time() - t0) * 1000, 2)
     res.duration = elapsed_ms
@@ -5844,11 +5857,11 @@ def _run_git(args: list[str], cwd: str | Path | None = None, timeout: float = 30
         )
         return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
     except FileNotFoundError:
-        return 127, "", "El ejecutable 'git' no está instalado o disponible en el PATH del sistema."
+        return 127, "", tr("The 'git' executable is not installed or not available in the system PATH.")
     except subprocess.TimeoutExpired:
-        return 124, "", f"Tiempo de espera agotado al ejecutar git ({timeout}s)."
+        return 124, "", tr('Timed out while running git ({timeout}s).', timeout=timeout)
     except Exception as exc:
-        return 1, "", f"Error inesperado al ejecutar git: {exc}"
+        return 1, "", tr('Unexpected error running git: {exc}', exc=exc)
 
 
 def git_read(
@@ -5872,7 +5885,7 @@ def git_read(
     if act == "clone_or_pull":
         target_url = url.strip()
         if not target_url and not (path_obj / ".git").exists():
-            return NodeResult("error", error="Se requiere 'url' para clonar un repositorio remoto inexistente.")
+            return NodeResult("error", error=tr("'url' is required to clone a nonexistent remote repository."))
 
         if (path_obj / ".git").exists():
             code, out, err = _run_git(["pull", "--ff-only"], cwd=path_obj, timeout=timeout)
@@ -5889,7 +5902,7 @@ def git_read(
 
     # Para el resto de acciones, el repositorio local debe existir
     if not (path_obj / ".git").exists() and not (path_obj.is_dir() and (path_obj / "HEAD").exists()):
-        return NodeResult("error", error=f"La ruta '{repo_path}' no es un repositorio Git válido.")
+        return NodeResult("error", error=tr("The path '{repo_path}' is not a valid Git repository.", repo_path=repo_path))
 
     if act == "log":
         max_commits = max(1, int(limit or 5))
@@ -5983,7 +5996,7 @@ def git_read(
             "changes": changes,
         })
 
-    return NodeResult("error", error=f"Acción de git no reconocida: «{action}». Usa log, diff, clone_or_pull o status.")
+    return NodeResult("error", error=tr('Unrecognized git action: "{action}". Use log, diff, clone_or_pull or status.', action=action))
 
 
 def git_commit_push(
@@ -6003,7 +6016,7 @@ def git_commit_push(
     """Añade cambios, realiza un commit y opcionalmente ejecuta push en un repositorio Git."""
     path_obj = Path(repo_path or ".").expanduser().resolve()
     if not (path_obj / ".git").exists():
-        return NodeResult("error", error=f"La ruta '{repo_path}' no es un repositorio Git válido.")
+        return NodeResult("error", error=tr("The path '{repo_path}' is not a valid Git repository.", repo_path=repo_path))
 
     file_patterns = [f.strip() for f in (files or ".").split(",") if f.strip()] or ["."]
     code, _, err = _run_git(["add", *file_patterns], cwd=path_obj, timeout=timeout)
@@ -6012,7 +6025,7 @@ def git_commit_push(
 
     code_diff, out_diff, _ = _run_git(["diff", "--cached", "--name-only"], cwd=path_obj, timeout=timeout)
     if not out_diff.strip():
-        return NodeResult("ok", data={"committed": False, "pushed": False, "message": "No hay cambios pendientes para commitear."})
+        return NodeResult("ok", data={"committed": False, "pushed": False, "message": tr('No pending changes to commit.')})
 
     author_str = f"{author_name.strip()} <{author_email.strip()}>" if author_name and author_email else ""
     cmd_commit = ["commit", "-m", message.strip() or "update"]
@@ -6031,7 +6044,7 @@ def git_commit_push(
         cmd_push = ["push", remote.strip() or "origin", branch.strip() or "main"]
         code_p, push_out, push_err = _run_git(cmd_push, cwd=path_obj, timeout=timeout)
         if code_p != 0:
-            return NodeResult("error", error=f"Commit realizado ({commit_hash[:7]}), pero fallo en git push: {push_err or push_out}")
+            return NodeResult("error", error=tr('Commit created ({commit_hash}), but git push failed: {push_out}', commit_hash=commit_hash[:7], push_out=push_err or push_out))
         pushed = True
 
     return NodeResult("ok", data={
@@ -6232,11 +6245,11 @@ def cve_audit(
         raw = inp.text()
 
     if not raw:
-        return NodeResult("error", error="El nodo de auditoría CVE requiere datos de entrada (SBOM o lista de paquetes)")
+        return NodeResult("error", error=tr('The CVE audit node requires input data (SBOM or package list)'))
 
     components = _parse_sbom_components(raw, default_eco=ecosystem)
     if not components:
-        return NodeResult("error", error="No se encontraron componentes ni paquetes válidos en la entrada (esperado CycloneDX, SPDX, lista de dicts o requirements)")
+        return NodeResult("error", error=tr('No valid components or packages found in the input (expected CycloneDX, SPDX, list of dicts or requirements)'))
 
     queries = []
     for c in components:
@@ -6254,7 +6267,7 @@ def cve_audit(
             queries.append({"package": {"name": c["name"], "ecosystem": c.get("ecosystem", "PyPI")}})
 
     if not queries:
-        return NodeResult("error", error="No se pudieron generar consultas válidas a partir de los componentes extraídos")
+        return NodeResult("error", error=tr('Could not generate valid queries from the extracted components'))
 
     all_vuln_results = []
     osv_url = "https://api.osv.dev/v1/querybatch"
@@ -6270,7 +6283,7 @@ def cve_audit(
                 batch_res = resp.json().get("results", [])
                 all_vuln_results.extend(batch_res)
     except Exception as exc:
-        return NodeResult("error", error=f"Error de conexión con OSV.dev: {exc}")
+        return NodeResult("error", error=tr('Connection error with OSV.dev: {exc}', exc=exc))
 
     min_level = _SEVERITY_ORDER.get(severity_threshold.upper().strip(), 1)
     if severity_threshold.upper().strip() == "ALL":
@@ -6335,18 +6348,18 @@ def cve_audit(
     sev_icon = icon_map.get(max_sev_found, "⚪")
 
     md_lines = [
-        "## 🛡️ Auditoría de Seguridad de Vulnerabilidades (OSV / CVE)",
+        tr('## 🛡️ Vulnerability Security Audit (OSV / CVE)'),
         "",
-        f"- **Paquetes auditados**: {len(components)}",
+        tr('- **Audited packages**: {components}', components=len(components)),
         f"- **Paquetes vulnerables**: {len(vulnerable_packages_set)}",
-        f"- **Vulnerabilidades detectadas**: {len(vulnerabilities)}",
-        f"- **Severidad máxima**: {sev_icon} **{max_sev_found}**",
+        tr('- **Vulnerabilities found**: {vulnerabilities}', vulnerabilities=len(vulnerabilities)),
+        tr('- **Maximum severity**: {sev_icon} **{max_sev_found}**', sev_icon=sev_icon, max_sev_found=max_sev_found),
         "",
     ]
 
     if vulnerabilities:
         md_lines.extend([
-            "| Paquete | Versión | CVE / ID | Severidad | Versión Parcheada | Resumen |",
+            tr('| Package | Version | CVE / ID | Severity | Patched Version | Summary |'),
             "| :--- | :--- | :--- | :--- | :--- | :--- |",
         ])
         for item in vulnerabilities:
@@ -6358,7 +6371,7 @@ def cve_audit(
                 f"| `{item['package']}` | `{item['version']}` | {cve_link} | {icon} {item['severity']} | {fix} | {summ} |"
             )
     else:
-        md_lines.append("🟢 **No se han detectado vulnerabilidades conocidas para los componentes analizados.**")
+        md_lines.append(tr('🟢 **No known vulnerabilities were detected for the analyzed components.**'))
 
     markdown_report = "\n".join(md_lines)
 
@@ -6398,7 +6411,7 @@ def whois_rdap(
             target = str(first.get("domain") or first.get("host") or "").strip().lower()
 
     if not target:
-        return NodeResult("error", error="Falta el nombre de dominio a consultar en whois_rdap")
+        return NodeResult("error", error=tr('Missing domain name to query in whois_rdap'))
 
     if "://" in target:
         target = target.split("://", 1)[1]
@@ -6410,12 +6423,12 @@ def whois_rdap(
         with httpx.Client(timeout=float(timeout), follow_redirects=True) as client:
             resp = client.get(rdap_url, headers={"Accept": "application/rdap+json, application/json"})
             if resp.status_code == 404:
-                return NodeResult("error", error=f"El dominio '{target}' no se encontró en el registro RDAP (puede no estar registrado o ser TLD no soportado)")
+                return NodeResult("error", error=tr("The domain '{target}' was not found in the RDAP registry (it may not be registered or the TLD may be unsupported)", target=target))
             if resp.status_code >= 400:
                 return NodeResult("error", error=f"Error en consulta RDAP ({resp.status_code}): {resp.text[:200]}")
             data = resp.json()
     except Exception as exc:
-        return NodeResult("error", error=f"Error de conexión RDAP para '{target}': {exc}")
+        return NodeResult("error", error=tr("RDAP connection error for '{target}': {exc}", target=target, exc=exc))
 
     registrar_name = ""
     for entity in data.get("entities") or []:
@@ -6470,12 +6483,12 @@ def whois_rdap(
     statuses = data.get("status") or []
 
     md_report = [
-        f"## 🌐 Información de Dominio RDAP: `{target}`",
+        tr('## 🌐 RDAP Domain Information: `{target}`', target=target),
         f"- **Registrador**: {registrar_name or '*Desconocido*'}",
-        f"- **Fecha de Expiración**: {expiration_date or '*No disponible*'} (Días restantes: **{days_left if days_left is not None else 'N/A'}**)",
-        f"- **Fecha de Creación**: {created_date or 'N/A'}",
-        f"- **Servidores de Nombres (NS)**: {', '.join(nameservers) if nameservers else 'N/A'}",
-        f"- **Estado**: {', '.join(statuses) if statuses else 'N/A'}",
+        tr('- **Expiration date**: {disponible} (Days remaining: **{A}**)', disponible=expiration_date or tr('*Not available*'), A=days_left if days_left is not None else 'N/A'),
+        tr('- **Creation date**: {A}', A=created_date or 'N/A'),
+        tr('- **Name Servers (NS)**: {A}', A=', '.join(nameservers) if nameservers else 'N/A'),
+        tr('- **Status**: {A}', A=', '.join(statuses) if statuses else 'N/A'),
     ]
 
     out = {
@@ -6513,7 +6526,7 @@ def dns_record(
             target = str(first.get("domain") or first.get("host") or first.get("name") or "").strip().lower()
 
     if not target:
-        return NodeResult("error", error="Falta el nombre de host o dominio a consultar en dns_record")
+        return NodeResult("error", error=tr('Missing hostname or domain to query in dns_record'))
 
     if "://" in target:
         target = target.split("://", 1)[1]
@@ -6535,7 +6548,7 @@ def dns_record(
                 return NodeResult("error", error=f"Error en DoH ({resp.status_code}): {resp.text[:200]}")
             dns_json = resp.json()
     except Exception as exc:
-        return NodeResult("error", error=f"Error en resolución DNS para '{target}': {exc}")
+        return NodeResult("error", error=tr("Error in DNS resolution for '{target}': {exc}", target=target, exc=exc))
 
     status_code = dns_json.get("Status", 0)
     answers = dns_json.get("Answer") or []
@@ -6745,7 +6758,7 @@ def json_path_extract(
                 data = txt
 
     if data is None:
-        return NodeResult("error", error="Faltan datos de entrada para json_path_extract")
+        return NodeResult("error", error=tr('Missing input data for json_path_extract'))
 
     result = _resolve_json_path(data, path, default=default)
     if flatten and isinstance(result, list):
@@ -6779,7 +6792,7 @@ def data_mapper(
                 pass
 
     if data is None:
-        return NodeResult("error", error="Faltan datos de entrada para data_mapper")
+        return NodeResult("error", error=tr('Missing input data for data_mapper'))
 
     spec = mapping
     if isinstance(spec, str):
@@ -6793,7 +6806,7 @@ def data_mapper(
                     spec[k.strip()] = v.strip()
 
     if not isinstance(spec, dict):
-        return NodeResult("error", error="El parámetro 'mapping' debe ser un diccionario o JSON válido (ej: {'nombre': 'metadata.name'})")
+        return NodeResult("error", error=tr("The 'mapping' parameter must be a dictionary or valid JSON (e.g. {'nombre': 'metadata.name'})"))
 
     def _map_single_obj(obj: Any) -> dict[str, Any]:
         mapped = {}
@@ -6836,7 +6849,7 @@ def teams_webhook(
         target_url = secrets.get(secret).strip()
 
     if not target_url:
-        return NodeResult("error", error="Falta la URL del Webhook de Microsoft Teams (o secreto asociado)")
+        return NodeResult("error", error=tr('Missing Microsoft Teams Webhook URL (or associated secret)'))
 
     inp = Inputs(inputs)
     first = inp.first_data()
@@ -6854,9 +6867,9 @@ def teams_webhook(
         elif raw_text:
             final_text = raw_text
         else:
-            final_text = "Notificación de Dédalo."
+            final_text = tr('Dédalo notification.')
 
-    card_title = title.strip() or (first.get("title") if isinstance(first, dict) else "") or "Aviso de Dédalo"
+    card_title = title.strip() or (first.get("title") if isinstance(first, dict) else "") or tr('Dédalo notice')
     card_summary = summary.strip() or card_title
 
     payload: dict[str, Any] = {
@@ -6885,7 +6898,7 @@ def teams_webhook(
             if resp.status_code >= 400:
                 return NodeResult("error", error=f"Error en Microsoft Teams Webhook ({resp.status_code}): {resp.text[:200]}")
     except Exception as exc:
-        return NodeResult("error", error=f"Error de conexión con Microsoft Teams: {exc}")
+        return NodeResult("error", error=tr('Connection error with Microsoft Teams: {exc}', exc=exc))
 
     return NodeResult("ok", data={"sent": True, "title": card_title, "status_code": resp.status_code})
 
@@ -6899,7 +6912,7 @@ def human_approval(
     ctx: Any,
     inputs: list[NodeResult],
     *,
-    prompt_message: str = "¿Deseas autorizar la ejecución de este paso?",
+    prompt_message: str = 'Do you want to authorize the execution of this step?',
     on_reject: str = "skip",
     auto_approve: bool = False,
 ) -> NodeResult:
@@ -6915,7 +6928,7 @@ def human_approval(
     env_auto = os.environ.get("DEDALO_AUTO_APPROVE", "").lower() in ("1", "true", "yes", "y")
     ctx_auto = bool(getattr(ctx, "auto_approve", False))
     if auto_approve or env_auto or ctx_auto:
-        return NodeResult("ok", data=first if first is not None else (raw_text or "Aprobado automáticamente"))
+        return NodeResult("ok", data=first if first is not None else (raw_text or tr('Automatically approved')))
 
     # 2. Comprobar si la sesión es interactiva (TTY en stdin)
     is_interactive = sys.stdin and hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
@@ -6930,24 +6943,24 @@ def human_approval(
             preview = raw_text[:200] + ("..." if len(raw_text) > 200 else "")
 
         border = "=" * 60
-        print(f"\n{border}\n⚠️  SOLICITUD DE APROBACIÓN HUMANA (Gate)\n{prompt_message}")
+        print(tr('\n{border}\n⚠️  HUMAN APPROVAL REQUEST (Gate)\n{prompt_message}', border=border, prompt_message=prompt_message))
         if preview:
-            print(f"📦 Datos a procesar: {preview}")
+            print(tr('📦 Data to process: {preview}', preview=preview))
         print(f"{border}")
 
         try:
-            ans = input("👉 ¿Autorizas la ejecución? [s/N]: ").strip().lower()
+            ans = input(tr('👉 Do you authorize the execution? [y/N]: ')).strip().lower()
             confirmed = ans in ("s", "si", "y", "yes")
         except (EOFError, KeyboardInterrupt):
             confirmed = False
-            print("\n⛔ Cancelado por el usuario.")
+            print(tr('\n⛔ Cancelled by the user.'))
 
         if confirmed:
             return NodeResult("ok", data=first if first is not None else (raw_text or "Aprobado"))
 
     # Si no se confirmó o no era interactivo
     if on_reject.lower() == "error":
-        msg = "Ejecución cancelada por el usuario en el paso de aprobación" if is_interactive else "El paso de aprobación requiere terminal interactiva o flag --yes / --non-interactive"
+        msg = tr('Execution cancelled by the user at the approval step') if is_interactive else tr('The approval step requires an interactive terminal or the --yes / --non-interactive flag')
         return NodeResult("error", error=msg)
 
     return SKIPPED

@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 import time
 from datetime import datetime, timedelta
+from dedalo.i18n import tr
 
 SHORTCUTS = {
     "@yearly": "0 0 1 1 *",
@@ -63,7 +64,7 @@ def parse_cron(expr: str) -> tuple[set[int], set[int], set[int], set[int], set[i
     expr = SHORTCUTS.get(expr.strip().lower(), expr.strip())
     parts = expr.split()
     if len(parts) != 5:
-        raise ValueError(f"Expresión cron inválida (debe tener 5 campos): «{expr}»")
+        raise ValueError(tr('Invalid cron expression (must have 5 fields): "{expr}"', expr=expr))
 
     minutes = _parse_field(parts[0], 0, 59)
     hours = _parse_field(parts[1], 0, 23)

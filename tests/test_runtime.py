@@ -563,19 +563,19 @@ def test_web_search_validation():
     # Consulta vacía sin entradas
     r_err = runtime.web_search(None, [], query="")
     assert not r_err.ok
-    assert "Se requiere un término de búsqueda" in r_err.error
+    assert "A search term is required" in r_err.error
 
     # Motor desconocido
     r_eng = runtime.web_search(None, [], query="algo", engine="altavista")
     assert not r_eng.ok
-    assert "Motor de búsqueda desconocido" in r_eng.error
+    assert "Unknown search engine" in r_eng.error
 
 
 def test_web_search_tavily(monkeypatch):
     # Sin secreto
     r_no_sec = runtime.web_search(None, [], query="ia news", engine="tavily", secret="")
     assert not r_no_sec.ok
-    assert "requiere configurar un secreto" in r_no_sec.error
+    assert "requires configuring a secret" in r_no_sec.error
 
     # Con secreto mockeado
     from dedalo import secrets
@@ -620,7 +620,7 @@ def test_web_search_exa(monkeypatch):
     # Sin secreto
     r_no_sec = runtime.web_search(None, [], query="papers", engine="exa", secret="")
     assert not r_no_sec.ok
-    assert "requiere configurar un secreto" in r_no_sec.error
+    assert "requires configuring a secret" in r_no_sec.error
 
     # Con secreto mockeado
     from dedalo import secrets
@@ -900,7 +900,7 @@ def test_mqtt_publish_and_read_mocked(monkeypatch):
     # 1. Publish
     res_pub = runtime.mqtt_publish(None, [], broker="127.0.0.1", topic="sensores/temp", payload="24.1")
     assert res_pub.ok
-    assert "Publicado en sensores/temp" in res_pub.data
+    assert "Published to sensores/temp" in res_pub.data
     assert len(sent_buffers) == 3  # CONNECT, PUBLISH, DISCONNECT
 
     # 2. Read
@@ -1096,7 +1096,7 @@ def test_weather_forecast_mocked(monkeypatch):
     assert res.ok
     assert res.data["city"] == "Valencia, España"
     assert res.data["temperature"] == 22.4
-    assert "Mayormente despejado" in res.data["weather_desc"]
+    assert "Mostly clear" in res.data["weather_desc"]
     assert "🌤️" in res.data["markdown"]
     assert "22.4°C" in res.data["markdown"]
 
@@ -1147,9 +1147,9 @@ def test_analyzer_and_planner_agents(monkeypatch):
 
     def fake_call_llm(prompt, system="", **kwargs):
         recorded_calls.append({"prompt": prompt, "system": system, "kwargs": kwargs})
-        if "=== EVIDENCIA" in prompt:
+        if "=== EVIDENCE" in prompt:
             return "Diagnóstico: Causa raíz OOMKilled por pico de memoria en checkout-api."
-        elif "=== DIAGNÓSTICO" in prompt:
+        elif "=== DIAGNOSIS" in prompt:
             return "Plan de mitigación:\n1. Aumentar memoria a 1Gi.\n2. Reiniciar deployment."
         return "Respuesta LLM genérica"
 
@@ -1522,7 +1522,7 @@ def test_cve_audit_cyclonedx_and_requirements(monkeypatch):
     res_crit = runtime.cve_audit(None, [inp], severity_threshold="CRITICAL")
     assert res_crit.ok
     assert res_crit.data["total_vulnerabilities"] == 0
-    assert "No se han detectado vulnerabilidades conocidas" in res_crit.data["markdown"]
+    assert "No known vulnerabilities were detected" in res_crit.data["markdown"]
 
 
 def test_whois_rdap(monkeypatch):
@@ -1760,7 +1760,7 @@ def test_human_approval_interactive_and_auto(monkeypatch):
     # 6. Modo interactivo con rechazo (on_reject="error")
     r_err = runtime.human_approval(None, [inp], on_reject="error")
     assert not r_err.ok
-    assert "cancelada por el usuario" in r_err.error
+    assert "cancelled by the user" in r_err.error
 
     # 7. Modo no interactivo (sin TTY) y sin flag --yes
     monkeypatch.setattr(runtime.sys.stdin, "isatty", lambda: False)
@@ -1769,7 +1769,7 @@ def test_human_approval_interactive_and_auto(monkeypatch):
 
     r_non_tty_err = runtime.human_approval(None, [inp], on_reject="error")
     assert not r_non_tty_err.ok
-    assert "requiere terminal interactiva" in r_non_tty_err.error
+    assert "requires an interactive terminal" in r_non_tty_err.error
 
 
 

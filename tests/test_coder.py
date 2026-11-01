@@ -33,7 +33,7 @@ def test_tool_read(tmp_path: Path):
     out_all = _tool_read(tmp_path, "ejemplo.py")
     assert "linea 1" in out_all
     assert "linea 5" in out_all
-    assert "líneas 1-5 de 5" in out_all
+    assert "lines 1-5 of 5" in out_all
 
     out_range = _tool_read(tmp_path, "ejemplo.py", start_line=2, end_line=3)
     assert "linea 2" in out_range
@@ -42,16 +42,16 @@ def test_tool_read(tmp_path: Path):
     assert "linea 4" not in out_range
 
     out_missing = _tool_read(tmp_path, "no_existe.py")
-    assert "no existe" in out_missing
+    assert "does not exist" in out_missing
 
     (tmp_path / "subdir").mkdir()
     out_dir = _tool_read(tmp_path, "subdir")
-    assert "es un directorio" in out_dir
+    assert "is a directory" in out_dir
 
 
 def test_tool_write_and_edit(tmp_path: Path):
     out_w = _tool_write(tmp_path, "pkg/modulo.py", "def funcion():\n    return 42\n")
-    assert "guardado" in out_w
+    assert "saved" in out_w
     assert (tmp_path / "pkg/modulo.py").exists()
 
     out_e = _tool_edit(
@@ -60,7 +60,7 @@ def test_tool_write_and_edit(tmp_path: Path):
         old_str="return 42",
         new_str="return 100",
     )
-    assert "editado correctamente" in out_e
+    assert "edited successfully" in out_e
     assert "return 100" in (tmp_path / "pkg/modulo.py").read_text()
 
     out_not_found = _tool_edit(
@@ -69,7 +69,7 @@ def test_tool_write_and_edit(tmp_path: Path):
         old_str="return 999",
         new_str="return 0",
     )
-    assert "No se encontró 'old_str'" in out_not_found
+    assert "'old_str' not found" in out_not_found
 
     (tmp_path / "repetido.txt").write_text("abc\nabc\n", encoding="utf-8")
     out_ambiguous = _tool_edit(
@@ -78,16 +78,16 @@ def test_tool_write_and_edit(tmp_path: Path):
         old_str="abc",
         new_str="xyz",
     )
-    assert "aparece 2 veces" in out_ambiguous
+    assert "appears 2 times" in out_ambiguous
 
 
 def test_tool_bash(tmp_path: Path):
     out = _tool_bash(tmp_path, "echo 'prueba dedalo'")
     assert "prueba dedalo" in out
-    assert "[Código de salida: 0]" in out
+    assert "[Exit code: 0]" in out
 
     out_err = _tool_bash(tmp_path, "python3 -c 'import sys; sys.exit(42)'")
-    assert "[Código de salida: 42]" in out_err
+    assert "[Exit code: 42]" in out_err
 
 
 def test_tool_find_grep_ls(tmp_path: Path):
@@ -113,13 +113,13 @@ def test_sandboxing_path_traversal(tmp_path: Path):
     outside_file.write_text("secreto", encoding="utf-8")
 
     out_read = _tool_read(tmp_path, "../privado.txt")
-    assert "Error de seguridad" in out_read
+    assert "Security error" in out_read
 
     out_write = _tool_write(tmp_path, "../malicioso.txt", "hacked")
-    assert "Error de seguridad" in out_write
+    assert "Security error" in out_write
 
     out_edit = _tool_edit(tmp_path, "../privado.txt", "secreto", "publico")
-    assert "Error de seguridad" in out_edit
+    assert "Security error" in out_edit
 
 
 def test_detect_context_window():
@@ -158,7 +158,7 @@ def test_compact_conversation_history_with_luhn():
 
     summary_msg = compacted[2]
     assert summary_msg["role"] == "user"
-    assert "Memoria resumida del progreso previo mediante Luhn+" in summary_msg["content"]
+    assert "Summarized memory of previous progress via Luhn+" in summary_msg["content"]
 
     tokens_after = _estimate_messages_tokens(compacted)
     assert tokens_after < tokens_before
@@ -442,7 +442,7 @@ def test_compact_conversation_history_with_blackhole():
                 "function": {"name": "bash", "arguments": json.dumps({"command": "pytest tests/test_auth.py"})},
             }],
         },
-        {"role": "tool", "name": "bash", "content": "PASSED tests/test_auth.py [Código de salida: 0]"},
+        {"role": "tool", "name": "bash", "content": "PASSED tests/test_auth.py [Exit code: 0]"},
         {"role": "assistant", "content": "¿Deseas que continúe?", "tool_calls": []},
     ]
 
@@ -455,16 +455,16 @@ def test_compact_conversation_history_with_blackhole():
     summary_msg = compacted[2]
     assert summary_msg["role"] == "user"
     content = summary_msg["content"]
-    assert "[Memoria resumida del progreso previo mediante Blackhole" in content
+    assert "[Summarized memory of previous progress via Blackhole" in content
     assert "### Objetivo Principal" in content
     assert "Refactoriza el módulo de autenticación." in content
-    assert "### Archivos y Rutas" in content
+    assert "### Files and Paths" in content
     assert "src/auth.py" in content
-    assert "### Registro de Acciones Recientes" in content
+    assert "### Recent Action Log" in content
     assert "read('src/auth.py'" in content
     assert "edit('src/auth.py')" in content
-    assert "### Errores e Incidencias Detectadas" in content
-    assert "No se encontró 'old_str'" in content
+    assert "### Errors and Incidents Detected" in content
+    assert "No se encontró 'old_str'" in content  # texto del fixture
 
 
 def test_compact_conversation_history_with_blackhole_llm():
@@ -490,7 +490,7 @@ def test_compact_conversation_history_with_blackhole_llm():
                 "function": {"name": "bash", "arguments": json.dumps({"command": "pytest"})},
             }],
         },
-        {"role": "tool", "name": "bash", "content": "1 passed in 0.05s [Código de salida: 0]"},
+        {"role": "tool", "name": "bash", "content": "1 passed in 0.05s [Exit code: 0]"},
         {"role": "assistant", "content": "Listo para continuar.", "tool_calls": []},
     ]
 
@@ -520,8 +520,8 @@ def test_compact_conversation_history_with_blackhole_llm():
     assert did_compact is True
     summary_msg = compacted[2]
     content = summary_msg["content"]
-    assert "[Memoria resumida del progreso previo mediante Blackhole con LLM" in content
-    assert "### Reflexiones y Decisiones Clave (LLM local)" in content
+    assert "[Summarized memory of previous progress via LLM Blackhole" in content
+    assert "### Key Reflections and Decisions (local LLM)" in content
     assert "Se verificó compatibilidad SQLite WAL" in content
 
 
@@ -656,15 +656,15 @@ def test_coder_agent_loop_detection_consecutive_failures(tmp_path: Path):
 
     # Comprobar que en el cuarto request (Turno 4), el prompt contiene la alerta de bucle
     turn4_messages = recorded_requests[3]["messages"]
-    user_alerts = [m["content"] for m in turn4_messages if m.get("role") == "user" and "[Aviso de bucle del sistema]" in m.get("content", "")]
+    user_alerts = [m["content"] for m in turn4_messages if m.get("role") == "user" and "[System loop warning]" in m.get("content", "")]
     assert len(user_alerts) >= 1
-    assert "La herramienta 'edit' ha fallado 3 veces consecutivas" in user_alerts[0]
+    assert "Tool 'edit' has failed 3 consecutive times" in user_alerts[0]
 
 
 def test_tool_web_search_mocked():
     # 1. Validación de query vacía
     err_res = _tool_web_search("")
-    assert "Debes especificar el parámetro 'query'" in err_res
+    assert "You must specify the 'query' parameter" in err_res
 
     # 2. Mock de runtime.web_search
     with patch("dedalo.runtime.web_search") as mock_ws:
@@ -684,7 +684,7 @@ def test_tool_web_search_mocked():
         from dedalo.runtime import NodeResult
         mock_err.return_value = NodeResult("error", error="Timeout de conexión")
         res_fail = _tool_web_search("error query")
-        assert "Error en búsqueda web: Timeout de conexión" in res_fail
+        assert "Web search error: Timeout de conexión" in res_fail
 
 
 def test_coder_agent_react_loop_with_web_search(tmp_path: Path):
@@ -813,7 +813,7 @@ def test_coder_agent_custom_tools_permissions(tmp_path: Path):
     tool_hist = res.data["tool_history"]
     assert len(tool_hist) >= 1
     assert tool_hist[0]["tool"] == "bash"
-    assert "no está disponible o no está autorizada" in tool_hist[0]["output_preview"]
+    assert "is not available or is not authorized" in tool_hist[0]["output_preview"]
 
     # 3. Verificar que custom_tools acepta lista de strings: ['read', 'grep']
     with patch("httpx.Client.post", side_effect=[

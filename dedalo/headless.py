@@ -15,10 +15,11 @@ import signal
 from pathlib import Path
 
 from dedalo import history, runtime, scheduler, secrets
+from dedalo.i18n import tr
 
 
 async def main() -> None:
-    print("Iniciando Dédalo en modo Demonio Puro (Headless Scheduler)...")
+    print(tr('Starting Dédalo in Pure Daemon mode (Headless Scheduler)...'))
 
     # Inicializar directorios y base de datos
     for d in ["data/flows", "data/secrets", "data/state", "data/outputs", "data/logs"]:
@@ -28,12 +29,12 @@ async def main() -> None:
 
     sched = scheduler.Scheduler()
     await sched.start()
-    print("Dédalo Daemon activo. Monitoreando tareas programadas. Presiona Ctrl+C para salir.")
+    print(tr('Dédalo Daemon active. Monitoring scheduled tasks. Press Ctrl+C to exit.'))
 
     stop_event = asyncio.Event()
 
     def _sig_handler():
-        print("\nDeteniendo Dédalo Daemon...")
+        print(tr('\nStopping Dédalo Daemon...'))
         stop_event.set()
 
     loop = asyncio.get_running_loop()
@@ -48,7 +49,7 @@ async def main() -> None:
     finally:
         await sched.stop()
         runtime.compact_memory()
-        print("Dédalo Daemon detenido correctamente.")
+        print(tr('Dédalo Daemon stopped successfully.'))
 
 
 if __name__ == "__main__":

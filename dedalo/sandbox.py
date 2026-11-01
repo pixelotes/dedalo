@@ -20,6 +20,7 @@ import subprocess
 from pathlib import Path
 
 from dedalo import secrets
+from dedalo.i18n import tr
 
 log = logging.getLogger("dedalo.sandbox")
 
@@ -47,7 +48,7 @@ def effective_mode(kind: str, node_mode: str = "") -> str:
     glob = os.environ.get("DEDALO_SANDBOX", "").strip().lower() or _DEFAULT_MODE.get(kind, "off")
     node = (node_mode or "").strip().lower()
     if glob not in ("off", "auto", "on"):
-        log.warning("DEDALO_SANDBOX=%r no es válido (off|auto|on); se exige aislamiento", glob)
+        log.warning(tr('DEDALO_SANDBOX=%r is not valid (off|auto|on); isolation is enforced'), glob)
         glob = "on"
     if glob == "on" or node == "on":
         return "on"
@@ -114,9 +115,9 @@ def available() -> bool:
                 r = subprocess.run(build_argv("true", None, exe), capture_output=True, timeout=10)
                 ok = r.returncode == 0
                 if not ok:
-                    log.warning("bwrap no puede aislar en este entorno: %s", r.stderr.decode(errors="replace").strip())
+                    log.warning(tr('bwrap cannot isolate in this environment: %s'), r.stderr.decode(errors="replace").strip())
             except (OSError, subprocess.SubprocessError) as exc:
-                log.warning("no se pudo probar bwrap: %s", exc)
+                log.warning(tr('could not test bwrap: %s'), exc)
         _probe[net] = ok
     return _probe[net]
 
@@ -149,8 +150,8 @@ def run_shell(
                 build_argv(cmd, cwd, exe), capture_output=True, text=True, timeout=timeout, env=env
             )
         if m == "on":
-            raise SandboxUnavailable("el aislamiento está activado pero bubblewrap (bwrap) no está disponible")
+            raise SandboxUnavailable(tr('isolation is enabled but bubblewrap (bwrap) is not available'))
         if not _warned:
             _warned = True
-            log.warning("sandbox en modo auto sin bwrap funcional: los comandos se ejecutan sin aislar")
+            log.warning(tr('sandbox in auto mode without a working bwrap: commands run without isolation'))
     return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout, cwd=cwd, env=env)

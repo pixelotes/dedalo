@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from dedalo import secrets
+from dedalo.i18n import tr
 
 DIR = Path(os.environ.get("DEDALO_LLMS_DIR", "data/llms"))
 
@@ -29,7 +30,7 @@ def _path(name: str) -> Path:
     clean = (name or "").strip()
     if not _NAME.match(clean):
         raise LLMConfigError(
-            f"nombre de configuración LLM no válido: {name!r} (solo minúsculas, números, guión y guión bajo)"
+            tr('invalid LLM configuration name: {name!r} (lowercase letters, numbers, hyphen and underscore only)', name=name)
         )
     return DIR / f"{clean}{SUFFIX}"
 
@@ -81,7 +82,7 @@ def set_llm(name: str, config: dict[str, Any]) -> dict[str, Any]:
     """Guarda una configuración de LLM en disco."""
     clean_name = (name or "").strip()
     if not clean_name:
-        raise LLMConfigError("el nombre de la configuración LLM no puede estar vacío")
+        raise LLMConfigError(tr('the LLM configuration name cannot be empty'))
 
     p = _path(clean_name)
     DIR.mkdir(parents=True, exist_ok=True)

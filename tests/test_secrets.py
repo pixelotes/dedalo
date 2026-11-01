@@ -74,11 +74,11 @@ def test_wrong_master_key_gives_clear_error(store, monkeypatch):
 
     secrets.set("tok", "abc")
     monkeypatch.setenv("DEDALO_MASTER_KEY", Fernet.generate_key().decode())
-    with pytest.raises(secrets.SecretError, match="clave maestra"):
+    with pytest.raises(secrets.SecretError, match="master key"):
         secrets.get("tok")
 
 
 def test_invalid_master_key(store, monkeypatch):
     monkeypatch.setenv("DEDALO_MASTER_KEY", "no-es-una-clave")
-    with pytest.raises(secrets.SecretError, match="no válida"):
+    with pytest.raises(secrets.SecretError, match="invalid master key"):
         secrets.set("tok", "abc")

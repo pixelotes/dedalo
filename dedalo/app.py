@@ -19,7 +19,8 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from dedalo import compiler, history, llms, runtime, sandbox, scheduler, secrets, store, templates
+from dedalo import compiler, history, i18n, llms, runtime, sandbox, scheduler, secrets, store, templates
+from dedalo.i18n import tr
 from dedalo.security import (
     BodyLimitMiddleware,
     SameOriginMiddleware,
@@ -39,7 +40,7 @@ sched = scheduler.Scheduler()
 def _internal_error(msg: str, exc: Exception) -> HTTPException:
     """Registra la excepción en el log y devuelve un 500 sin detalles internos (rutas, trazas)."""
     log.error("%s: %s", msg, exc, exc_info=exc)
-    return HTTPException(status_code=500, detail=f"{msg} (consulta los logs del servidor)")
+    return HTTPException(status_code=500, detail=tr('{msg} (check the server logs)', msg=msg))
 
 
 @contextlib.asynccontextmanager
@@ -72,7 +73,7 @@ async def lifespan(app: FastAPI):
     await sched.stop()
 
 
-app = FastAPI(title="Dédalo Standalone", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title=tr('Dédalo Standalone'), version="0.1.0", lifespan=lifespan)
 
 # Sin CORS: la interfaz se sirve desde el mismo origen que la API. Para evitar DNS rebinding y CSRF
 # se valida la cabecera Host (DEDALO_ALLOWED_HOSTS, separada por comas; admite "*.dominio" y "*").
@@ -82,6 +83,7 @@ ALLOWED_HOSTS = [
 MAX_BODY_BYTES = int(float(os.environ.get("DEDALO_MAX_BODY_MB", "25")) * 1024 * 1024)
 
 # Orden: el último añadido es la capa más externa (cabeceras > host > límite de cuerpo > mismo origen).
+app.add_middleware(i18n.LangMiddleware)
 app.add_middleware(SameOriginMiddleware)
 app.add_middleware(BodyLimitMiddleware, max_bytes=MAX_BODY_BYTES)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
@@ -169,11 +171,11 @@ def index_view():
             "status": "ok",
             "service": "dedalo",
             "mode": "headless",
-            "message": "Dédalo ejecutándose en modo sin interfaz (headless). Webhooks y planificador activos.",
+            "message": tr('Dédalo running in headless mode. Webhooks and scheduler active.'),
         }
     index_file = STATIC_DIR / "index.html"
     if not index_file.is_file():
-        return HTMLResponse("<h1>Dédalo: Error al cargar static/index.html</h1>", status_code=500)
+        return HTMLResponse(tr('<h1>Dédalo: Error loading static/index.html</h1>'), status_code=500)
     html = index_file.read_text(encoding="utf-8")
     return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
@@ -186,19 +188,25 @@ def index_view():
 @app.get("/api/catalog")
 def get_catalog() -> dict[str, Any]:
     """Devuelve el catálogo de tipos de nodo disponibles y sus opciones dinámicas."""
+    gt = i18n.gettext
+
+    def tr_choice(c: Any) -> Any:
+        # Solo se traduce la etiqueta; un valor suelto (str) es a la vez valor y etiqueta y no se toca.
+        return {**c, "label": gt(c["label"])} if isinstance(c, dict) and "label" in c else c
+
     types_dict = {}
     for k, spec in compiler.NODE_TYPES.items():
         types_dict[k] = {
             "category": spec.category,
-            "label": spec.label,
-            "output": spec.output,
+            "label": gt(spec.label),
+            "output": gt(spec.output),
             "required": sorted(spec.required),
             "optional": spec.optional,
             "code_field": spec.code_field,
-            "choices": spec.choices,
+            "choices": {f: [tr_choice(c) for c in cs] for f, cs in spec.choices.items()},
             "choices_from": spec.choices_from,
             "show_when": spec.show_when,
-            "help": spec.help,
+            "help": {f: gt(h) for f, h in spec.help.items()},
         }
 
     return {
@@ -212,14 +220,14 @@ def get_catalog() -> dict[str, Any]:
 
 @app.get("/api/templates")
 def get_templates() -> list[dict]:
-    return templates.list_templates()
+    return i18n.translate_tree(templates.list_templates())
 
 
 @app.get("/api/template")
 def get_template(name: str = Query(...)) -> dict:
     g = templates.get_template(name)
     if not g:
-        raise HTTPException(status_code=404, detail="Plantilla no encontrada")
+        raise HTTPException(status_code=404, detail=tr('Template not found'))
     return g
 
 
@@ -264,13 +272,13 @@ def save_config(req: ConfigUpdateRequest) -> dict[str, str]:
 
 
 class LLMSaveRequest(BaseModel):
-    name: str = Field(..., description="Nombre identificador único del endpoint")
-    provider: str = Field(default="custom", description="Proveedor (ollama, vllm, openrouter, etc.)")
-    url: str = Field(default="http://localhost:11434/v1", description="URL base de la API")
-    model: str = Field(default="llama3", description="Nombre del modelo")
-    secret: str = Field(default="", description="Nombre del secreto con la API Key")
-    max_context: int = Field(default=0, description="Límite de ventana de contexto (0 para autodetección)")
-    temperature: float = Field(default=0.7, description="Temperatura por defecto")
+    name: str = Field(..., description=tr('Unique identifier name of the endpoint'))
+    provider: str = Field(default="custom", description='Provider (ollama, vllm, openrouter, etc.)')
+    url: str = Field(default="http://localhost:11434/v1", description=tr('Base URL of the API'))
+    model: str = Field(default="llama3", description=tr('Model name'))
+    secret: str = Field(default="", description=tr('Name of the secret holding the API Key'))
+    max_context: int = Field(default=0, description=tr('Context window limit (0 for auto-detection)'))
+    temperature: float = Field(default=0.7, description=tr('Default temperature'))
 
 
 @app.get("/api/llms")
@@ -282,7 +290,7 @@ def list_llms() -> list[dict[str, Any]]:
 def get_llm(name: str) -> dict[str, Any]:
     conf = llms.get(name)
     if not conf:
-        raise HTTPException(status_code=404, detail=f"Endpoint LLM no encontrado: '{name}'")
+        raise HTTPException(status_code=404, detail=tr("LLM endpoint not found: '{name}'", name=name))
     return conf
 
 
@@ -362,7 +370,7 @@ def get_flows() -> list[dict[str, Any]]:
 def get_flow(id: str = Query(...)) -> dict[str, Any]:
     flow_data = store.load_flow(id)
     if not flow_data:
-        raise HTTPException(status_code=404, detail=f"Flujo «{id}» no encontrado")
+        raise HTTPException(status_code=404, detail=tr('Flow "{id}" not found', id=id))
     meta = flow_data.get("meta", {})
     flow_data["next_run"] = (
         scheduler.get_next_run(meta.get("schedule", ""))
@@ -384,7 +392,7 @@ def save_flow_endpoint(req: FlowSaveRequest) -> dict[str, Any]:
     except compiler.GraphError as exc:
         raise HTTPException(status_code=400, detail=exc.errors)
     except Exception as exc:
-        raise _internal_error("Error al guardar flujo", exc)
+        raise _internal_error(tr('Error saving flow'), exc)
 
 
 @app.post("/api/flow/schedule")
@@ -413,7 +421,7 @@ async def run_flow_now_endpoint(id: str = Query(...)) -> dict[str, Any]:
         res = await scheduler.trigger_flow(id)
         return {"status": "ok", **res}
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Error al ejecutar flujo: {exc}")
+        raise HTTPException(status_code=500, detail=tr('Error running flow: {exc}', exc=exc))
 
 
 @app.delete("/api/flow")
@@ -427,7 +435,7 @@ def delete_flow_endpoint(id: str = Query(...)) -> dict[str, Any]:
 def export_flow_endpoint(flow_id: str = "", id: str = "") -> Response:
     target_id = flow_id or id
     if not target_id:
-        raise HTTPException(status_code=400, detail="Falta el identificador del flujo a exportar.")
+        raise HTTPException(status_code=400, detail=tr('The identifier of the flow to export is missing.'))
     try:
         zip_bytes = store.export_flow_zip(target_id)
         filename = f"{store.slug(target_id)}.zip"
@@ -437,9 +445,9 @@ def export_flow_endpoint(flow_id: str = "", id: str = "") -> Response:
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Flujo «{target_id}» no encontrado.")
+        raise HTTPException(status_code=404, detail=tr('Flow "{target_id}" not found.', target_id=target_id))
     except Exception as exc:
-        raise _internal_error("Error exportando flujo", exc)
+        raise _internal_error(tr('Error exporting flow'), exc)
 
 
 @app.get("/api/flow/export-py")
@@ -447,7 +455,7 @@ def export_flow_endpoint(flow_id: str = "", id: str = "") -> Response:
 def export_flow_py_endpoint(flow_id: str = "", id: str = "") -> Response:
     target_id = flow_id or id
     if not target_id:
-        raise HTTPException(status_code=400, detail="Falta el identificador del flujo a exportar.")
+        raise HTTPException(status_code=400, detail=tr('The identifier of the flow to export is missing.'))
     try:
         py_source = store.export_flow_standalone_py(target_id)
         filename = f"{store.slug(target_id)}.py"
@@ -457,9 +465,9 @@ def export_flow_py_endpoint(flow_id: str = "", id: str = "") -> Response:
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Flujo «{target_id}» no encontrado.")
+        raise HTTPException(status_code=404, detail=tr('Flow "{target_id}" not found.', target_id=target_id))
     except Exception as exc:
-        raise _internal_error("Error exportando script del flujo", exc)
+        raise _internal_error(tr('Error exporting flow script'), exc)
 
 
 
@@ -475,7 +483,7 @@ def export_all_flows_endpoint() -> Response:
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
     except Exception as exc:
-        raise _internal_error("Error exportando backup de flujos", exc)
+        raise _internal_error(tr('Error exporting flow backup'), exc)
 
 
 @app.post("/api/flows/import")
@@ -484,7 +492,7 @@ async def import_flows_endpoint(request: Request) -> dict[str, Any]:
         content_type = request.headers.get("content-type", "")
         body = await request.body()
         if not body:
-            raise HTTPException(status_code=400, detail="No se recibieron datos para importar.")
+            raise HTTPException(status_code=400, detail=tr('No data received to import.'))
 
         zip_bytes = body
         if "multipart/form-data" in content_type:
@@ -511,7 +519,7 @@ async def import_flows_endpoint(request: Request) -> dict[str, Any]:
     except HTTPException:
         raise
     except Exception as exc:
-        raise _internal_error("Error al importar flujos", exc)
+        raise _internal_error(tr('Error importing flows'), exc)
 
 
 # ---------------------------------------------------------------------------
@@ -528,7 +536,7 @@ def compile_endpoint(req: CompileRequest) -> dict[str, Any]:
     except compiler.GraphError as exc:
         raise HTTPException(status_code=400, detail=exc.errors)
     except Exception as exc:
-        raise _internal_error("Error al compilar", exc)
+        raise _internal_error(tr('Error compiling'), exc)
 
 
 @app.post("/api/run")
@@ -541,7 +549,7 @@ def run_preview_endpoint(req: RunRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=exc.errors)
 
     flow_id = store.slug(graph.name) if graph.name else "prueba"
-    flow_name = graph.name or "Prueba rápida"
+    flow_name = graph.name or tr('Quick test')
     run_id = history.record_run_start(flow_id=flow_id, flow_name=flow_name, trigger_type="preview")
 
     ctx = scheduler.FlowContext(flow_name=flow_id)
@@ -551,7 +559,7 @@ def run_preview_endpoint(req: RunRequest) -> dict[str, Any]:
         exec(compile(source, "<dedalo:preview>", "exec"), ns)
         run_fn = ns.get("run")
         if not callable(run_fn):
-            raise RuntimeError("El flujo compilado no contiene función run()")
+            raise RuntimeError(tr('The compiled flow does not contain a run() function'))
         raw_results = run_fn(ctx)
         duration = time.time() - t0
 
@@ -594,7 +602,7 @@ def run_preview_endpoint(req: RunRequest) -> dict[str, Any]:
             error=str(exc),
             truncate=False,
         )
-        raise HTTPException(status_code=500, detail=f"Error durante la ejecución: {exc}")
+        raise HTTPException(status_code=500, detail=tr('Error during execution: {exc}', exc=exc))
     finally:
         runtime.compact_memory()
 
@@ -620,7 +628,7 @@ def node_preview_endpoint(req: NodePreviewRequest) -> dict[str, Any]:
         return {
             "status": "error",
             "data": None,
-            "error": f"Error ejecutando nodo: {exc}",
+            "error": tr('Error running node: {exc}', exc=exc),
             "duration_ms": 0.0,
         }
     finally:
@@ -633,11 +641,11 @@ def flow_step_endpoint(req: FlowStepRequest) -> dict[str, Any]:
     try:
         graph = compiler.Graph.from_dict(req.graph)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Grafo no válido: {exc}")
+        raise HTTPException(status_code=400, detail=tr('Invalid graph: {exc}', exc=exc))
 
     target_node = graph.node(req.target_node_id)
     if not target_node:
-        raise HTTPException(status_code=404, detail=f"Nodo «{req.target_node_id}» no encontrado en el grafo.")
+        raise HTTPException(status_code=404, detail=tr('Node "{target_node_id}" not found in the graph.', target_node_id=req.target_node_id))
 
     flow_id = store.slug(graph.name) if graph.name else "debug"
     ctx = scheduler.FlowContext(flow_name=flow_id)
@@ -693,7 +701,7 @@ def flow_step_endpoint(req: FlowStepRequest) -> dict[str, Any]:
         elif req.mode == "run_to":
             nodes_to_run = compiler.get_upstream_nodes(graph, req.target_node_id)
             if not nodes_to_run:
-                raise HTTPException(status_code=400, detail="No se pudo determinar el orden de ejecución.")
+                raise HTTPException(status_code=400, detail=tr('Could not determine the execution order.'))
 
             all_results = dict(req.cached_results)
             last_step = None
@@ -748,7 +756,7 @@ def flow_step_endpoint(req: FlowStepRequest) -> dict[str, Any]:
                 "all_results": all_results,
             }
         else:
-            raise HTTPException(status_code=400, detail=f"Modo desconocido: «{req.mode}»")
+            raise HTTPException(status_code=400, detail=tr("Unknown mode: '{mode}'", mode=req.mode))
     finally:
         runtime.compact_memory()
 
@@ -759,7 +767,7 @@ def _run_webhook_sync(flow_id: str, graph_dict: dict[str, Any], ctx: scheduler.F
         graph = compiler.Graph.from_dict(graph_dict)
         source = compiler.compile(graph)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Error al compilar flujo: {exc}")
+        raise HTTPException(status_code=400, detail=tr('Error compiling flow: {exc}', exc=exc))
 
     flow_name = graph.name or flow_id
     run_id = history.record_run_start(flow_id=flow_id, flow_name=flow_name, trigger_type="webhook")
@@ -769,7 +777,7 @@ def _run_webhook_sync(flow_id: str, graph_dict: dict[str, Any], ctx: scheduler.F
         exec(compile(source, f"<dedalo:webhook:{flow_id}>", "exec"), ns)
         run_fn = ns.get("run")
         if not callable(run_fn):
-            raise RuntimeError("El flujo compilado no contiene función run()")
+            raise RuntimeError(tr('The compiled flow does not contain a run() function'))
         results = run_fn(ctx)
         duration = time.time() - t0
         history.record_run_finish(
@@ -793,7 +801,7 @@ def _run_webhook_sync(flow_id: str, graph_dict: dict[str, Any], ctx: scheduler.F
             duration=duration,
             error=str(exc),
         )
-        raise HTTPException(status_code=500, detail=f"Error durante la ejecución del webhook: {exc}")
+        raise HTTPException(status_code=500, detail=tr('Error during webhook execution: {exc}', exc=exc))
     finally:
         runtime.compact_memory()
 
@@ -809,7 +817,7 @@ async def webhook_endpoint(flow_id: str, request: Request) -> dict[str, Any]:
     if expected:
         ok, source = webhook_token_ok(request.headers, request.query_params, expected)
         if not ok:
-            raise HTTPException(status_code=401, detail="Token de webhook no válido", headers={"WWW-Authenticate": "Bearer"})
+            raise HTTPException(status_code=401, detail=tr('Invalid webhook token'), headers={"WWW-Authenticate": "Bearer"})
         # El token no debe llegar al flujo ni al historial
         if source == "query":
             query.pop("token", None)
@@ -818,7 +826,7 @@ async def webhook_endpoint(flow_id: str, request: Request) -> dict[str, Any]:
 
     flow_data = store.load_flow(flow_id)
     if not flow_data:
-        raise HTTPException(status_code=404, detail=f"Flujo «{flow_id}» no encontrado")
+        raise HTTPException(status_code=404, detail=tr('Flow "{flow_id}" not found', flow_id=flow_id))
 
     raw_body = await request.body()
     body_data: Any = None
@@ -856,7 +864,7 @@ def get_history_run_endpoint(id: str = Query(...)) -> dict[str, Any]:
     """Devuelve los detalles y resultados paso a paso de una ejecución concreta."""
     run_data = history.get_run(id)
     if not run_data:
-        raise HTTPException(status_code=404, detail=f"Ejecución «{id}» no encontrada")
+        raise HTTPException(status_code=404, detail=tr('Run "{id}" not found', id=id))
     return run_data
 
 

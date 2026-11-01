@@ -66,7 +66,7 @@ def test_cycle_rejected():
     )
     with pytest.raises(compiler.GraphError) as exc:
         compiler.compile(g)
-    assert any("ciclo" in e for e in exc.value.errors)
+    assert any("cycle" in e for e in exc.value.errors)
 
 
 def test_script_node_validation():
@@ -80,7 +80,7 @@ def test_script_node_validation():
     )
     with pytest.raises(compiler.GraphError) as exc:
         compiler.compile(g)
-    assert any("no está conectado" in e for e in exc.value.errors)
+    assert any("is not connected" in e for e in exc.value.errors)
 
 
 def test_new_nodes_compile_and_execute(tmp_path):

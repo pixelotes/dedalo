@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from dedalo import compiler
+from dedalo.i18n import tr
 
 FLOWS_DIR = Path("data/flows")
 STATE_DIR = Path("data/state")
@@ -193,8 +194,7 @@ def save_flow(
                     expected_stamped = _graph_hash(old_graph)
                     if stamped != expected_stamped:
                         raise DriftError(
-                            f"El fichero «{s}.py» fue modificado a mano fuera de Dédalo. "
-                            f"Guarda con force=True para sobreescribirlo."
+                            tr('The file "{s}.py" was modified by hand outside Dédalo. Save with force=True to overwrite it.', s=s)
                         )
                 except Exception:
                     pass
@@ -298,7 +298,7 @@ def export_flow_standalone_py(flow_id: str) -> str:
     s = slug(flow_id)
     flow_data = load_flow(s)
     if not flow_data:
-        raise FileNotFoundError(f"Flujo «{flow_id}» no encontrado.")
+        raise FileNotFoundError(tr('Flow "{flow_id}" not found.', flow_id=flow_id))
 
     graph_dict = flow_data.get("graph", {})
     graph = compiler.Graph.from_dict(graph_dict)
@@ -313,7 +313,7 @@ def export_flow_zip(flow_id: str) -> bytes:
     s = slug(flow_id)
     flow_data = load_flow(s)
     if not flow_data:
-        raise FileNotFoundError(f"Flujo «{flow_id}» no encontrado.")
+        raise FileNotFoundError(tr('Flow "{flow_id}" not found.', flow_id=flow_id))
 
     graph_dict = flow_data.get("graph", {})
     meta_dict = flow_data.get("meta", {})
@@ -384,7 +384,7 @@ def import_flows_from_zip(zip_bytes: bytes, overwrite: bool = True) -> dict[str,
     Aplica defensas estrictas contra Zip-Slip (path traversal) y límites de descompresión.
     """
     if not zip_bytes:
-        return {"status": "error", "error": "El archivo recibido está vacío.", "imported": []}
+        return {"status": "error", "error": tr('The received file is empty.'), "imported": []}
 
     # 1. ¿Es un JSON directo en lugar de ZIP?
     if not zipfile.is_zipfile(io.BytesIO(zip_bytes)):
@@ -406,8 +406,8 @@ def import_flows_from_zip(zip_bytes: bytes, overwrite: bool = True) -> dict[str,
                         "errors": [],
                     }
         except Exception as exc:
-            return {"status": "error", "error": f"Archivo no es un ZIP ni un JSON válido: {exc}", "imported": []}
-        return {"status": "error", "error": "El archivo JSON no contiene un grafo válido.", "imported": []}
+            return {"status": "error", "error": tr('File is neither a valid ZIP nor a valid JSON: {exc}', exc=exc), "imported": []}
+        return {"status": "error", "error": tr('The JSON file does not contain a valid graph.'), "imported": []}
 
     # 2. Descompresión segura del ZIP
     MAX_TOTAL_BYTES = 25 * 1024 * 1024  # 25 MB
@@ -420,7 +420,7 @@ def import_flows_from_zip(zip_bytes: bytes, overwrite: bool = True) -> dict[str,
         with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
             namelist = zf.namelist()
             if len(namelist) > MAX_FILES:
-                return {"status": "error", "error": "El ZIP contiene demasiados archivos (máx. 500).", "imported": []}
+                return {"status": "error", "error": tr('The ZIP contains too many files (max. 500).'), "imported": []}
 
             for name in namelist:
                 # Comprobación contra Zip-Slip / Path Traversal
@@ -431,7 +431,7 @@ def import_flows_from_zip(zip_bytes: bytes, overwrite: bool = True) -> dict[str,
                     or ".." in Path(norm_name).parts
                     or ":" in norm_name
                 ):
-                    return {"status": "error", "error": f"Archivo sospechoso detectado en ZIP: {name}", "imported": []}
+                    return {"status": "error", "error": tr('Suspicious file detected in ZIP: {name}', name=name), "imported": []}
 
                 info = zf.getinfo(name)
                 if info.is_dir():
@@ -439,13 +439,13 @@ def import_flows_from_zip(zip_bytes: bytes, overwrite: bool = True) -> dict[str,
 
                 total_bytes += info.file_size
                 if total_bytes > MAX_TOTAL_BYTES:
-                    return {"status": "error", "error": "El contenido del ZIP excede el límite de 25 MB.", "imported": []}
+                    return {"status": "error", "error": tr('The ZIP contents exceed the 25 MB limit.'), "imported": []}
 
                 basename = Path(norm_name).name
                 if basename.endswith(".json"):
                     extracted_files[basename] = zf.read(name)
     except Exception as exc:
-        return {"status": "error", "error": f"Error al abrir el archivo ZIP: {exc}", "imported": []}
+        return {"status": "error", "error": tr('Error opening the ZIP file: {exc}', exc=exc), "imported": []}
 
     # 3. Emparejar grafos y metadatos
     imported = []

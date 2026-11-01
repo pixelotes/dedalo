@@ -259,7 +259,7 @@ def test_agent_manual_context_compaction(mock_call_llm):
     assert res_no_limit.status == "ok"
     passed_prompt_no_limit = mock_call_llm.call_args[0][0]
     assert "frase importante de prueba número 59" in passed_prompt_no_limit
-    assert "Contenido compactado con Luhn+" not in passed_prompt_no_limit
+    assert "Content compacted with Luhn+" not in passed_prompt_no_limit
 
     # 2. Con max_context=300, supera el 90% (270 tokens) y debe compactarse con Luhn+
     res_compacted = agent(
@@ -271,7 +271,7 @@ def test_agent_manual_context_compaction(mock_call_llm):
     )
     assert res_compacted.status == "ok"
     passed_prompt_compacted = mock_call_llm.call_args[0][0]
-    assert "Contenido compactado con Luhn+ por límite de contexto" in passed_prompt_compacted
+    assert "Content compacted with Luhn+ due to context limit" in passed_prompt_compacted
     assert len(passed_prompt_compacted) < len(passed_prompt_no_limit)
 
 

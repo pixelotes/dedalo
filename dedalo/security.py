@@ -6,6 +6,7 @@ import hmac
 from urllib.parse import urlsplit
 
 from fastapi.responses import JSONResponse
+from dedalo.i18n import tr
 
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
@@ -34,7 +35,7 @@ class SameOriginMiddleware:
             headers = {k: v for k, v in scope["headers"] if k in (b"origin", b"host")}
             origin = headers.get(b"origin")
             if origin and urlsplit(origin.decode("latin-1")).netloc != headers.get(b"host", b"").decode("latin-1"):
-                await JSONResponse({"detail": "Origen no permitido"}, status_code=403)(scope, receive, send)
+                await JSONResponse({"detail": tr('Origin not allowed')}, status_code=403)(scope, receive, send)
                 return
         await self.app(scope, receive, send)
 
@@ -51,7 +52,7 @@ class BodyLimitMiddleware:
             await self.app(scope, receive, send)
             return
 
-        too_large = JSONResponse({"detail": "Cuerpo de la petición demasiado grande"}, status_code=413)
+        too_large = JSONResponse({"detail": tr('Request body too large')}, status_code=413)
         for k, v in scope["headers"]:
             if k == b"content-length":
                 try:
