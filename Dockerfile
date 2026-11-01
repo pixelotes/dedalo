@@ -7,7 +7,7 @@
 # ==============================================================================
 # Stage 1: Builder (Dependency installation in an isolated venv)
 # ==============================================================================
-FROM python:3.12-slim-bookworm AS builder
+FROM python:3.15-slim-bookworm AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -27,7 +27,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # ==============================================================================
 # Stage 2: Runner (Minimal, secure final image without build tools)
 # ==============================================================================
-FROM python:3.12-slim-bookworm AS runner
+FROM python:3.15-slim-bookworm AS runner
 
 # Command isolation (DEDALO_SANDBOX): bubblewrap is installed by default (~100 KB).
 # For an image without it: docker build --build-arg WITH_BWRAP=0 .
