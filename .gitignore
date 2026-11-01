@@ -37,6 +37,8 @@ ENV/
 *.pem
 *.key
 data/secrets/
+data/master.key
+data/config.json
 data/secrets.json
 data/llms/
 secrets.json

@@ -185,7 +185,7 @@ Dédalo ejecuta código: los flujos se compilan a Python y nodos como `transform
 - **Docker**: publica el puerto solo en local (`"127.0.0.1:8080:8080"`). Dentro del contenedor debe seguir escuchando en `0.0.0.0`.
 - **Webhooks**: `/api/webhook/<flujo>` no valida el origen. Si necesitas recibir eventos de internet, expón solo esa ruta a través del proxy y protégela con un token o una lista de IP.
 - **`transform.script`**: el aislamiento es de variables, no un sandbox. No ejecutes flujos importados de terceros sin revisarlos.
-- **Secretos**: se guardan en `data/secrets/` con permisos `0600`. Haz copia de seguridad de `data/` cifrada.
+- **Secretos**: se guardan cifrados (Fernet) en `data/secrets/` con permisos `0600`; la `llm_key` de `data/config.json` también. La clave maestra sale de `DEDALO_MASTER_KEY` (o `DEDALO_MASTER_KEY_FILE`); si no defines ninguna se genera `data/master.key`, que protege frente a copias parciales pero no frente a quien lea todo `data/`. Para protección real, define la clave fuera de `data/` (variable de entorno, Docker secret). Genérala con `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` y guárdala aparte: sin ella los secretos no se pueden recuperar. Los secretos en claro de versiones anteriores se leen igual y se cifran solos al arrancar. Las variables `DEDALO_SECRET_<NOMBRE>` siguen funcionando y no se cifran (viven en el entorno).
 
 Para reportar una vulnerabilidad, consulta [SECURITY.md](SECURITY.md).
 

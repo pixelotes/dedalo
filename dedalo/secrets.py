@@ -2,16 +2,27 @@
 
 Un fichero por secreto en `data/secrets/<nombre>.secret` con permisos estrictos (0600),
 o mediante variables de entorno `DEDALO_SECRET_<NOMBRE>`.
+
+Los ficheros se cifran en reposo con Fernet (AES-128-CBC + HMAC-SHA256). La clave maestra sale de
+`DEDALO_MASTER_KEY` o `DEDALO_MASTER_KEY_FILE`; si no hay ninguna, se genera `data/master.key` (0600).
+Los ficheros en claro de versiones anteriores se siguen leyendo y `migrate()` los cifra. La librería
+`cryptography` solo se importa al tocar un secreto en disco: los flujos que no los usan no pagan nada.
 """
 
 from __future__ import annotations
 
 import builtins
+import logging
 import os
 import re
+import tempfile
 from pathlib import Path
 
+log = logging.getLogger("dedalo.secrets")
+
 DIR = Path(os.environ.get("DEDALO_SECRETS_DIR", "data/secrets"))
+KEY_FILE = Path(os.environ.get("DEDALO_KEY_FILE", "data/master.key"))
+PREFIX = "dedalo:v1:"
 
 _NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 SUFFIX = ".secret"
@@ -19,6 +30,90 @@ SUFFIX = ".secret"
 
 class SecretError(Exception):
     """Error al validar o manipular un secreto."""
+
+
+_fernet_cache: tuple[object, object] | None = None
+
+
+def _master_key() -> bytes:
+    """Clave maestra: entorno > fichero indicado > fichero generado automáticamente."""
+    env = os.environ.get("DEDALO_MASTER_KEY", "").strip()
+    if env:
+        return env.encode()
+    key_path = os.environ.get("DEDALO_MASTER_KEY_FILE", "").strip()
+    if key_path:
+        try:
+            return Path(key_path).read_bytes().strip()
+        except OSError as exc:
+            raise SecretError(f"no se pudo leer DEDALO_MASTER_KEY_FILE: {exc}") from exc
+
+    if not KEY_FILE.is_file():
+        from cryptography.fernet import Fernet
+
+        KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            fd = os.open(KEY_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            pass  # otro proceso la acaba de crear
+        else:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(Fernet.generate_key())
+    return KEY_FILE.read_bytes().strip()
+
+
+def _fernet():
+    """Instancia de Fernet creada una sola vez por proceso (y por clave configurada)."""
+    global _fernet_cache
+    marker = (
+        os.environ.get("DEDALO_MASTER_KEY"),
+        os.environ.get("DEDALO_MASTER_KEY_FILE"),
+        str(KEY_FILE),
+    )
+    if _fernet_cache is None or _fernet_cache[0] != marker:
+        from cryptography.fernet import Fernet
+
+        try:
+            _fernet_cache = (marker, Fernet(_master_key()))
+        except ValueError as exc:
+            raise SecretError(
+                "clave maestra no válida: debe ser una clave Fernet (32 bytes en base64 url-safe)"
+            ) from exc
+    return _fernet_cache[1]
+
+
+def encrypt(value: str) -> str:
+    """Cifra un texto y devuelve un token con prefijo `dedalo:v1:`."""
+    return PREFIX + _fernet().encrypt(value.encode("utf-8")).decode("ascii")
+
+
+def decrypt(token: str) -> str:
+    """Descifra un token de `encrypt()`. Un texto sin prefijo se devuelve tal cual (formato antiguo)."""
+    if not token.startswith(PREFIX):
+        return token
+    from cryptography.fernet import InvalidToken
+
+    try:
+        return _fernet().decrypt(token[len(PREFIX) :].encode("ascii")).decode("utf-8")
+    except InvalidToken as exc:
+        raise SecretError(
+            "no se pudo descifrar el secreto: la clave maestra no coincide con la usada al guardarlo"
+        ) from exc
+
+
+def _write_private(p: Path, text: str) -> None:
+    """Escritura atómica con permisos 0600 desde el primer byte (sin ventana legible)."""
+    fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=p.name + ".")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, p)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _path(name: str) -> Path:
@@ -64,9 +159,11 @@ def get(name: str) -> str | None:
         return None
     try:
         val = p.read_text(encoding="utf-8").strip()
-        return val if val else None
     except OSError:
         return None
+    if not val:
+        return None
+    return decrypt(val) or None
 
 
 def set_secret(name: str, value: str) -> None:
@@ -75,13 +172,13 @@ def set_secret(name: str, value: str) -> None:
     if not val:
         raise SecretError("el valor del secreto no puede estar vacío")
 
-    DIR.mkdir(parents=True, exist_ok=True)
     p = _path(name)
-    p.write_text(val, encoding="utf-8")
+    DIR.mkdir(parents=True, exist_ok=True)
     try:
-        p.chmod(0o600)
+        DIR.chmod(0o700)
     except OSError:
         pass
+    _write_private(p, encrypt(val))
 
 
 # Alias para retrocompatibilidad
@@ -98,3 +195,21 @@ def delete(name: str) -> bool:
         except OSError:
             return False
     return False
+
+
+def migrate() -> int:
+    """Cifra los secretos en claro de versiones anteriores. Devuelve cuántos ha convertido."""
+    if not DIR.is_dir():
+        return 0
+    done = 0
+    for p in DIR.glob(f"*{SUFFIX}"):
+        try:
+            val = p.read_text(encoding="utf-8").strip()
+            if val and not val.startswith(PREFIX):
+                _write_private(p, encrypt(val))
+                done += 1
+        except (OSError, SecretError) as exc:
+            log.warning("no se pudo cifrar %s: %s", p.name, exc)
+    if done:
+        log.info("cifrados %d secretos que estaban en claro", done)
+    return done

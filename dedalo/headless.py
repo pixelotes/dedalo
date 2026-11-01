@@ -14,7 +14,7 @@ import asyncio
 import signal
 from pathlib import Path
 
-from dedalo import history, runtime, scheduler
+from dedalo import history, runtime, scheduler, secrets
 
 
 async def main() -> None:
@@ -24,6 +24,7 @@ async def main() -> None:
     for d in ["data/flows", "data/secrets", "data/state", "data/outputs", "data/logs"]:
         Path(d).mkdir(parents=True, exist_ok=True)
     history.init_db()
+    secrets.migrate()
 
     sched = scheduler.Scheduler()
     await sched.start()

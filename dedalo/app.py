@@ -33,6 +33,7 @@ async def lifespan(app: FastAPI):
     for d in ["data/flows", "data/secrets", "data/llms", "data/state", "data/outputs", "data/logs"]:
         Path(d).mkdir(parents=True, exist_ok=True)
     history.init_db()
+    secrets.migrate()
 
     # Cargar configuración persistida si existe
     if CONFIG_FILE.is_file():
@@ -43,7 +44,11 @@ async def lifespan(app: FastAPI):
             if cfg.get("llm_model"):
                 os.environ["DEDALO_LLM_MODEL"] = cfg["llm_model"]
             if cfg.get("llm_key"):
-                os.environ["DEDALO_LLM_KEY"] = cfg["llm_key"]
+                os.environ["DEDALO_LLM_KEY"] = secrets.decrypt(cfg["llm_key"])
+                if not cfg["llm_key"].startswith(secrets.PREFIX):  # formato antiguo: cifrar en el sitio
+                    cfg["llm_key"] = secrets.encrypt(cfg["llm_key"])
+                    CONFIG_FILE.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+                    CONFIG_FILE.chmod(0o600)
         except Exception:
             pass
 
@@ -246,10 +251,11 @@ def save_config(req: ConfigUpdateRequest) -> dict[str, str]:
         cfg["llm_model"] = req.llm_model
     if req.llm_key is not None and req.llm_key != "":
         os.environ["DEDALO_LLM_KEY"] = req.llm_key
-        cfg["llm_key"] = req.llm_key
+        cfg["llm_key"] = secrets.encrypt(req.llm_key)
 
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
     CONFIG_FILE.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    CONFIG_FILE.chmod(0o600)
     return {"status": "ok"}
 
 
