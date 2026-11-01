@@ -6956,7 +6956,7 @@ def human_approval(
             print(tr('\n⛔ Cancelled by the user.'))
 
         if confirmed:
-            return NodeResult("ok", data=first if first is not None else (raw_text or "Aprobado"))
+            return NodeResult("ok", data=first if first is not None else (raw_text or tr('Approved')))
 
     # Si no se confirmó o no era interactivo
     if on_reject.lower() == "error":
