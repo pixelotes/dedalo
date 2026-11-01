@@ -201,6 +201,12 @@ ruff check .
 
 ---
 
+## Contribuir
+
+Consulta [CONTRIBUTING.md](CONTRIBUTING.md) y el [CHANGELOG](CHANGELOG.md).
+
+---
+
 ## Licencia
 
 [Elastic License 2.0](LICENSE). Ver también [NOTICE](NOTICE).

@@ -1,0 +1,38 @@
+name: Error
+description: Algo no funciona como debería
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Para vulnerabilidades de seguridad **no uses este formulario**; sigue SECURITY.md.
+  - type: textarea
+    id: descripcion
+    attributes:
+      label: Qué ocurre
+    validations:
+      required: true
+  - type: textarea
+    id: pasos
+    attributes:
+      label: Pasos para reproducirlo
+      description: Si puedes, adjunta el flujo (sin secretos).
+    validations:
+      required: true
+  - type: textarea
+    id: esperado
+    attributes:
+      label: Comportamiento esperado
+  - type: input
+    id: version
+    attributes:
+      label: Versión o commit
+  - type: dropdown
+    id: despliegue
+    attributes:
+      label: Despliegue
+      options: [run.sh, Docker, systemd, Otro]
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs relevantes
+      render: text

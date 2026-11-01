@@ -3,6 +3,8 @@ name = "dedalo"
 version = "0.1.0"
 description = "Dédalo · Flujos de trabajo visuales ultraligeros que compilan a Python plano"
 readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Raúl Pastor" }]
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.110.0",
@@ -11,6 +13,10 @@ dependencies = [
     "pydantic>=2.0.0",
     "curl_cffi>=0.7.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/pixelotes/dedalo"
+Issues = "https://github.com/pixelotes/dedalo/issues"
 
 [project.optional-dependencies]
 dev = [
