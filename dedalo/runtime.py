@@ -45,6 +45,7 @@ from typing import Any, Callable
 import httpx
 
 from dedalo import llms, secrets
+from dedalo import sandbox as sbx
 
 
 def compact_memory() -> None:
@@ -511,6 +512,7 @@ def command_input(
     cmd: str,
     timeout: float = 15.0,
     cwd: str = "",
+    sandbox: str = "",
 ) -> NodeResult:
     """Ejecuta un comando en la shell del sistema y captura su salida."""
     if not cmd.strip():
@@ -519,14 +521,7 @@ def command_input(
     rendered_cmd = cmd.replace("{entrada}", inp.text())
     work_dir = Path(cwd) if cwd.strip() else None
     try:
-        res = subprocess.run(
-            rendered_cmd,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=float(timeout),
-            cwd=work_dir,
-        )
+        res = sbx.run_shell(rendered_cmd, kind="command", timeout=float(timeout), cwd=work_dir, mode=sandbox)
         data = {
             "stdout": res.stdout.strip(),
             "stderr": res.stderr.strip(),
@@ -537,6 +532,8 @@ def command_input(
         return NodeResult("ok", data=data)
     except subprocess.TimeoutExpired:
         return NodeResult("error", error=f"Tiempo de ejecución agotado ({timeout}s) para el comando")
+    except sbx.SandboxUnavailable as exc:
+        return NodeResult("error", error=str(exc))
     except Exception as exc:
         return NodeResult("error", error=f"Error al ejecutar comando: {exc}")
 
@@ -2307,14 +2304,7 @@ def _tool_bash(base_dir: Path, command: str, timeout: float = 30.0) -> str:
     if not command or not command.strip():
         return "Error: Comando vacío."
     try:
-        proc = subprocess.run(
-            command,
-            shell=True,
-            cwd=base_dir,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
+        proc = sbx.run_shell(command, kind="coder", timeout=timeout, cwd=base_dir)
         parts = []
         if proc.stdout:
             parts.append(proc.stdout)
@@ -2324,6 +2314,8 @@ def _tool_bash(base_dir: Path, command: str, timeout: float = 30.0) -> str:
         return "\n".join(parts)
     except subprocess.TimeoutExpired:
         return f"Error: El comando superó el tiempo límite de {timeout} segundos."
+    except sbx.SandboxUnavailable as exc:
+        return f"Error: {exc}"
     except Exception as exc:
         return f"Error al ejecutar comando: {exc}"
 
@@ -4128,9 +4120,10 @@ def command_action(
     cmd: str,
     timeout: float = 15.0,
     cwd: str = "",
+    sandbox: str = "",
 ) -> NodeResult:
     """Ejecuta un comando de sistema como acción de salida."""
-    return command_input(ctx, inputs, cmd=cmd, timeout=timeout, cwd=cwd)
+    return command_input(ctx, inputs, cmd=cmd, timeout=timeout, cwd=cwd, sandbox=sandbox)
 
 
 def rest_webhook(

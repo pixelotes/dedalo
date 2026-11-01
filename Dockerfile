@@ -29,11 +29,16 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # ==============================================================================
 FROM python:3.12-slim-bookworm AS runner
 
+# Aislamiento de comandos (DEDALO_SANDBOX): bubblewrap se instala por defecto (~100 KB).
+# Para una imagen sin él: docker build --build-arg WITH_BWRAP=0 .
+ARG WITH_BWRAP=1
+
 # Instalar binarios necesarios del sistema (git para nodos de control de versiones)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
         ca-certificates \
         openssh-client \
+        $([ "$WITH_BWRAP" = "1" ] && echo bubblewrap) \
     && rm -rf /var/lib/apt/lists/* \
     && git config --system --add safe.directory '*'
 

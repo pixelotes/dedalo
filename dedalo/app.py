@@ -18,7 +18,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from dedalo import compiler, history, llms, runtime, scheduler, secrets, store, templates
+from dedalo import compiler, history, llms, runtime, sandbox, scheduler, secrets, store, templates
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -231,6 +231,7 @@ def get_config() -> dict[str, Any]:
         "llm_url": os.environ.get("DEDALO_LLM_URL", "http://localhost:11434/v1"),
         "llm_model": os.environ.get("DEDALO_LLM_MODEL", "llama3"),
         "has_llm_key": bool(os.environ.get("DEDALO_LLM_KEY")),
+        "sandbox": sandbox.status(),
     }
 
 

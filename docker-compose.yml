@@ -6,6 +6,8 @@ services:
       args:
         UID: 1000
         GID: 1000
+        # Instala bubblewrap en la imagen (aislamiento de comandos); 0 para omitirlo
+        WITH_BWRAP: 1
     image: dedalo:latest
     container_name: dedalo
     restart: unless-stopped
@@ -21,6 +23,14 @@ services:
       - ALL
     # Ejecuta explícitamente con UID/GID no privilegiado
     user: "1000:1000"
+    # Sistema de ficheros raíz de solo lectura: solo se escribe en data/ y /tmp
+    read_only: true
+    # Aislamiento de comandos con bubblewrap (DEDALO_SANDBOX=auto|on). Necesita user namespaces, que
+    # el perfil por defecto de Docker bloquea; descomenta estas tres líneas solo si lo activas:
+    #   - seccomp=unconfined
+    #   - apparmor=unconfined
+    #   - systempaths=unconfined
+    # (bajo `security_opt`, junto a no-new-privileges). Sin ellas, `auto` ejecuta sin aislar y `on` falla.
 
     ports:
       - "8080:8080"
@@ -32,6 +42,8 @@ services:
       - DEDALO_ALLOWED_HOSTS=${DEDALO_ALLOWED_HOSTS:-localhost,127.0.0.1,[::1]}
       # Cambiar a 1 para modo headless (desactiva la UI web, mantiene Webhooks y API)
       - DEDALO_HEADLESS=0
+      # Aislamiento de comandos: off | auto | on (vacío = por defecto: off en nodos, auto en transform.coder)
+      - DEDALO_SANDBOX=${DEDALO_SANDBOX:-}
       # Optimizaciones de memoria para Python y glibc
       - PYTHONOPTIMIZE=1
       - MALLOC_TRIM_THRESHOLD_=65536
