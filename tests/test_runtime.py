@@ -1,5 +1,7 @@
 """Tests para el runtime de Dédalo Standalone."""
 
+import datetime
+
 from dedalo import runtime
 from pathlib import Path
 import re
@@ -1782,3 +1784,157 @@ def test_human_approval_interactive_and_auto(monkeypatch):
 
 
 
+
+
+_ICS = "\r\n".join([
+    "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Google Inc//Google Calendar 70.9054//EN",
+    # puntual en UTC, con alarma anidada (su DESCRIPTION no debe sobrescribir la del evento)
+    "BEGIN:VEVENT", "UID:one@x", "DTSTART:20261104T090000Z", "DTEND:20261104T100000Z",
+    "SUMMARY:Revisión\\, trimestral", "LOCATION:Sala 1", "DESCRIPTION:Línea 1\\nLínea 2 \\; fin",
+    "BEGIN:VALARM", "ACTION:DISPLAY", "DESCRIPTION:Recordatorio", "END:VALARM", "END:VEVENT",
+    # semanal L-X-V con zona horaria, una excepción (EXDATE) y una instancia movida (RECURRENCE-ID)
+    "BEGIN:VEVENT", "UID:daily@x", "DTSTART;TZID=Europe/Madrid:20261102T100000",
+    "DTEND;TZID=Europe/Madrid:20261102T103000", "RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR",
+    "EXDATE;TZID=Europe/Madrid:20261104T100000", "SUMMARY:Daily", "END:VEVENT",
+    "BEGIN:VEVENT", "UID:daily@x", "RECURRENCE-ID;TZID=Europe/Madrid:20261106T100000",
+    "DTSTART;TZID=Europe/Madrid:20261106T150000", "DTEND;TZID=Europe/Madrid:20261106T153000",
+    "SUMMARY:Daily (movida)", "END:VEVENT",
+    # todo el día, dos días (DTEND exclusivo)
+    "BEGIN:VEVENT", "UID:trip@x", "DTSTART;VALUE=DATE:20261105", "DTEND;VALUE=DATE:20261107",
+    "SUMMARY:Viaje", "END:VEVENT",
+    # mensual, segundo martes, empezó hace años
+    "BEGIN:VEVENT", "UID:monthly@x", "DTSTART;TZID=Europe/Madrid:20200310T180000",
+    "DTEND;TZID=Europe/Madrid:20200310T190000", "RRULE:FREQ=MONTHLY;BYDAY=2TU",
+    "SUMMARY:Comité", "END:VEVENT",
+    # cancelado y fuera de ventana
+    "BEGIN:VEVENT", "UID:cancel@x", "DTSTART:20261105T090000Z", "STATUS:CANCELLED", "SUMMARY:Cancelado", "END:VEVENT",
+    "BEGIN:VEVENT", "UID:far@x", "DTSTART:20270601T090000Z", "SUMMARY:Lejano", "END:VEVENT",
+    "END:VCALENDAR", "",
+])
+
+
+def _ical_window(start="2026-11-02", days=14):
+    tz = datetime.timezone.utc
+    ws = datetime.datetime.fromisoformat(start).replace(tzinfo=tz)
+    return tz, ws, ws + datetime.timedelta(days=days)
+
+
+def test_ical_events_parse_and_expand():
+    tz, ws, we = _ical_window()
+    evs = runtime._ical_events(_ICS, tz, ws, we, 500)
+    summaries = [(e["start"][:16], e["summary"]) for e in evs]
+    assert summaries == [
+        ("2026-11-02T09:00", "Daily"),  # 10:00 Madrid = 09:00 UTC (CET)
+        ("2026-11-04T09:00", "Revisión, trimestral"),
+        ("2026-11-05", "Viaje"),
+        ("2026-11-06T14:00", "Daily (movida)"),
+        ("2026-11-09T09:00", "Daily"),
+        ("2026-11-10T17:00", "Comité"),
+        ("2026-11-11T09:00", "Daily"),
+        ("2026-11-13T09:00", "Daily"),
+    ]
+    one = next(e for e in evs if e["uid"] == "one@x")
+    assert one["description"] == "Línea 1\nLínea 2 ; fin"  # sin el texto de VALARM
+    assert one["location"] == "Sala 1" and not one["recurring"]
+    trip = next(e for e in evs if e["uid"] == "trip@x")
+    assert trip["all_day"] and trip["start"] == "2026-11-05" and trip["end"] == "2026-11-06"
+    assert all(e["uid"] not in ("cancel@x", "far@x") for e in evs)
+    assert not any(e["start"].startswith("2026-11-04T09") and e["summary"] == "Daily" for e in evs)  # EXDATE
+
+
+def test_ical_rrule_count_until_and_dst():
+    tz = datetime.timezone.utc
+    madrid = runtime._ical_zone("Europe/Madrid", tz)
+    ds = datetime.datetime(2026, 10, 20, 10, 0, tzinfo=madrid)
+    far = datetime.datetime(2030, 1, 1, tzinfo=tz)
+    got = list(runtime._ical_occurrences(ds, {"FREQ": "DAILY", "COUNT": "3"}, ds, far))
+    assert [o.day for o in got] == [20, 21, 22]
+    got = list(runtime._ical_occurrences(ds, {"FREQ": "DAILY", "UNTIL": "20261022T235959Z"}, ds, far))
+    assert len(got) == 3
+    # la hora local se mantiene al cruzar el cambio horario (25/10/2026): 10:00 CEST -> 10:00 CET
+    got = list(runtime._ical_occurrences(ds, {"FREQ": "WEEKLY", "COUNT": "2"}, ds, far))
+    assert [o.hour for o in got] == [10, 10]
+    assert [o.utcoffset() for o in got] == [datetime.timedelta(hours=2), datetime.timedelta(hours=1)]
+    # saltar periodos antiguos no cambia las ocurrencias de la ventana
+    begin = datetime.datetime(2026, 12, 1, tzinfo=tz)
+    limit = begin + datetime.timedelta(days=60)
+    rule = {"FREQ": "WEEKLY", "INTERVAL": "2"}
+    full = [o for o in runtime._ical_occurrences(ds, rule, ds, limit) if o >= begin]
+    jumped = [o for o in runtime._ical_occurrences(ds, rule, begin, limit) if o >= begin]
+    assert full and jumped == full
+    monthly = {"FREQ": "MONTHLY", "BYDAY": "-1FR"}
+    full = [o for o in runtime._ical_occurrences(ds, monthly, ds, limit) if o >= begin]
+    assert [(o.month, o.day) for o in full] == [(12, 25), (1, 29)]
+    assert [o for o in runtime._ical_occurrences(ds, monthly, begin, limit) if o >= begin] == full
+    # patrones no soportados degradan al primer evento en vez de inventar fechas
+    assert list(runtime._ical_occurrences(ds, {"FREQ": "HOURLY"}, ds, far)) == [ds]
+
+
+def test_calendar_read_secret_filter_and_no_url_leak(monkeypatch):
+    from dedalo import secrets
+
+    url = "https://calendar.google.com/calendar/ical/me%40x.com/private-abc123def456/basic.ics"
+    monkeypatch.setattr(secrets, "get", lambda name: url if name == "gcal" else None)
+    tomorrow = (datetime.date.today() + datetime.timedelta(days=1)).strftime("%Y%m%d")
+    ics = "\r\n".join([
+        "BEGIN:VCALENDAR",
+        "BEGIN:VEVENT", "UID:a", f"DTSTART;VALUE=DATE:{tomorrow}", "SUMMARY:Comit\u00e9 de seguridad", "END:VEVENT",
+        "BEGIN:VEVENT", "UID:b", f"DTSTART;VALUE=DATE:{tomorrow}", "SUMMARY:Otro", "END:VEVENT",
+        "END:VCALENDAR", "",
+    ])
+    seen = {}
+
+    def fake_download(u, timeout):
+        seen["url"] = u
+        return ics
+
+    monkeypatch.setattr(runtime, "_ical_download", fake_download)
+    res = runtime.calendar_read(None, [], secret="gcal", timezone="UTC", filter_keyword="comit")
+    assert res.ok and seen["url"] == url  # la URL sale del secreto
+    assert [e["summary"] for e in res.data] == ["Comité de seguridad"]
+    assert len(runtime.calendar_read(None, [], secret="gcal", timezone="UTC").data) == 2
+    assert runtime.calendar_read(None, [], secret="gcal", timezone="UTC", max_events=1).data[0]["uid"] == "a"
+
+    assert runtime.calendar_read(None, [], secret="nope").error.startswith("The secret 'nope'")
+    assert "Missing the calendar URL" in runtime.calendar_read(None, []).error
+
+
+def test_calendar_download_errors_never_contain_the_url(monkeypatch):
+    url = "https://calendar.google.com/calendar/ical/me%40x.com/private-abc123def456/basic.ics"
+
+    class Boom:
+        def __init__(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+        def stream(self, *a, **k):
+            raise RuntimeError(f"connection to {url} failed (private-abc123def456)")
+
+    monkeypatch.setattr(runtime.httpx, "Client", Boom)
+    res = runtime.calendar_read(None, [], url=url)
+    assert not res.ok
+    assert "private-abc123def456" not in res.error and "calendar.google.com/calendar" not in res.error
+    res = runtime.calendar_read(None, [], url="file:///etc/passwd")
+    assert "must start with https://" in res.error
+
+
+def test_calendar_webcal_and_size_limit(monkeypatch):
+    seen = {}
+
+    class Resp:
+        status_code = 200
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+        def iter_bytes(self): yield b"x" * (runtime._ICAL_MAX_BYTES + 1)
+
+    class Client:
+        def __init__(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+        def stream(self, method, url, **kw):
+            seen["url"] = url
+            return Resp()
+
+    monkeypatch.setattr(runtime.httpx, "Client", Client)
+    res = runtime.calendar_read(None, [], url="webcal://example.com/c.ics")
+    assert seen["url"] == "https://example.com/c.ics"
+    assert "limit" in res.error

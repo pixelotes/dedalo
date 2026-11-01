@@ -146,7 +146,32 @@ Process incoming emails received overnight to generate an executive daily summar
 
 ---
 
-## 6. Hardware and Network Monitoring on Raspberry Pi
+## 6. Morning Report Made of Sub-flows
+
+### Goal
+Instead of five messages every morning (news, mail, security news, calendar, weather) or one giant flow, each topic is its own small flow and a master flow assembles a single report.
+
+```text
+[input.subflows] ──► [transform.script] ──► [transform.agent] ──► [output.telegram]
+ flows: news, mail,   (keeps the entries      (optional: polish
+ security, agenda,     with status == "ok",    the tone)
+ weather               builds the sections)
+ timeout: 90
+```
+Each sub-flow ends in the node that produces its section (a summary, a list) and can keep its own `output.*` for when it is run alone; inside the report those outputs are skipped. `transform.script` receives a dictionary like `{"weather": {"status": "ok", "data": ...}, "mail": {"status": "timeout", ...}}`:
+
+```python
+parts = []
+for name, r in entrada["sub"].items():
+    if r["status"] == "ok" and r["data"]:
+        parts.append(f"## {name}\n{r['data']}")
+return "\n\n".join(parts)
+```
+A sub-flow that failed or did not arrive in time simply does not appear in the report.
+
+---
+
+## 7. Hardware and Network Monitoring on Raspberry Pi
 
 ### Goal
 Unattended 24/7 monitoring of a home or industrial node. The flow consumes 0% CPU most of the time and runs every 15 minutes, checking temperature, disk, and SSL certificate expiry.

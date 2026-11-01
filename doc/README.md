@@ -12,7 +12,7 @@ Welcome to the technical documentation and architecture guide for **Dédalo**, t
    - Key technical decisions: no frontend bundlers, a deterministic execution model, secrets encrypted at rest and skip sentinels (`SKIPPED`).
 
 2. **[Complete Node Catalog](node_catalog.md)**
-   - Exhaustive catalog of the **72 available nodes**:
+   - Exhaustive catalog of the **74 available nodes**:
      - **27 Input Nodes (`input.*`)**: Webhooks, API calls, Git, incident telemetry, Jira, Confluence, WHOIS/RDAP, DNS DoH, Pi/Linux sensors, RSS, IMAP, etc.
      - **28 Transform Nodes (`transform.*`)**: LLM agents, ReAct Coder, SecOps Analyzer and Planner, CVE/SBOM Audit, Secret Scanner (DLP), JSON Path extraction, Data Mapper, Human Approval Gate (`transform.approval`), list operators, hash diffs, fuzzy deduplication, regex, CSS selectors, sanitization and Python scripts.
      - **17 Output Nodes (`output.*`)**: Microsoft Teams, Evidence Vault with gzip+sha256, Jira operations (create, comment, transition), Confluence pages (create, replace, append), Git commits/push, SQLite, Telegram, Discord, Slack, MQTT, etc.

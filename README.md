@@ -23,12 +23,14 @@ The system includes a broad set of deterministic transformation nodes, aiming to
 
 ## Main nodes
 
-The catalog includes more than 70 modular nodes (72 in total). Among the most commonly used are:
+The catalog includes more than 70 modular nodes (74 in total). Among the most commonly used are:
 
 ### Input nodes
 - `input.git`: Reads local or remote Git repositories (commit history, diff of changes between revisions with path filtering, lightweight shallow clone or working tree status).
 - `input.rss`: RSS and Atom feed reader with persistent memory of already processed items.
 - `input.http_call` / `input.web_read`: HTTP requests with browser fingerprint impersonation and web content extraction.
+- `input.calendar`: Reads any iCalendar (`.ics`) URL, such as the secret address of a Google Calendar, expanding recurring events; the URL is kept as a secret.
+- `input.subflows`: Runs other flows in parallel, waits up to a timeout and returns each one's result, so a morning report can be built from small flows instead of one giant flow.
 - `input.imap`: Email reader over IMAP with TLS support and automatic sanitization of injections and signatures.
 - `input.web_search`: Internet search through DuckDuckGo (no API key), Tavily or Exa.
 - `input.webhook`: Exposes the flow as an HTTP endpoint to receive external events (no built-in authentication: see [Security](#security)).

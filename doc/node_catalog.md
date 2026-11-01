@@ -1,7 +1,7 @@
 # Complete Dédalo Node Catalog
 
-Dédalo has **72 modular nodes** grouped into three families:
-- **Inputs (`input.*`)**: 27 nodes to ingest data from APIs, services, queues, hardware, repositories or files.
+Dédalo has **74 modular nodes** grouped into three families:
+- **Inputs (`input.*`)**: 29 nodes to ingest data from APIs, services, queues, hardware, repositories or files.
 - **Transforms (`transform.*`)**: 28 nodes to clean, filter, aggregate, compute, deduplicate, audit vulnerabilities (CVE/SBOM), scan for secrets (DLP), map data, add human approval gates, or enrich data with local algorithms or LLM agents.
 - **Outputs (`output.*`)**: 17 nodes to persist evidence, open incidents, update wikis, send alerts to messaging platforms (including Microsoft Teams) or run actions.
 
@@ -58,6 +58,23 @@ Dédalo has **72 modular nodes** grouped into three families:
 ### `input.rss`
 - **Label**: RSS / Atom Feed.
 - **Description**: Reads news and syndication feeds with persistent memory of already processed items (`only_new: True`).
+
+### `input.calendar`
+- **Label**: Calendar (iCal).
+- **Description**: Reads a calendar published as an iCalendar (`.ics`) URL — Google Calendar's *secret address in iCal format*, Nextcloud, Outlook.com, Apple, etc. — with no OAuth and no extra dependencies. Expands recurring events (`DAILY`/`WEEKLY`/`MONTHLY`/`YEARLY` with `INTERVAL`, `COUNT`, `UNTIL`, `BYDAY`, `BYMONTHDAY`, `EXDATE`, moved or cancelled instances), keeps local times across daylight saving changes and skips cancelled events. Unsupported rules (`BYSETPOS`, sub-daily frequencies) return only the first occurrence.
+- **Parameters**: `secret` (secret holding the URL; recommended), `url` (only for public calendars), `days_ahead` (7, counting today), `days_back` (0), `max_events` (50), `filter_keyword`, `timezone` (`Europe/Madrid`), `max_description_chars` (500), `timeout`.
+- **Output**: List of events sorted by start with `summary`, `start`, `end` (ISO 8601; plain dates and an inclusive `end` for all-day events), `all_day`, `location`, `description`, `status`, `uid` and `recurring`. Descriptions are stripped of HTML and invisible characters (they can come from invitations sent by third parties, so treat them as untrusted text before passing them to an LLM).
+- **Secret URL**: the iCal address is a credential (anyone who has it can read the calendar). Store it as a secret (Settings → Secrets, or an `op://`/`vault://` reference) and choose it in `secret`, so it never ends up in `data/flows/`, the history or an exported flow. Errors never include the URL, the download is capped at 10 MB and only `https://`, `http://` and `webcal://` are accepted.
+- **Google Calendar**: in [calendar.google.com](https://calendar.google.com) → Settings → *Settings for my calendars* → pick the calendar → *Integrate calendar* → copy **Secret address in iCal format** (not the *Public address*). Google may take a few hours to reflect changes. If you leak it, use *Reset* next to the address to invalidate it. Google Workspace administrators can disable this option.
+
+### `input.subflows`
+- **Label**: Sub-flows (parallel).
+- **Description**: Runs other saved flows at the same time, waits up to `timeout` seconds and returns what each one produced. It lets a "master" flow (a morning report) be built from small flows (news, mail, calendar, weather) without one giant graph. Each sub-flow keeps its own state in `data/state/` and its own entry in the history (`trigger_type` = `subflow:<parent run id>`).
+- **Parameters**: `flows` (*required*; ids separated by commas or new lines, the file name in `data/flows`), `timeout` (60 s), `max_parallel` (3), `payload` (JSON or text that every sub-flow receives as its payload, readable with `input.webhook`), `skip_outputs` (on).
+- **Output**: Dictionary keyed by flow id with `status` (`ok`, `error`, `skipped` or `timeout`), `data`, `error`, `duration`, `run_id` and, when inner nodes failed, `errors` (node id → message). The node itself only fails if `flows` is empty: a failed or late sub-flow is reported in its entry, so the next node (usually `transform.script`) can drop that section.
+- **What a sub-flow returns**: the data of its last nodes (those without outgoing edges): the value itself if there is one, or a dict by node id if there are several. `skipped` means none of them produced data (for example a threshold that was not met).
+- **`skip_outputs`**: by default the sub-flows run without their `output.*` nodes, so they do not send messages or write files on their own. The same flow can keep its output when it runs alone and be silent inside the report. Turn it off to run them complete.
+- **Limits**: nesting is limited to 3 levels and cycles (A → B → A) are rejected. A flow that exceeds the timeout cannot be killed: it keeps running in the background until it finishes (flows still queued behind `max_parallel` never start). Not available in the standalone export. Sub-flows are not subject to `DEDALO_MAX_CONCURRENT_FLOWS`; use `max_parallel` on constrained hardware.
 
 ### `input.command`
 - **Label**: System Command (Shell).

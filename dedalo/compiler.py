@@ -229,6 +229,56 @@ NODE_TYPES: dict[str, NodeSpec] = {
             "user_agent": 'Optional User-Agent for the feed request.',
         },
     ),
+    "input.calendar": NodeSpec(
+        category="input",
+        runtime_fn="calendar_read",
+        required=frozenset(),
+        optional={
+            "url": "",
+            "secret": "",
+            "days_ahead": 7,
+            "days_back": 0,
+            "max_events": 50,
+            "filter_keyword": "",
+            "timezone": "Europe/Madrid",
+            "max_description_chars": 500,
+            "timeout": 20.0,
+        },
+        label='Calendar (iCal)',
+        output='list of events (summary, start, end, all_day, location, description, status, uid, recurring)',
+        choices_from={"secret": "secrets"},
+        help={
+            "url": 'Public iCalendar (.ics) URL. For private calendars use a secret instead: the URL is a credential.',
+            "secret": 'Secret holding the iCalendar URL (e.g. the secret address in iCal format from Google Calendar). It takes precedence over the URL.',
+            "days_ahead": 'Days to look ahead, counting today.',
+            "days_back": 'Days to look back from the start of today.',
+            "max_events": 'Maximum number of events to return, sorted by start.',
+            "filter_keyword": 'Keeps events whose title, description or location contains this word.',
+            "timezone": 'IANA time zone for the window and the returned times (e.g. Europe/Madrid).',
+            "max_description_chars": 'Maximum characters kept from each description (0 = none).',
+            "timeout": 'Download timeout in seconds.',
+        },
+    ),
+    "input.subflows": NodeSpec(
+        category="input",
+        runtime_fn="subflows_run",
+        required=frozenset({"flows"}),
+        optional={
+            "timeout": 60.0,
+            "max_parallel": 3,
+            "payload": "",
+            "skip_outputs": True,
+        },
+        label='Sub-flows (parallel)',
+        output='dict per flow with status (ok, error, skipped, timeout), data, error, duration and run_id',
+        help={
+            "flows": 'Ids of the flows to run, separated by commas or new lines (the file name in data/flows, e.g. news, mail, weather).',
+            "timeout": 'Seconds to wait for all of them. Flows that have not finished are reported as timeout (they cannot be killed: they keep running in the background).',
+            "max_parallel": 'Maximum number of flows running at the same time.',
+            "payload": 'Optional JSON (or text) passed to every sub-flow as its payload (read it with input.webhook).',
+            "skip_outputs": 'Runs the sub-flows without their output.* nodes (no messages or files of their own); the result is the data of their last nodes.',
+        },
+    ),
     "input.web_read": NodeSpec(
         category="input",
         runtime_fn="web_read",
@@ -1856,6 +1906,17 @@ def validate(graph: Graph) -> list[str]:
     return errors
 
 
+def without_outputs(graph: Graph) -> Graph:
+    """Copia del grafo sin los nodos `output.*` ni sus aristas (para ejecutar un flujo como sub-flujo)."""
+    keep = {n.id for n in graph.nodes if n.type not in NODE_TYPES or NODE_TYPES[n.type].category != "output"}
+    return Graph(
+        name=graph.name,
+        nodes=[n for n in graph.nodes if n.id in keep],
+        edges=[e for e in graph.edges if e.source in keep and e.target in keep],
+        version=graph.version,
+    )
+
+
 def _guard_expression(graph: Graph, node: Node) -> str | None:
     """Expresión condicional para determinar si el nodo debe ejecutarse."""
     incoming = graph.incoming(node.id)
@@ -2012,6 +2073,7 @@ def _extract_runtime_tree_shaken(graph: Graph) -> tuple[str, list[str]]:
             "input.confluence_pages",
             "input.whois_rdap",
             "input.dns_record",
+            "input.calendar",
             "transform.agent",
             "transform.coder",
             "transform.analyzer",
@@ -2075,6 +2137,8 @@ def compile_standalone(graph: Graph) -> str:
     errors = validate(graph)
     if errors:
         raise GraphError(errors)
+    if any(n.type == "input.subflows" for n in graph.nodes):
+        raise GraphError([tr("Sub-flows are not supported in the standalone export yet")])
 
     order = _topological_order(graph)
     assert order is not None

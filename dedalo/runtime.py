@@ -456,6 +456,408 @@ def rss(
     return NodeResult("ok", data=items)
 
 
+# ---------------------------------------------------------------------------
+# Calendario: iCalendar (.ics) por URL, con expansión de las RRULE habituales
+# ---------------------------------------------------------------------------
+
+_ICAL_DAYS = {"MO": 0, "TU": 1, "WE": 2, "TH": 3, "FR": 4, "SA": 5, "SU": 6}
+_ICAL_MAX_BYTES = 10 * 1024 * 1024
+_ICAL_MAX_STEPS = 20000
+_ICAL_PROPS = frozenset({
+    "UID", "SUMMARY", "DESCRIPTION", "LOCATION", "STATUS", "DTSTART", "DTEND", "DURATION",
+    "RRULE", "EXDATE", "RECURRENCE-ID",
+})
+_ICAL_LINE_RE = re.compile(r'^([A-Za-z0-9-]+)((?:;[^:;=]+=(?:"[^"]*"|[^;:"]*))*):(.*)$')
+_ICAL_PARAM_RE = re.compile(r';([^:;=]+)=("[^"]*"|[^;:"]*)')
+_ICAL_DURATION_RE = re.compile(r"P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$")
+
+
+class _IcalError(Exception):
+    """Fallo de descarga o formato del .ics; su mensaje es seguro de mostrar (sin la URL)."""
+
+
+def _ical_zone(name: str, fallback: datetime.tzinfo) -> datetime.tzinfo:
+    """Zona horaria IANA; si no existe (o no hay tzdata) se usa la de respaldo."""
+    if not name:
+        return fallback
+    try:
+        from zoneinfo import ZoneInfo
+
+        return ZoneInfo(name.strip())
+    except Exception:
+        return fallback
+
+
+def _ical_dt(value: str, params: dict[str, str], tz: datetime.tzinfo) -> tuple[datetime.datetime, bool]:
+    """Convierte un valor DATE / DATE-TIME de iCalendar en un datetime con zona y un indicador de día completo."""
+    v = value.strip()
+    if params.get("VALUE") == "DATE" or len(v) == 8:
+        return datetime.datetime(int(v[0:4]), int(v[4:6]), int(v[6:8]), tzinfo=tz), True
+    dt = datetime.datetime(int(v[0:4]), int(v[4:6]), int(v[6:8]), int(v[9:11]), int(v[11:13]), int(v[13:15]))
+    if v.endswith("Z"):
+        return dt.replace(tzinfo=datetime.timezone.utc), False
+    return dt.replace(tzinfo=_ical_zone(params.get("TZID", ""), tz)), False
+
+
+def _ical_unescape(text: str) -> str:
+    return re.sub(r"\\(.)", lambda m: "\n" if m.group(1) in "nN" else m.group(1), text)
+
+
+def _ical_ints(text: str | None) -> list[int]:
+    return [int(x) for x in (text or "").split(",") if re.fullmatch(r"-?\d+", x)]
+
+
+def _ical_month_days(year: int, month: int, byday: list[str], bymonthday: list[int], default_day: int) -> list[int]:
+    """Días del mes que cumplen BYDAY (admite ordinales: 2TU, -1FR) y BYMONTHDAY; sin ninguno, el día de inicio."""
+    first = datetime.date(year, month, 1)
+    last = (datetime.date(year + (month == 12), month % 12 + 1, 1) - first).days
+    by_wd: set[int] | None = None
+    if byday:
+        by_wd = set()
+        for token in byday:
+            m = re.fullmatch(r"([+-]?\d{1,2})?(MO|TU|WE|TH|FR|SA|SU)", token)
+            if not m:
+                continue
+            same = [d for d in range(1, last + 1) if (first.weekday() + d - 1) % 7 == _ICAL_DAYS[m.group(2)]]
+            n = int(m.group(1)) if m.group(1) else 0
+            if not n:
+                by_wd.update(same)
+            elif 0 < abs(n) <= len(same):
+                by_wd.add(same[n - 1] if n > 0 else same[n])
+    by_md: set[int] | None = None
+    if bymonthday:
+        by_md = {d for d in (n if n > 0 else last + 1 + n for n in bymonthday) if 1 <= d <= last}
+    if by_wd is not None and by_md is not None:
+        return sorted(by_wd & by_md)
+    if by_wd is not None or by_md is not None:
+        return sorted(by_wd if by_wd is not None else by_md or ())
+    return [default_day] if default_day <= last else []
+
+
+def _ical_occurrences(ds: datetime.datetime, rule: dict[str, str], begin: datetime.datetime, limit: datetime.datetime):
+    """Inicios de una serie RRULE en orden ascendente hasta `limit`.
+
+    Aritmética en hora local del evento (respeta el cambio horario). Sin COUNT salta directamente
+    a los periodos cercanos a `begin`. FREQ por debajo del día o BYSETPOS/BYWEEKNO/BYYEARDAY no
+    se expanden: se devuelve solo el primer evento.
+    """
+    freq = rule.get("FREQ", "")
+    if freq not in ("DAILY", "WEEKLY", "MONTHLY", "YEARLY") or any(
+        k in rule for k in ("BYSETPOS", "BYWEEKNO", "BYYEARDAY")
+    ):
+        yield ds
+        return
+    interval = max(1, int(rule["INTERVAL"])) if rule.get("INTERVAL", "").isdigit() else 1
+    count = int(rule["COUNT"]) if rule.get("COUNT", "").isdigit() else 0
+    until = None
+    if rule.get("UNTIL"):
+        try:
+            until, until_all_day = _ical_dt(rule["UNTIL"], {}, ds.tzinfo)
+            if until_all_day:
+                until += datetime.timedelta(days=1, microseconds=-1)
+        except ValueError:
+            until = None
+    byday = [t for t in rule.get("BYDAY", "").split(",") if t]
+    bymonth = [m for m in _ical_ints(rule.get("BYMONTH")) if 1 <= m <= 12]
+    bymonthday = _ical_ints(rule.get("BYMONTHDAY"))
+    weekdays = sorted({_ICAL_DAYS[t[-2:]] for t in byday if t[-2:] in _ICAL_DAYS}) or [ds.weekday()]
+
+    def period(k: int) -> list[datetime.datetime]:
+        if freq == "DAILY":
+            occ = ds + datetime.timedelta(days=k * interval)
+            return [occ] if not byday or occ.weekday() in weekdays else []
+        if freq == "WEEKLY":
+            monday = ds - datetime.timedelta(days=ds.weekday()) + datetime.timedelta(weeks=k * interval)
+            return [monday + datetime.timedelta(days=wd) for wd in weekdays]
+        if freq == "MONTHLY":
+            y, m0 = divmod(ds.year * 12 + ds.month - 1 + k * interval, 12)
+            if bymonth and m0 + 1 not in bymonth:
+                return []
+            return [ds.replace(year=y, month=m0 + 1, day=d) for d in _ical_month_days(y, m0 + 1, byday, bymonthday, ds.day)]
+        y = ds.year + k * interval
+        out: list[datetime.datetime] = []
+        for mo in bymonth or [ds.month]:
+            out += [ds.replace(year=y, month=mo, day=d) for d in _ical_month_days(y, mo, byday, bymonthday, ds.day)]
+        return sorted(out)
+
+    k = 0
+    if not count and begin > ds:
+        gap = {
+            "DAILY": (begin - ds).days,
+            "WEEKLY": (begin - ds).days // 7,
+            "MONTHLY": (begin.year * 12 + begin.month) - (ds.year * 12 + ds.month),
+            "YEARLY": begin.year - ds.year,
+        }[freq]
+        k = max(0, gap // interval - 1)
+    emitted = 0
+    for _ in range(_ICAL_MAX_STEPS):
+        for occ in period(k):
+            if occ < ds:
+                continue
+            if occ > limit or (until is not None and occ > until):
+                return
+            emitted += 1
+            if count and emitted > count:
+                return
+            yield occ
+        k += 1
+
+
+def _ical_events(
+    text: str,
+    tz: datetime.tzinfo,
+    win_start: datetime.datetime,
+    win_end: datetime.datetime,
+    max_description_chars: int,
+) -> list[dict[str, Any]]:
+    """Eventos de un .ics que caen en la ventana, con las series repetitivas expandidas."""
+    vevents: list[dict[str, list[tuple[dict[str, str], str]]]] = []
+    stack: list[str] = []
+    current: dict[str, list[tuple[dict[str, str], str]]] = {}
+    for line in re.sub(r"\r?\n[ \t]", "", text).splitlines():
+        m = _ICAL_LINE_RE.match(line)
+        if not m:
+            continue
+        name, raw_params, value = m.group(1).upper(), m.group(2), m.group(3)
+        if name == "BEGIN":
+            stack.append(value.upper())
+            if value.upper() == "VEVENT":
+                current = {}
+        elif name == "END":
+            if stack and stack.pop() == "VEVENT":
+                vevents.append(current)
+        elif stack and stack[-1] == "VEVENT" and name in _ICAL_PROPS:  # ignora VALARM y otros anidados
+            params = {k.upper(): v.strip('"') for k, v in _ICAL_PARAM_RE.findall(raw_params)}
+            current.setdefault(name, []).append((params, value))
+
+    def first(ev: dict[str, list[tuple[dict[str, str], str]]], name: str) -> str:
+        return ev[name][0][1] if name in ev else ""
+
+    parsed: list[dict[str, Any]] = []
+    for ev in vevents:
+        try:
+            if "DTSTART" not in ev:
+                continue
+            start, all_day = _ical_dt(ev["DTSTART"][0][1], ev["DTSTART"][0][0], tz)
+            if "DTEND" in ev:
+                duration = _ical_dt(ev["DTEND"][0][1], ev["DTEND"][0][0], tz)[0] - start
+            elif first(ev, "DURATION") and _ICAL_DURATION_RE.match(first(ev, "DURATION")):
+                w, d, h, mi, s = (int(x or 0) for x in _ICAL_DURATION_RE.match(first(ev, "DURATION")).groups())
+                duration = datetime.timedelta(weeks=w, days=d, hours=h, minutes=mi, seconds=s)
+            else:
+                duration = datetime.timedelta(days=1) if all_day else datetime.timedelta(0)
+            rid = None
+            if "RECURRENCE-ID" in ev:
+                rid = _ical_dt(ev["RECURRENCE-ID"][0][1], ev["RECURRENCE-ID"][0][0], tz)[0].astimezone(datetime.timezone.utc)
+            exdates = set()
+            for params, value in ev.get("EXDATE", []):
+                for part in value.split(","):
+                    exdates.add(_ical_dt(part, params, tz)[0].astimezone(datetime.timezone.utc))
+        except (ValueError, IndexError):
+            continue
+        rule = {}
+        for part in first(ev, "RRULE").split(";"):
+            k, _, v = part.partition("=")
+            if k and v:
+                rule[k.upper()] = v
+        parsed.append({
+            "ev": ev, "uid": first(ev, "UID"), "start": start, "all_day": all_day, "duration": duration,
+            "rid": rid, "exdates": exdates, "rule": rule,
+            "cancelled": first(ev, "STATUS").upper() == "CANCELLED",
+        })
+
+    # instancias modificadas o canceladas de una serie: sustituyen a la ocurrencia original
+    overridden = {(p["uid"], p["rid"]) for p in parsed if p["rid"] is not None and p["uid"]}
+
+    found: list[tuple[datetime.datetime, dict[str, Any]]] = []
+    for p in parsed:
+        if p["cancelled"]:
+            continue
+        if p["rule"] and p["rid"] is None:
+            starts = _ical_occurrences(p["start"], p["rule"], win_start - p["duration"], win_end)
+        else:
+            starts = iter([p["start"]])
+        for start in starts:
+            end = start + p["duration"]
+            if not (start < win_end and (end > win_start or start >= win_start)):
+                continue
+            utc = start.astimezone(datetime.timezone.utc)
+            if p["rid"] is None and (utc in p["exdates"] or (p["uid"], utc) in overridden):
+                continue
+            ev = p["ev"]
+            desc = _ical_unescape(first(ev, "DESCRIPTION"))
+            if p["all_day"]:
+                start_s = start.date().isoformat()
+                end_s = max(start, end - datetime.timedelta(days=1)).date().isoformat()
+            else:
+                start_s = start.astimezone(tz).isoformat(timespec="minutes")
+                end_s = end.astimezone(tz).isoformat(timespec="minutes")
+            found.append((utc, {
+                "summary": _INVISIBLE_CHARS_RE.sub("", _ical_unescape(first(ev, "SUMMARY"))).strip(),
+                "start": start_s,
+                "end": end_s,
+                "all_day": p["all_day"],
+                "location": _INVISIBLE_CHARS_RE.sub("", _ical_unescape(first(ev, "LOCATION"))).strip(),
+                "description": clean_email_content(
+                    desc, strip_signatures=False, strip_disclaimers=False, max_chars=max_description_chars
+                ),
+                "status": first(ev, "STATUS").lower(),
+                "uid": p["uid"],
+                "recurring": bool(p["rule"]) or p["rid"] is not None,
+            }))
+    found.sort(key=lambda item: item[0])
+    return [item[1] for item in found]
+
+
+def _ical_download(url: str, timeout: float) -> str:
+    """Descarga el .ics (límite de tamaño). Los errores nunca incluyen la URL: suele ser una credencial."""
+    target = "https://" + url[len("webcal://"):] if url.lower().startswith("webcal://") else url
+    if not target.lower().startswith(("http://", "https://")):
+        raise _IcalError(tr("The calendar URL must start with https:// or webcal://"))
+    try:
+        buf = bytearray()
+        with httpx.Client(timeout=float(timeout), follow_redirects=True) as client:
+            with client.stream("GET", target, headers={"Accept": "text/calendar, */*;q=0.5"}) as resp:
+                if resp.status_code >= 400:
+                    raise _IcalError(f"HTTP {resp.status_code}")
+                for chunk in resp.iter_bytes():
+                    buf.extend(chunk)
+                    if len(buf) > _ICAL_MAX_BYTES:
+                        raise _IcalError(tr("The calendar exceeds the {mb} MB limit", mb=_ICAL_MAX_BYTES // (1024 * 1024)))
+    except _IcalError:
+        raise
+    except Exception as exc:
+        parts = urllib.parse.urlsplit(target)
+        msg = str(exc)
+        for secret_part in (target, parts.path, parts.query, *parts.path.split("/")):
+            if len(secret_part) > 7:
+                msg = msg.replace(secret_part, "<url>")
+        raise _IcalError(f"{type(exc).__name__}: {msg}") from None
+    return bytes(buf).decode("utf-8", errors="replace")
+
+
+def calendar_read(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    url: str = "",
+    secret: str = "",
+    days_ahead: int = 7,
+    days_back: int = 0,
+    max_events: int = 50,
+    filter_keyword: str = "",
+    timezone: str = "Europe/Madrid",
+    max_description_chars: int = 500,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> NodeResult:
+    """Lee un calendario iCalendar (.ics) por URL, p. ej. la dirección secreta de Google Calendar."""
+    source = url.strip()
+    if secret:
+        try:
+            source = (secrets.get(secret) or "").strip()
+        except Exception as exc:
+            return NodeResult("error", error=str(exc))
+        if not source:
+            return NodeResult("error", error=tr("The secret '{secret}' does not exist or is empty", secret=secret))
+    if not source:
+        return NodeResult("error", error=tr("Missing the calendar URL (url or secret)"))
+
+    tz = _ical_zone(timezone, datetime.timezone.utc)
+    midnight = datetime.datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+    ahead = max(1, int(days_ahead or 1))
+    back = max(0, int(days_back or 0))
+    win_start = midnight - datetime.timedelta(days=back)
+    win_end = midnight + datetime.timedelta(days=ahead)
+
+    try:
+        text = _ical_download(source, timeout)
+    except _IcalError as exc:
+        return NodeResult("error", error=tr("Could not download the calendar: {error}", error=exc))
+    if "BEGIN:VCALENDAR" not in text:
+        return NodeResult("error", error=tr("The response is not a valid iCalendar file"))
+
+    events = _ical_events(text, tz, win_start, win_end, max(0, int(max_description_chars or 0)))
+    if filter_keyword.strip():
+        kw = filter_keyword.strip().lower()
+        events = [
+            e for e in events
+            if kw in e["summary"].lower() or kw in e["description"].lower() or kw in e["location"].lower()
+        ]
+    return NodeResult("ok", data=events[: max(1, int(max_events or 50))])
+
+
+def subflows_run(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    flows: str,
+    timeout: float = 60.0,
+    max_parallel: int = 3,
+    payload: str = "",
+    skip_outputs: bool = True,
+) -> NodeResult:
+    """Lanza otros flujos en paralelo, espera hasta `timeout` y devuelve el resultado de cada uno."""
+    import contextvars
+    import threading
+
+    from dedalo import scheduler, store
+
+    names = list(dict.fromkeys(store.slug(f) for f in re.split(r"[,\n;]+", str(flows or "")) if f.strip()))[:20]
+    if not names:
+        return NodeResult("error", error=tr("Missing the list of flows to run"))
+    data: Any = None
+    if str(payload or "").strip():
+        try:
+            data = json.loads(payload)
+        except ValueError:
+            data = payload
+
+    results: dict[str, dict[str, Any]] = {}
+    cancelled = threading.Event()
+    gate = threading.Semaphore(max(1, int(max_parallel or 1)))
+
+    def work(fid: str) -> None:
+        with gate:
+            if cancelled.is_set():  # caducó mientras esperaba turno: ni arranca
+                return
+            t0 = time.time()
+            try:
+                out = scheduler.run_subflow_sync(fid, payload=data, parent=ctx, skip_outputs=bool(skip_outputs))
+            except Exception as exc:
+                out = {"status": "error", "error": str(exc)}
+            out.setdefault("duration", round(time.time() - t0, 3))
+            results[fid] = out
+
+    # hilos demonio (no frenan el apagado) y con copia del contexto, para conservar el idioma de la petición
+    threads = [
+        threading.Thread(target=contextvars.copy_context().run, args=(work, fid), daemon=True, name=f"dedalo-subflow-{fid}")
+        for fid in names
+    ]
+    for t in threads:
+        t.start()
+    seconds = max(1.0, float(timeout or 60.0))
+    deadline = time.monotonic() + seconds
+    for t in threads:
+        t.join(max(0.0, deadline - time.monotonic()))
+    cancelled.set()
+    done = dict(results)
+
+    out_map: dict[str, Any] = {}
+    for fid in names:
+        r = done.get(fid)
+        if r is None:
+            r = {"status": "timeout", "error": tr("Did not finish within {seconds}s", seconds=f"{seconds:g}")}
+        out_map[fid] = {
+            "status": r.get("status", "error"),
+            "data": r.get("data"),
+            "error": r.get("error"),
+            "duration": r.get("duration"),
+            "run_id": r.get("run_id"),
+            **({"errors": r["errors"]} if r.get("errors") else {}),
+        }
+    return NodeResult("ok", data=out_map)
+
+
 def csv_file(
     ctx: Any,
     inputs: list[NodeResult],

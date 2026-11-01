@@ -391,3 +391,23 @@ def test_coder_compilation_with_web_search_and_permissions():
 
 
 
+
+
+def test_calendar_node_compilation():
+    g = compiler.Graph(
+        name="agenda",
+        nodes=[
+            _node("cal", "input.calendar", {"secret": "gcal", "days_ahead": 3}),
+            _node("out", "output.file", {"path": "agenda.md"}),
+        ],
+        edges=[_edge("cal", "out", "ok")],
+    )
+    assert compiler.validate(g) == []
+    src = compiler.compile(g)
+    assert "runtime.calendar_read" in src
+
+    standalone = compiler.compile_standalone(g)
+    assert "import httpx" in standalone
+    assert "def calendar_read(" in standalone
+    assert "def _ical_events(" in standalone
+    assert "gcal" in standalone  # aparece como secreto requerido

@@ -570,7 +570,7 @@ def run_preview_endpoint(req: RunRequest) -> dict[str, Any]:
     flow_name = graph.name or tr('Quick test')
     run_id = history.record_run_start(flow_id=flow_id, flow_name=flow_name, trigger_type="preview")
 
-    ctx = scheduler.FlowContext(flow_name=flow_id)
+    ctx = scheduler.FlowContext(flow_name=flow_id, run_id=run_id)
     ns: dict[str, Any] = {}
     t0 = time.time()
     try:
@@ -789,6 +789,7 @@ def _run_webhook_sync(flow_id: str, graph_dict: dict[str, Any], ctx: scheduler.F
 
     flow_name = graph.name or flow_id
     run_id = history.record_run_start(flow_id=flow_id, flow_name=flow_name, trigger_type="webhook")
+    ctx.run_id = run_id
     ns: dict[str, Any] = {}
     t0 = time.time()
     try:

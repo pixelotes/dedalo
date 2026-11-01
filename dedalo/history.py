@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -36,6 +37,7 @@ def get_db(db_path: Path | str | None = None) -> sqlite3.Connection:
 
 
 _initialized: set[str] = set()
+_init_lock = threading.Lock()
 
 
 def init_db(db_path: Path | str | None = None) -> None:
@@ -44,8 +46,11 @@ def init_db(db_path: Path | str | None = None) -> None:
     key = str(target)
     if key in _initialized and target.exists():
         return
-    _init_schema(db_path)
-    _initialized.add(key)
+    with _init_lock:  # varios hilos (webhooks, sub-flujos) pueden llegar a la vez en la primera ejecución
+        if key in _initialized and target.exists():
+            return
+        _init_schema(db_path)
+        _initialized.add(key)
 
 
 def _init_schema(db_path: Path | str | None = None) -> None:

@@ -6,6 +6,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `input.subflows` node: runs other flows in parallel with a timeout and returns each result (status, data, error); sub-flows skip their `output.*` nodes by default, are limited to 3 levels with cycle detection, and are linked to the parent run in the history. Not available in the standalone export.
+- `input.calendar` node: reads iCalendar (`.ics`) URLs, such as Google Calendar's secret address, with recurring event expansion; the URL is meant to be stored as a secret.
 - External secret references (`op://`, `vault://`, `env://`, `file://`) with an in-memory TTL cache, `GET /api/secrets/info` and `POST /api/secrets/test`; `OP_*`, `VAULT_*`, `BAO_*` and `BWS_*` are hidden from shell commands (`DEDALO_ENV_ALLOW` re-exposes some).
 
 - Internationalization (English/Spanish) of the UI, node catalog, templates and messages.
@@ -21,5 +23,5 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `/api/history/purge` requires `days` between 1 and 3650.
 - `list_flows` uses a cache keyed by file date and size, 500 errors on save, import and export no longer expose internal details, and startup is ~100 ms faster (lazy imports).
 - The scheduler runs flows in parallel (`DEDALO_MAX_CONCURRENT_FLOWS`, 2 by default).
-- The history SQLite database is initialized only once per process.
+- The history SQLite database is initialized only once per process, and that initialization is now thread-safe (concurrent first runs no longer fail with `database is locked`).
 - The CI TruffleHog and Trivy actions are pinned by SHA.
