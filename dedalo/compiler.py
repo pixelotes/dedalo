@@ -2229,7 +2229,7 @@ def compile_standalone(graph: Graph) -> str:
         "    SandboxUnavailable = RuntimeError",
         "    @staticmethod",
         "    def run_shell(cmd, *, kind='command', timeout=15.0, cwd=None, mode=''):",
-        "        deny = ('DEDALO_SECRET_', 'DEDALO_MASTER_KEY', 'DEDALO_LLM_KEY', 'DEDALO_TELEGRAM_')",
+        "        deny = ('DEDALO_SECRET_', 'DEDALO_MASTER_KEY', 'DEDALO_LLM_KEY', 'DEDALO_TELEGRAM_', 'OP_', 'VAULT_', 'BAO_', 'BWS_')",
         "        env = {k: v for k, v in os.environ.items() if not k.startswith(deny)}",
         "        return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout, cwd=cwd, env=env)",
         "",

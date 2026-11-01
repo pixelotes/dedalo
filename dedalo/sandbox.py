@@ -24,7 +24,11 @@ from dedalo.i18n import tr
 
 log = logging.getLogger("dedalo.sandbox")
 
-_SECRET_ENV = ("DEDALO_SECRET_*", "DEDALO_MASTER_KEY*", "DEDALO_LLM_KEY", "DEDALO_TELEGRAM_*")
+# Dédalo secrets plus the bootstrap credentials of external secret stores (op://, vault://)
+_SECRET_ENV = (
+    "DEDALO_SECRET_*", "DEDALO_MASTER_KEY*", "DEDALO_LLM_KEY", "DEDALO_TELEGRAM_*",
+    "OP_*", "VAULT_*", "BAO_*", "BWS_*",
+)
 _DEFAULT_MODE = {"command": "off", "coder": "auto"}
 _SYSTEM_DIRS = ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/etc")
 
@@ -39,8 +43,13 @@ class SandboxUnavailable(Exception):
 def clean_env() -> dict[str, str]:
     """Entorno actual sin las variables que contienen secretos de Dédalo."""
     extra = [p.strip() for p in os.environ.get("DEDALO_ENV_DENY", "").split(",") if p.strip()]
+    allow = [p.strip() for p in os.environ.get("DEDALO_ENV_ALLOW", "").split(",") if p.strip()]
     patterns = (*_SECRET_ENV, *extra)
-    return {k: v for k, v in os.environ.items() if not any(fnmatch.fnmatchcase(k, p) for p in patterns)}
+
+    def hidden(key: str) -> bool:
+        return any(fnmatch.fnmatchcase(key, p) for p in patterns) and not any(fnmatch.fnmatchcase(key, a) for a in allow)
+
+    return {k: v for k, v in os.environ.items() if not hidden(k)}
 
 
 def effective_mode(kind: str, node_mode: str = "") -> str:

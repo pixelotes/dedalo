@@ -6,6 +6,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- External secret references (`op://`, `vault://`, `env://`, `file://`) with an in-memory TTL cache, `GET /api/secrets/info` and `POST /api/secrets/test`; `OP_*`, `VAULT_*`, `BAO_*` and `BWS_*` are hidden from shell commands (`DEDALO_ENV_ALLOW` re-exposes some).
+
 - Internationalization (English/Spanish) of the UI, node catalog, templates and messages.
 - Optional webhook token (`DEDALO_WEBHOOK_TOKEN`), body size limit (`DEDALO_MAX_BODY_MB`) and security headers with CSP.
 - Encryption of secrets at rest, environment filtering and optional command isolation with bubblewrap.

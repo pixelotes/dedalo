@@ -101,7 +101,7 @@ Artificial Intelligence is reserved for tasks where non-deterministic reasoning 
 1. **Encrypted Secrets at Rest**:
    - Secrets (Jira tokens, mail credentials, API keys) are stored in `data/secrets/<name>.secret`, encrypted with Fernet (AES + HMAC) and written atomically with POSIX `0600` permissions (directory `0700`). Legacy plaintext files are still read and are encrypted automatically at startup.
    - The master key comes from `DEDALO_MASTER_KEY` or `DEDALO_MASTER_KEY_FILE`; if neither is set, `data/master.key` is generated (`0600`). The generated key only protects against partial copies of `data/`; keep the key outside `data/` for real protection.
-   - Alternatively, secrets can be injected as `DEDALO_SECRET_<NAME>` environment variables (never written to disk). See [external_secrets_evaluation.md](external_secrets_evaluation.md) for external stores such as 1Password.
+   - Alternatively, secrets can be injected as `DEDALO_SECRET_<NAME>` environment variables (never written to disk). A secret file may also hold a reference (`op://...`, `vault://...`) resolved on demand and cached in memory only, so no value is stored locally; see [external_secrets_evaluation.md](external_secrets_evaluation.md).
 2. **No Leaks in the Compiled Code**:
    - The compiler never writes credential values into the generated `.py` files.
    - The code is generated with `secret="secret_name"`, and at runtime the runtime invokes `dedalo.secrets.get("secret_name")`, resolving it in volatile memory.

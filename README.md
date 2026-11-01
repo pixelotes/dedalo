@@ -197,6 +197,7 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## Documentation
 
+- **External secret stores**: a secret can hold a reference instead of a value — `op://Vault/Item/field` (1Password via the `op` CLI and a service account), `vault://mount/path#field` (HashiCorp Vault / OpenBao, KV v2), `env://VAR` or `file:///run/secrets/name` — so nothing sensitive is stored in `data/`. Flows keep using the secret by name. Values are cached in memory only (`DEDALO_SECRETS_CACHE_TTL`, 300 s by default) and the bootstrap credentials (`OP_*`, `VAULT_*`, `BAO_*`) are hidden from shell commands (re-expose some with `DEDALO_ENV_ALLOW`). Check a reference with `POST /api/secrets/test?name=<secret>`. See [doc/external_secrets_evaluation.md](doc/external_secrets_evaluation.md).
 - [Documentation index](doc/README.md)
 - [Project status](doc/PROJECT_STATUS.md)
 - [Philosophy and architecture](doc/philosophy_and_architecture.md)

@@ -1,6 +1,6 @@
 # Evaluation: external secret stores (1Password and others)
 
-Status: **proposal, not implemented**. Goal: let Dédalo use secrets it never stores locally.
+Status: **phase 1 implemented** (providers `env`, `file`, `op` and `vault`, TTL cache, bootstrap credentials hidden from shell commands). Goal: let Dédalo use secrets it never stores locally. See [Usage](#usage-phase-1) below; sections 1–3 keep the original analysis.
 
 ## 1. Premise, and one correction
 
@@ -66,6 +66,30 @@ Design points:
 - **Service accounts** authenticate with one token scoped to chosen vaults; they cannot read built-in Personal/Private/Employee vaults, so secrets must live in a dedicated vault.
 - **Rate limits** (per token per hour, plus a daily cap shared by the whole 1Password account): reads 10,000/h on Business and 1,000/h on Families, Teams and individual plans; writes 1,000/h vs 100/h; daily requests 50,000 (Business), 5,000 (Teams), 1,000 (Families/individual). A single CLI call can consume more than one request. Without caching, one flow running every minute that reads three secrets would use ~4,300 reads/day and exhaust a personal plan; hence the mandatory TTL cache. `op service-account ratelimit` shows current usage.
 - **Latency** of `op read` is a process spawn plus a network round trip (not measured here): acceptable on a cache miss, not per node execution.
+
+## Usage (phase 1)
+
+Store a reference instead of a value, from the Secrets tab, `POST /api/secrets` or a file:
+
+```bash
+curl -X POST localhost:8080/api/secrets -H 'Content-Type: application/json' \
+  -d '{"name": "telegram", "value": "op://Infra/Telegram/token"}'
+```
+
+| Reference | Needs |
+|---|---|
+| `op://Vault/Item/field` | the `op` CLI in `PATH` and `OP_SERVICE_ACCOUNT_TOKEN` in the Dédalo environment (`DEDALO_OP_BIN`, `DEDALO_OP_TIMEOUT` to tune) |
+| `vault://mount/path#field` | `VAULT_ADDR` + `VAULT_TOKEN` (or `VAULT_TOKEN_FILE`; `BAO_*` for OpenBao; optional `VAULT_NAMESPACE`, `VAULT_CACERT`); KV v2 |
+| `env://VAR` | the variable set in the Dédalo process |
+| `file:///run/secrets/name` | an absolute, readable path (Docker/systemd secrets) |
+
+- Flows and nodes keep using the secret **by name**; nothing changes for them.
+- Resolved values are cached in memory for `DEDALO_SECRETS_CACHE_TTL` seconds (default 300; `0` disables). Failures are cached for 5 s so a down store is not hammered, and concurrent callers share one remote read.
+- `GET /api/secrets/info` lists `{name, kind}` (`local`, `env`, `op`, `vault`, `file`) and `POST /api/secrets/test?name=` checks that a secret resolves; neither returns values.
+- `OP_*`, `VAULT_*`, `BAO_*` and `BWS_*` are removed from the environment of `input.command`, `output.command` and the coder `bash` tool. If a shell command really needs one (for example `VAULT_ADDR`), list it in `DEDALO_ENV_ALLOW`.
+- Errors never include secret material and fail closed: if the store is unreachable after the cache expires, the node reports a clear error.
+
+Not covered yet: 1Password Connect and the SDK, Bitwarden Secrets Manager, cloud providers, Vault AppRole login (use Vault Agent or a token file), and showing the secret origin in the UI.
 
 ## 3. Recommendation
 

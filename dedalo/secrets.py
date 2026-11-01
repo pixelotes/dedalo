@@ -5,7 +5,9 @@ o mediante variables de entorno `DEDALO_SECRET_<NOMBRE>`.
 
 Los ficheros se cifran en reposo con Fernet (AES-128-CBC + HMAC-SHA256). La clave maestra sale de
 `DEDALO_MASTER_KEY` o `DEDALO_MASTER_KEY_FILE`; si no hay ninguna, se genera `data/master.key` (0600).
-Los ficheros en claro de versiones anteriores se siguen leyendo y `migrate()` los cifra. La librería
+Los ficheros en claro de versiones anteriores se siguen leyendo y `migrate()` los cifra.
+Un fichero puede contener una referencia externa (`op://...`, `vault://...`, `env://...`, `file://...`)
+en lugar del valor; ver `secret_providers.py`. La librería
 `cryptography` solo se importa al tocar un secreto en disco: los flujos que no los usan no pagan nada.
 """
 
@@ -17,6 +19,7 @@ import os
 import re
 import tempfile
 from pathlib import Path
+from dedalo import secret_providers as providers
 from dedalo.i18n import tr
 
 log = logging.getLogger("dedalo.secrets")
@@ -164,7 +167,31 @@ def get(name: str) -> str | None:
         return None
     if not val:
         return None
-    return decrypt(val) or None
+    value = decrypt(val)
+    if providers.is_reference(value):  # the file holds a reference (op://, vault://, ...), not the value
+        try:
+            return providers.resolve(value)
+        except providers.ProviderError as exc:
+            raise SecretError(tr("secret {name!r}: {error}", name=name, error=exc)) from exc
+    return value or None
+
+
+def kind(name: str) -> str:
+    """Where the secret comes from, never its value: env, local, op, vault, file, env-ref or unknown."""
+    env_val = os.environ.get(_env_key(name))
+    if env_val:
+        return "env"
+    p = _path(name)
+    try:
+        value = decrypt(p.read_text(encoding="utf-8").strip())
+    except (OSError, SecretError):
+        return "unknown"
+    return providers.scheme(value) if providers.is_reference(value) else "local"
+
+
+def describe() -> list[dict[str, str]]:
+    """Name and origin of every available secret (no values)."""
+    return [{"name": n, "kind": kind(n)} for n in names()]
 
 
 def set_secret(name: str, value: str) -> None:

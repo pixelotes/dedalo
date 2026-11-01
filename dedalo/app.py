@@ -325,6 +325,24 @@ def list_secrets() -> list[str]:
     return secrets.names()
 
 
+@app.get("/api/secrets/info")
+def secrets_info() -> list[dict[str, str]]:
+    """Name and origin (local, env, op, vault, file) of each secret; never the value."""
+    return secrets.describe()
+
+
+@app.post("/api/secrets/test")
+def test_secret(name: str = Query(...)) -> dict[str, Any]:
+    """Check that a secret resolves (useful for references) without revealing it."""
+    try:
+        value = secrets.get(name)
+    except secrets.SecretError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    if value is None:
+        raise HTTPException(status_code=404, detail=tr("secret not found"))
+    return {"status": "ok", "name": name, "kind": secrets.kind(name), "length": len(value)}
+
+
 @app.post("/api/secrets")
 def set_secret(req: SecretSaveRequest) -> dict[str, str]:
     try:
