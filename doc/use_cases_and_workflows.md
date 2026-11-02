@@ -162,12 +162,12 @@ Each sub-flow ends in the node that produces its section (a summary, a list) and
 
 ```python
 parts = []
-for name, r in entrada["sub"].items():
+for name, r in entrada[0].items():
     if r["status"] == "ok" and r["data"]:
         parts.append(f"## {name}\n{r['data']}")
 return "\n\n".join(parts)
 ```
-A sub-flow that failed or did not arrive in time simply does not appear in the report.
+A sub-flow that failed or did not arrive in time simply does not appear in the report. See the [Sub-flows guide](subflows.md).
 
 ---
 

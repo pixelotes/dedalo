@@ -74,6 +74,7 @@ Dédalo has **74 modular nodes** grouped into three families:
 - **Output**: Dictionary keyed by flow id with `status` (`ok`, `error`, `skipped` or `timeout`), `data`, `error`, `duration`, `run_id` and, when inner nodes failed, `errors` (node id → message). The node itself only fails if `flows` is empty: a failed or late sub-flow is reported in its entry, so the next node (usually `transform.script`) can drop that section.
 - **What a sub-flow returns**: the data of its last nodes (those without outgoing edges): the value itself if there is one, or a dict by node id if there are several. `skipped` means none of them produced data (for example a threshold that was not met).
 - **`skip_outputs`**: by default the sub-flows run without their `output.*` nodes, so they do not send messages or write files on their own. The same flow can keep its output when it runs alone and be silent inside the report. Turn it off to run them complete.
+- **Guide**: see [Sub-flows](subflows.md) for a quick start, a worked example and troubleshooting.
 - **Limits**: nesting is limited to 3 levels and cycles (A → B → A) are rejected. A flow that exceeds the timeout cannot be killed: it keeps running in the background until it finishes (flows still queued behind `max_parallel` never start). Not available in the standalone export. Sub-flows are not subject to `DEDALO_MAX_CONCURRENT_FLOWS`; use `max_parallel` on constrained hardware.
 
 ### `input.command`

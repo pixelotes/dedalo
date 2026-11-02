@@ -6,7 +6,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- `input.subflows` node: runs other flows in parallel with a timeout and returns each result (status, data, error); sub-flows skip their `output.*` nodes by default, are limited to 3 levels with cycle detection, and are linked to the parent run in the history. Not available in the standalone export.
+- `input.subflows` node: runs other flows in parallel with a timeout and returns each result (status, data, error); sub-flows skip their `output.*` nodes by default, are limited to 3 levels with cycle detection, and are linked to the parent run in the history. Not available in the standalone export. See `doc/subflows.md`.
 - `input.calendar` node: reads iCalendar (`.ics`) URLs, such as Google Calendar's secret address, with recurring event expansion; the URL is meant to be stored as a secret.
 - External secret references (`op://`, `vault://`, `env://`, `file://`) with an in-memory TTL cache, `GET /api/secrets/info` and `POST /api/secrets/test`; `OP_*`, `VAULT_*`, `BAO_*` and `BWS_*` are hidden from shell commands (`DEDALO_ENV_ALLOW` re-exposes some).
 

@@ -30,7 +30,7 @@ The catalog includes more than 70 modular nodes (74 in total). Among the most co
 - `input.rss`: RSS and Atom feed reader with persistent memory of already processed items.
 - `input.http_call` / `input.web_read`: HTTP requests with browser fingerprint impersonation and web content extraction.
 - `input.calendar`: Reads any iCalendar (`.ics`) URL, such as the secret address of a Google Calendar, expanding recurring events; the URL is kept as a secret.
-- `input.subflows`: Runs other flows in parallel, waits up to a timeout and returns each one's result, so a morning report can be built from small flows instead of one giant flow.
+- `input.subflows`: Runs other flows in parallel, waits up to a timeout and returns each one's result, so a morning report can be built from small flows instead of one giant flow (see [Sub-flows](doc/subflows.md)).
 - `input.imap`: Email reader over IMAP with TLS support and automatic sanitization of injections and signatures.
 - `input.web_search`: Internet search through DuckDuckGo (no API key), Tavily or Exa.
 - `input.webhook`: Exposes the flow as an HTTP endpoint to receive external events (no built-in authentication: see [Security](#security)).
@@ -43,7 +43,7 @@ The catalog includes more than 70 modular nodes (74 in total). Among the most co
 - `transform.coder`: Iterative programming micro-harness with a multi-turn ReAct loop and structured tools (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`). Auto-detects the inference server's context window and compacts earlier history with Luhn+ when it reaches 90% saturation.
 - `transform.html_extract`: Extracts fields and records from HTML documents using CSS selectors.
 - `transform.regex`: Regular expression evaluation with match modes, group extraction and substitution.
-- `transform.filter_items` / `transform.array_ops`: Conditional filtering, sorting, limits and projection over data lists.
+- `transform.filter` / `transform.array_ops`: Conditional filtering, sorting, limits and projection over data lists.
 - `transform.diff`: Novelty detection using persistent storage of hash signatures across successive runs.
 - `transform.fuzzy_dedup`: Deduplication of texts and records based on string similarity, without resorting to AI.
 - `transform.clean_email`: Email sanitization that neutralizes text hidden by CSS (`display:none`, `font-size:0`, `color:transparent`), HTML comments and invisible Unicode characters (zero-width), and trims common signatures and legal disclaimers.
@@ -204,6 +204,7 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 - [Project status](doc/PROJECT_STATUS.md)
 - [Philosophy and architecture](doc/philosophy_and_architecture.md)
 - [Node catalog](doc/node_catalog.md)
+- [Sub-flows](doc/subflows.md): Flows that call other flows in parallel, with a morning-report example
 - [Agents and LLMs](doc/agents_and_llms.md)
 - [Standalone export](doc/standalone_export.md)
 - [Use cases and workflows](doc/use_cases_and_workflows.md)
