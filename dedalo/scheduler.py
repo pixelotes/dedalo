@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from dedalo import compiler, cron, history, runtime, store
+from dedalo import compiler, cron, history, pycompile, runtime, store
 from dedalo.i18n import tr
 
 RUN_HISTORY: dict[str, dict[str, Any]] = {}
@@ -63,7 +63,7 @@ def run_flow_sync(flow_id: str, trigger_type: str = "schedule") -> dict[str, Any
     ns: dict[str, Any] = {}
     t0 = time.time()
     try:
-        exec(compile(source, f"<dedalo:{flow_id}>", "exec"), ns)
+        exec(pycompile.compile_code(source, f"<dedalo:{flow_id}>", "exec"), ns)
         run_fn = ns.get("run")
         if not callable(run_fn):
             raise RuntimeError(tr('The script of "{flow_id}" does not define a run(ctx) function', flow_id=flow_id))
@@ -137,7 +137,7 @@ def run_subflow_sync(
     ns: dict[str, Any] = {}
     t0 = time.time()
     try:
-        exec(compile(source, f"<dedalo:subflow:{fid}>", "exec"), ns)
+        exec(pycompile.compile_code(source, f"<dedalo:subflow:{fid}>", "exec"), ns)
         res = ns["run"](ctx)
     except Exception as exc:
         duration = time.time() - t0

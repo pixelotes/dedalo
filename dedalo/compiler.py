@@ -13,6 +13,7 @@ import textwrap
 from dataclasses import dataclass, field
 from typing import Any
 
+from dedalo import pycompile
 from dedalo.runtime import DEFAULT_AGENT_TOKENS
 from dedalo.i18n import tr
 
@@ -2006,7 +2007,7 @@ def compile(graph: Graph) -> str:
 
     source = "\n".join(lines)
     try:
-        ast.parse(source)
+        pycompile.parse(source)
         _compile_source(source, "<dedalo>", "exec")
     except SyntaxError as exc:
         raise GraphError([tr('the generated code is not valid Python: {exc}', exc=exc)]) from exc
@@ -2021,7 +2022,7 @@ def _extract_runtime_tree_shaken(graph: Graph) -> tuple[str, list[str]]:
     runtime_file = Path(__file__).parent / "runtime.py"
     runtime_code = runtime_file.read_text(encoding="utf-8")
     runtime_lines = runtime_code.splitlines()
-    tree = ast.parse(runtime_code)
+    tree = pycompile.parse(runtime_code)
 
     definitions: dict[str, Any] = {}
     order: list[tuple[str, Any]] = []
@@ -2615,7 +2616,7 @@ def compile_standalone(graph: Graph) -> str:
 
     source = "\n".join(lines)
     try:
-        ast.parse(source)
+        pycompile.parse(source)
         _compile_source(source, "<dedalo_standalone>", "exec")
     except SyntaxError as exc:
         raise GraphError([tr('the code generated for standalone mode is not valid Python: {exc}', exc=exc)]) from exc
