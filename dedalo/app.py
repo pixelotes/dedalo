@@ -19,7 +19,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from dedalo import compiler, history, i18n, llms, runtime, sandbox, scheduler, secrets, store, templates
+from dedalo import compiler, history, i18n, llms, pycompile, runtime, sandbox, scheduler, secrets, store, templates
 from dedalo.i18n import tr
 from dedalo.security import (
     BodyLimitMiddleware,
@@ -574,7 +574,7 @@ def run_preview_endpoint(req: RunRequest) -> dict[str, Any]:
     ns: dict[str, Any] = {}
     t0 = time.time()
     try:
-        exec(compile(source, "<dedalo:preview>", "exec"), ns)
+        exec(pycompile.compile_code(source, "<dedalo:preview>", "exec"), ns)
         run_fn = ns.get("run")
         if not callable(run_fn):
             raise RuntimeError(tr('The compiled flow does not contain a run() function'))
@@ -793,7 +793,7 @@ def _run_webhook_sync(flow_id: str, graph_dict: dict[str, Any], ctx: scheduler.F
     ns: dict[str, Any] = {}
     t0 = time.time()
     try:
-        exec(compile(source, f"<dedalo:webhook:{flow_id}>", "exec"), ns)
+        exec(pycompile.compile_code(source, f"<dedalo:webhook:{flow_id}>", "exec"), ns)
         run_fn = ns.get("run")
         if not callable(run_fn):
             raise RuntimeError(tr('The compiled flow does not contain a run() function'))

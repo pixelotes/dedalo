@@ -37,7 +37,7 @@ from typing import Any, Callable
 import httpx
 
 # csv, difflib, imaplib, smtplib, statistics, xml.etree y email.mime se importan al usarse (~80 ms y ~5 MB de arranque)
-from dedalo import llms, secrets
+from dedalo import llms, pycompile, secrets
 from dedalo.i18n import tr
 from dedalo import sandbox as sbx
 
@@ -6227,7 +6227,7 @@ def execute_single_node(
                 "    return None"
             ]
             ns: dict[str, Any] = {}
-            exec("\n".join(lines), ns)
+            exec(pycompile.compile_code("\n".join(lines), "<dedalo:script>"), ns)
             fn = ns["_cuerpo"]
             res = script(ctx, items, fn)
         else:
