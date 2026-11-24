@@ -3102,6 +3102,359 @@ CODER_TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
 }
 
 
+@dataclass
+class AgentTool:
+    """A tool the ReAct loop can offer to the model.
+
+    `handler` receives the parsed arguments and returns text. `risk` is `read`, `write` or
+    `dangerous`; together with `approval` (`never`, `write`, `always`) it decides whether a
+    human must approve each call before it runs.
+    """
+
+    name: str
+    description: str
+    parameters: dict[str, Any]
+    handler: Callable[[dict[str, Any]], str]
+    risk: str = "read"
+    approval: str = "never"
+
+    def spec(self) -> dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.parameters or {"type": "object", "properties": {}},
+            },
+        }
+
+    def needs_approval(self) -> bool:
+        mode = (self.approval or "never").lower().strip()
+        if mode == "always":
+            return True
+        if mode == "write":
+            return (self.risk or "read").lower() != "read"
+        return False
+
+
+def _react_loop(
+    *,
+    messages: list[dict[str, Any]],
+    tools: list[AgentTool],
+    base_url: str,
+    target_model: str,
+    api_key: str,
+    temperature: float,
+    context_window: int,
+    compaction_engine: str,
+    turn_limit: int,
+    max_tool_chars: int,
+    timeout: float,
+    approver: Callable[[AgentTool, dict[str, Any]], tuple[bool, str]] | None = None,
+    deadline: float | None = None,
+    on_tool_result: Callable[[str, dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
+    """Multi-turn ReAct loop shared by the agent nodes.
+
+    Calls the model, runs the tools it asks for, feeds the results back and repeats until the
+    model answers without tool calls, the turn limit is hit or the deadline passes. Raises
+    `_LLMHTTPError` when the model endpoint returns an HTTP error.
+    """
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    by_name = {t.name: t for t in tools}
+    tools_spec = [t.spec() for t in tools]
+    endpoint = f"{base_url}/chat/completions"
+    turns = 0
+    compactions_count = 0
+    modified_files: set[str] = set()
+    tool_calls_log: list[dict[str, Any]] = []
+    consecutive_tool_failures: dict[str, int] = {}
+    final_response = ""
+    completed = False
+    stop_reason = ""
+
+    with httpx.Client(timeout=float(timeout or 120.0)) as client:
+        for _ in range(turn_limit):
+            if deadline is not None and time.monotonic() >= deadline:
+                stop_reason = "deadline"
+                break
+            turns += 1
+
+            # Context window check: compact with the configured engine when it reaches 90%
+            messages, did_compact = _compact_conversation_history(
+                messages,
+                context_window=context_window,
+                engine=compaction_engine,
+                client=client,
+                endpoint=endpoint,
+                headers=headers,
+                target_model=target_model,
+                temperature=float(temperature),
+            )
+            if did_compact:
+                compactions_count += 1
+                eng_clean = (compaction_engine or "blackhole").lower().strip()
+                comp_tool_name = "luhn+_compact" if eng_clean in ("luhn", "luhn+", "luhn_plus", "luhnplus") else f"{eng_clean}_compact"
+                tool_calls_log.append({
+                    "turn": turns,
+                    "tool": comp_tool_name,
+                    "args": {
+                        "context_window": context_window,
+                        "threshold": int(context_window * 0.90),
+                        "engine": eng_clean,
+                    },
+                    "output_preview": tr('Context compacted to 90% with {eng_clean} ({messages} estimated tokens)', eng_clean=eng_clean, messages=_estimate_messages_tokens(messages)),
+                })
+
+            payload: dict[str, Any] = {
+                "model": target_model,
+                "messages": messages,
+                "temperature": float(temperature),
+            }
+            if tools_spec:
+                payload["tools"] = tools_spec
+
+            resp = client.post(endpoint, headers=headers, json=payload)
+            if resp.status_code >= 400:
+                raise _LLMHTTPError(resp.status_code, resp.text[:300])
+
+            data = resp.json()
+            choice = data["choices"][0]
+            msg = choice["message"]
+            messages.append(msg)
+
+            tool_calls = msg.get("tool_calls")
+            if not tool_calls:
+                final_response = (msg.get("content") or "").strip()
+                completed = True
+                break
+
+            for call in tool_calls:
+                call_id = call.get("id") or f"call_{len(tool_calls_log)}"
+                fn = call.get("function", {})
+                fn_name = fn.get("name", "")
+                raw_args = fn.get("arguments", "{}")
+                if isinstance(raw_args, str):
+                    try:
+                        args = json.loads(raw_args)
+                    except Exception:
+                        args = {}
+                else:
+                    args = raw_args or {}
+                if not isinstance(args, dict):
+                    args = {}
+
+                tool = by_name.get(fn_name)
+                approval_note = ""
+                if tool is None:
+                    result_str = tr("Error: The tool '{fn_name}' is not available or is not authorized on this node.", fn_name=fn_name)
+                else:
+                    allowed = True
+                    if tool.needs_approval():
+                        if approver is None:
+                            allowed, approval_note = False, tr("no approval channel configured")
+                        else:
+                            try:
+                                allowed, approval_note = approver(tool, args)
+                            except Exception as err:
+                                allowed, approval_note = False, str(err)
+                    if not allowed:
+                        result_str = tr("Error: A human did not approve the call to '{fn_name}' ({reason}). Do not retry it; continue without it or explain what you needed.", fn_name=fn_name, reason=approval_note or tr("denied"))
+                    else:
+                        try:
+                            result_str = str(tool.handler(args))
+                            if on_tool_result is not None:
+                                on_tool_result(fn_name, args)
+                            if fn_name in ("write", "edit") and "path" in args:
+                                modified_files.add(str(args["path"]))
+                        except Exception as err:
+                            result_str = tr("Error running '{fn_name}': {err}", fn_name=fn_name, err=err)
+
+                # Failure detection for loop control
+                is_fail = _is_tool_failure(fn_name, result_str)
+                if is_fail:
+                    consecutive_tool_failures[fn_name] = consecutive_tool_failures.get(fn_name, 0) + 1
+                else:
+                    consecutive_tool_failures[fn_name] = 0
+
+                clipped = _clip_tool_output(result_str, max_chars=int(max_tool_chars or 4000))
+                log_entry: dict[str, Any] = {
+                    "turn": turns,
+                    "tool": fn_name,
+                    "args": args,
+                    "output_preview": clipped[:200],
+                }
+                if tool is not None and tool.needs_approval():
+                    log_entry["approval"] = approval_note or "approved"
+                tool_calls_log.append(log_entry)
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "name": fn_name,
+                    "content": clipped,
+                })
+
+            # Loop detection: has any tool failed >= 3 times in a row?
+            loop_warnings = []
+            for t_name, failures in list(consecutive_tool_failures.items()):
+                if failures >= 3:
+                    loop_warnings.append(tr("Tool '{t_name}' has failed {failures} consecutive times.", t_name=t_name, failures=failures))
+                    consecutive_tool_failures[t_name] = 0  # reset after warning so it does not repeat every turn
+
+            if loop_warnings:
+                warning_msg = (
+                    tr('[System loop warning]: ')
+                    + " ".join(loop_warnings)
+                    + tr(' Stop repeating attempts with the same parameters. Analyze the root cause of the error, inspect the state of the files, or change strategy before continuing.')
+                )
+                messages.append({
+                    "role": "user",
+                    "content": warning_msg,
+                })
+                tool_calls_log.append({
+                    "turn": turns,
+                    "tool": "loop_detected_alert",
+                    "args": {"warnings": loop_warnings},
+                    "output_preview": warning_msg[:200],
+                })
+
+        if not completed:
+            stop_reason = stop_reason or "turn_limit"
+            # Compaction check before the final summary
+            messages, _ = _compact_conversation_history(
+                messages,
+                context_window=context_window,
+                engine=compaction_engine,
+                client=client,
+                endpoint=endpoint,
+                headers=headers,
+                target_model=target_model,
+                temperature=float(temperature),
+            )
+            messages.append({
+                "role": "user",
+                "content": tr('The turn limit has been reached. Briefly summarize the actions performed and the current state.'),
+            })
+            try:
+                final_resp = client.post(
+                    endpoint,
+                    headers=headers,
+                    json={
+                        "model": target_model,
+                        "messages": messages,
+                        "temperature": float(temperature),
+                    },
+                )
+                if final_resp.status_code == 200:
+                    final_data = final_resp.json()
+                    final_response = (final_data["choices"][0]["message"].get("content") or "").strip()
+            except Exception:
+                final_response = (messages[-2].get("content") or tr('Turn limit reached.')).strip()
+
+    return {
+        "response": final_response,
+        "turns_used": turns,
+        "completed": completed,
+        "stop_reason": stop_reason or "completed",
+        "context_window": context_window,
+        "compactions_count": compactions_count,
+        "compaction_engine": compaction_engine,
+        "modified_files": sorted(list(modified_files)),
+        "tool_calls_count": len([
+            c for c in tool_calls_log
+            if not c["tool"].endswith("_compact") and c["tool"] != "loop_detected_alert"
+        ]),
+        "tool_history": tool_calls_log,
+    }
+
+
+class _LLMHTTPError(Exception):
+    def __init__(self, status_code: int, text: str):
+        self.status_code = status_code
+        self.text = text
+        super().__init__(f"HTTP {status_code}")
+
+
+def _resolve_agent_llm(
+    *,
+    llm: str,
+    model: str,
+    url: str,
+    secret: str,
+    max_context: int,
+    temperature: float | None,
+    default_temperature: float,
+    timeout: float,
+) -> dict[str, Any]:
+    """Resolves the LLM endpoint for an agent node and detects its context window."""
+    overrides: dict[str, Any] = {
+        "url": url,
+        "model": model,
+        "secret": secret,
+        "max_context": max_context,
+    }
+    if temperature is not None:
+        overrides["temperature"] = temperature
+
+    resolved = llms.resolve(name=llm, overrides=overrides)
+    base_url = resolved["url"].rstrip("/")
+    target_model = resolved["model"]
+    api_key = resolved["api_key"]
+    if not llm and temperature is None:
+        model_temp = default_temperature
+    else:
+        model_temp = resolved["temperature"]
+    explicit_ctx = max_context if (max_context and int(max_context) > 0) else resolved["max_context"]
+
+    # Detect the server's context window size
+    context_window = _detect_context_window(
+        base_url=base_url,
+        target_model=target_model,
+        api_key=api_key,
+        explicit_ctx=explicit_ctx,
+        timeout=min(15.0, timeout),
+    )
+    return {
+        "base_url": base_url,
+        "target_model": target_model,
+        "api_key": api_key,
+        "temperature": float(model_temp),
+        "context_window": context_window,
+    }
+
+
+def _coder_tools(base_path: Path, active_tool_names: list[str], timeout: float) -> list[AgentTool]:
+    """Built-in file and shell tools of transform.coder, bound to the workspace."""
+    handlers: dict[str, Callable[[dict[str, Any]], str]] = {
+        "read": lambda args: _tool_read(base_path, args.get("path", ""), args.get("start_line", 1), args.get("end_line")),
+        "bash": lambda args: _tool_bash(base_path, args.get("command", "")),
+        "edit": lambda args: _tool_edit(base_path, args.get("path", ""), args.get("old_str", ""), args.get("new_str", "")),
+        "write": lambda args: _tool_write(base_path, args.get("path", ""), args.get("content", "")),
+        "grep": lambda args: _tool_grep(base_path, args.get("pattern", ""), args.get("path", "."), args.get("case_insensitive", False)),
+        "find": lambda args: _tool_find(base_path, args.get("pattern", "*"), args.get("path", ".")),
+        "ls": lambda args: _tool_ls(base_path, args.get("path", ".")),
+        "web_search": lambda args: _tool_web_search(args.get("query", ""), args.get("limit", 5), timeout=min(30.0, timeout)),
+    }
+    risks = {"edit": "write", "write": "write", "bash": "dangerous"}
+    tools: list[AgentTool] = []
+    for name in active_tool_names:
+        definition = CODER_TOOL_DEFINITIONS.get(name)
+        if not definition or name not in handlers:
+            continue
+        fn = definition["function"]
+        tools.append(AgentTool(
+            name=name,
+            description=fn.get("description", ""),
+            parameters=fn.get("parameters", {}),
+            handler=handlers[name],
+            risk=risks.get(name, "read"),
+        ))
+    return tools
+
+
 def coder_agent(
     ctx: Any,
     inputs: list[NodeResult],
@@ -3146,40 +3499,10 @@ def coder_agent(
     else:  # coding
         active_tool_names = list(CODING_TOOL_NAMES)
 
-    tools_spec = [CODER_TOOL_DEFINITIONS[name] for name in active_tool_names if name in CODER_TOOL_DEFINITIONS]
-
-    overrides: dict[str, Any] = {
-        "url": url,
-        "model": model,
-        "secret": secret,
-        "max_context": max_context,
-    }
-    if temperature is not None:
-        overrides["temperature"] = temperature
-
-    resolved = llms.resolve(name=llm, overrides=overrides)
-    base_url = resolved["url"].rstrip("/")
-    target_model = resolved["model"]
-    api_key = resolved["api_key"]
-    if not llm and temperature is None:
-        model_temp = 0.1
-    else:
-        model_temp = resolved["temperature"]
-    explicit_ctx = max_context if (max_context and int(max_context) > 0) else resolved["max_context"]
-
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-
-    # Detección del tamaño de la ventana de contexto del servidor
-    context_window = _detect_context_window(
-        base_url=base_url,
-        target_model=target_model,
-        api_key=api_key,
-        explicit_ctx=explicit_ctx,
-        timeout=min(15.0, timeout),
+    endpoint_cfg = _resolve_agent_llm(
+        llm=llm, model=model, url=url, secret=secret, max_context=max_context,
+        temperature=temperature, default_temperature=0.1, timeout=timeout,
     )
-    compactions_count = 0
 
     default_system = (
         tr('You are an autonomous programming and code inspection agent. You have access to tools to explore, read, edit and run tests in the project. Be rigorous, objective and concise. When you complete the requested task, summarize your conclusions or modifications.')
@@ -3191,200 +3514,28 @@ def coder_agent(
         {"role": "user", "content": user_msg},
     ]
 
-    tool_handlers = {
-        "read": lambda args: _tool_read(base_path, args.get("path", ""), args.get("start_line", 1), args.get("end_line")),
-        "bash": lambda args: _tool_bash(base_path, args.get("command", "")),
-        "edit": lambda args: _tool_edit(base_path, args.get("path", ""), args.get("old_str", ""), args.get("new_str", "")),
-        "write": lambda args: _tool_write(base_path, args.get("path", ""), args.get("content", "")),
-        "grep": lambda args: _tool_grep(base_path, args.get("pattern", ""), args.get("path", "."), args.get("case_insensitive", False)),
-        "find": lambda args: _tool_find(base_path, args.get("pattern", "*"), args.get("path", ".")),
-        "ls": lambda args: _tool_ls(base_path, args.get("path", ".")),
-        "web_search": lambda args: _tool_web_search(args.get("query", ""), args.get("limit", 5), timeout=min(30.0, timeout)),
-    }
-
-    endpoint = f"{base_url}/chat/completions"
-    turns = 0
-    modified_files: set[str] = set()
-    tool_calls_log: list[dict[str, Any]] = []
-    consecutive_tool_failures: dict[str, int] = {}
-    final_response = ""
-    completed = False
-    turn_limit = max(1, min(int(max_turns or 5), 20))
-
     try:
-        with httpx.Client(timeout=float(timeout or 120.0)) as client:
-            for _ in range(turn_limit):
-                turns += 1
-
-                # Comprobación de ventana de contexto: compactar según el motor configurado al alcanzar el 90%
-                messages, did_compact = _compact_conversation_history(
-                    messages,
-                    context_window=context_window,
-                    engine=compaction_engine,
-                    client=client,
-                    endpoint=endpoint,
-                    headers=headers,
-                    target_model=target_model,
-                    temperature=float(model_temp),
-                )
-                if did_compact:
-                    compactions_count += 1
-                    eng_clean = (compaction_engine or "blackhole").lower().strip()
-                    comp_tool_name = "luhn+_compact" if eng_clean in ("luhn", "luhn+", "luhn_plus", "luhnplus") else f"{eng_clean}_compact"
-                    tool_calls_log.append({
-                        "turn": turns,
-                        "tool": comp_tool_name,
-                        "args": {
-                            "context_window": context_window,
-                            "threshold": int(context_window * 0.90),
-                            "engine": eng_clean,
-                        },
-                        "output_preview": tr('Context compacted to 90% with {eng_clean} ({messages} estimated tokens)', eng_clean=eng_clean, messages=_estimate_messages_tokens(messages)),
-                    })
-
-                payload: dict[str, Any] = {
-                    "model": target_model,
-                    "messages": messages,
-                    "temperature": float(model_temp),
-                }
-                if tools_spec:
-                    payload["tools"] = tools_spec
-
-                resp = client.post(endpoint, headers=headers, json=payload)
-                if resp.status_code >= 400:
-                    return NodeResult("error", error=tr('LLM API returned HTTP {status_code}: {text}', status_code=resp.status_code, text=resp.text[:300]))
-
-                data = resp.json()
-                choice = data["choices"][0]
-                msg = choice["message"]
-                messages.append(msg)
-
-                tool_calls = msg.get("tool_calls")
-                if not tool_calls:
-                    final_response = (msg.get("content") or "").strip()
-                    completed = True
-                    break
-
-                for call in tool_calls:
-                    call_id = call.get("id") or f"call_{len(tool_calls_log)}"
-                    fn = call.get("function", {})
-                    fn_name = fn.get("name", "")
-                    raw_args = fn.get("arguments", "{}")
-                    if isinstance(raw_args, str):
-                        try:
-                            args = json.loads(raw_args)
-                        except Exception:
-                            args = {}
-                    else:
-                        args = raw_args or {}
-
-                    if fn_name not in active_tool_names or fn_name not in tool_handlers:
-                        result_str = tr("Error: The tool '{fn_name}' is not available or is not authorized on this node.", fn_name=fn_name)
-                    else:
-                        try:
-                            result_str = tool_handlers[fn_name](args)
-                            if fn_name in ("write", "edit") and "path" in args:
-                                modified_files.add(str(args["path"]))
-                        except Exception as err:
-                            result_str = tr("Error running '{fn_name}': {err}", fn_name=fn_name, err=err)
-
-                    # Detección de fallos para control de bucles
-                    is_fail = _is_tool_failure(fn_name, result_str)
-                    if is_fail:
-                        consecutive_tool_failures[fn_name] = consecutive_tool_failures.get(fn_name, 0) + 1
-                    else:
-                        consecutive_tool_failures[fn_name] = 0
-
-                    clipped = _clip_tool_output(result_str, max_chars=int(max_tool_chars or 4000))
-                    tool_calls_log.append({
-                        "turn": turns,
-                        "tool": fn_name,
-                        "args": args,
-                        "output_preview": clipped[:200],
-                    })
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": call_id,
-                        "name": fn_name,
-                        "content": clipped,
-                    })
-
-                # Detección de bucles: comprobar si alguna herramienta ha fallado consecutivamente >= 3 veces
-                loop_warnings = []
-                for t_name, failures in list(consecutive_tool_failures.items()):
-                    if failures >= 3:
-                        loop_warnings.append(tr("Tool '{t_name}' has failed {failures} consecutive times.", t_name=t_name, failures=failures))
-                        consecutive_tool_failures[t_name] = 0  # Reiniciar tras advertir para evitar repeticiones en cada turno
-
-                if loop_warnings:
-                    warning_msg = (
-                        tr('[System loop warning]: ')
-                        + " ".join(loop_warnings)
-                        + tr(' Stop repeating attempts with the same parameters. Analyze the root cause of the error, inspect the state of the files, or change strategy before continuing.')
-                    )
-                    messages.append({
-                        "role": "user",
-                        "content": warning_msg,
-                    })
-                    tool_calls_log.append({
-                        "turn": turns,
-                        "tool": "loop_detected_alert",
-                        "args": {"warnings": loop_warnings},
-                        "output_preview": warning_msg[:200],
-                    })
-
-            if not completed:
-                # Comprobar compactación antes del resumen final
-                messages, _ = _compact_conversation_history(
-                    messages,
-                    context_window=context_window,
-                    engine=compaction_engine,
-                    client=client,
-                    endpoint=endpoint,
-                    headers=headers,
-                    target_model=target_model,
-                    temperature=float(model_temp),
-                )
-                messages.append({
-                    "role": "user",
-                    "content": tr('The turn limit has been reached. Briefly summarize the actions performed and the current state.'),
-                })
-                try:
-                    final_resp = client.post(
-                        endpoint,
-                        headers=headers,
-                        json={
-                            "model": target_model,
-                            "messages": messages,
-                            "temperature": float(model_temp),
-                        },
-                    )
-                    if final_resp.status_code == 200:
-                        final_data = final_resp.json()
-                        final_response = (final_data["choices"][0]["message"].get("content") or "").strip()
-                except Exception:
-                    final_response = (messages[-2].get("content") or tr('Turn limit reached.')).strip()
-
+        res_data = _react_loop(
+            messages=messages,
+            tools=_coder_tools(base_path, active_tool_names, timeout),
+            base_url=endpoint_cfg["base_url"],
+            target_model=endpoint_cfg["target_model"],
+            api_key=endpoint_cfg["api_key"],
+            temperature=endpoint_cfg["temperature"],
+            context_window=endpoint_cfg["context_window"],
+            compaction_engine=compaction_engine,
+            turn_limit=max(1, min(int(max_turns or 5), 20)),
+            max_tool_chars=int(max_tool_chars or 4000),
+            timeout=float(timeout or 120.0),
+        )
+    except _LLMHTTPError as exc:
+        return NodeResult("error", error=tr('LLM API returned HTTP {status_code}: {text}', status_code=exc.status_code, text=exc.text))
     except Exception as exc:
         return NodeResult("error", error=tr('Error in programming agent loop: {exc}', exc=exc))
 
-    res_data = {
-        "response": final_response,
-        "turns_used": turns,
-        "completed": completed,
-        "context_window": context_window,
-        "compactions_count": compactions_count,
-        "compaction_engine": compaction_engine,
-        "modified_files": sorted(list(modified_files)),
-        "tool_calls_count": len([
-            c for c in tool_calls_log
-            if not c["tool"].endswith("_compact") and c["tool"] != "loop_detected_alert"
-        ]),
-        "tool_history": tool_calls_log,
-    }
-
+    res_data.pop("stop_reason", None)
     if (output_format or "").lower().strip() == "text":
-        return NodeResult("ok", data=final_response)
+        return NodeResult("ok", data=res_data["response"])
     return NodeResult("ok", data=res_data)
 
 
