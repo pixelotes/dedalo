@@ -1,8 +1,8 @@
 """Fast classifier (transform.classify) and its teaching tool (tool.classifier)."""
 
 import hashlib
-import json
 import math
+import sqlite3
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -92,11 +92,12 @@ def test_learning_enforces_allowed_labels_and_cap():
     assert "not one of" in _learn("1", "spam")
     assert "Learned" in _learn("1", "subscription", max_examples=1)
     assert "Learned" in _learn("2", "important", max_examples=1)
-    data = json.loads(open("data/state/classifier/triage.json").read())
-    assert [e["label"] for e in data["examples"]] == ["important"]  # oldest forgotten
-    # vectors are stored compactly, not as JSON float lists
-    assert isinstance(data["examples"][0]["vec"], str)
-    assert math.isclose(sum(x * x for x in runtime._vec_unpack(data["examples"][0]["vec"])), 1.0, rel_tol=1e-2)
+    conn = sqlite3.connect("data/state/classifier/triage.sqlite")
+    rows = conn.execute("SELECT label, vec FROM examples").fetchall()
+    assert [r[0] for r in rows] == ["important"]  # oldest forgotten
+    # vectors are stored as float16 bytes (2 bytes per dimension), unit length
+    assert len(rows[0][1]) == 2 * 64
+    assert math.isclose(sum(x * x for x in runtime._vec_unpack(rows[0][1])), 1.0, rel_tol=1e-2)
 
 
 def test_embedding_errors_fail_the_node():

@@ -89,6 +89,17 @@ app.add_middleware(BodyLimitMiddleware, max_bytes=MAX_BODY_BYTES)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
 app.add_middleware(SecurityHeadersMiddleware)
 
+class RevalidatedStaticFiles(StaticFiles):
+    """Editor assets (JS, CSS, locales) keep their URL between releases: without a Cache-Control
+    header browsers and Cloudflare reuse an old copy for hours after an update. no-cache makes them
+    revalidate with the ETag on every load (a cheap 304 when nothing changed)."""
+
+    async def get_response(self, path: str, scope):  # type: ignore[override]
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 HEADLESS = os.environ.get("DEDALO_HEADLESS", "").strip().lower() in ("1", "true", "yes")
 
 # Servir archivos estáticos únicamente si la interfaz gráfica está habilitada
@@ -96,7 +107,7 @@ if not HEADLESS:
     VENDOR_DIR = STATIC_DIR / "vendor"
     VENDOR_DIR.mkdir(parents=True, exist_ok=True)
     app.mount("/vendor", StaticFiles(directory=str(VENDOR_DIR)), name="vendor")
-    app.mount("/assets", StaticFiles(directory=str(STATIC_DIR)), name="assets")
+    app.mount("/assets", RevalidatedStaticFiles(directory=str(STATIC_DIR)), name="assets")
 
 
 # ---------------------------------------------------------------------------

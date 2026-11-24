@@ -6,6 +6,7 @@ Los scripts compilados invocan directamente estas funciones sin sobrecarga de ru
 
 from __future__ import annotations
 
+import contextlib
 import base64
 import contextlib
 import ctypes
@@ -15,10 +16,12 @@ import email.header
 import gc
 import gzip
 import hashlib
+import heapq
 import html
 import json
 import logging
 import math
+import operator
 import os
 import random
 import re
@@ -4722,44 +4725,40 @@ _CLASSIFY_LOCK = threading.Lock()
 
 def _classify_path(store: str) -> Path:
     clean = re.sub(r"[^A-Za-z0-9_-]+", "_", str(store or "")).strip("_") or "default"
-    return Path("data/state") / "classifier" / f"{clean[:80]}.json"
+    return Path("data/state") / "classifier" / f"{clean[:80]}.sqlite"
 
 
-def _classify_load(store: str) -> dict[str, Any]:
-    path = _classify_path(store)
-    if path.is_file():
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                data.setdefault("examples", [])
-                data.setdefault("pending", {})
-                return data
-        except Exception:
-            pass
-    return {"examples": [], "pending": {}}
-
-
-def _classify_save(store: str, data: dict[str, Any]) -> None:
+def _classify_db(store: str) -> sqlite3.Connection:
+    """Example store: SQLite (stdlib), so examples are streamed row by row instead of loading and
+    rewriting one big JSON file, and teaching a label is a single INSERT."""
     path = _classify_path(store)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    os.replace(tmp, path)
+    conn = sqlite3.connect(path, timeout=10.0)
+    conn.execute("PRAGMA journal_mode = WAL;")
+    conn.execute("PRAGMA cache_size = -1000;")
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS examples (id INTEGER PRIMARY KEY, text TEXT NOT NULL, label TEXT NOT NULL, vec BLOB NOT NULL, ts INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS pending (item_id TEXT PRIMARY KEY, text TEXT NOT NULL, vec BLOB NOT NULL, ts INTEGER NOT NULL);
+    """)
+    return conn
 
 
-def _vec_pack(vec: list[float]) -> str:
-    """Unit-normalised vector as base64 float16: about 2.7 KB for 1024 dimensions."""
+def _vec_pack(vec: list[float]) -> bytes:
+    """Unit-normalised vector as float16 bytes: 2 KB for 1024 dimensions."""
     import struct
 
     norm = math.sqrt(sum(x * x for x in vec)) or 1.0
-    return base64.b64encode(struct.pack(f"<{len(vec)}e", *(x / norm for x in vec))).decode()
+    return struct.pack(f"<{len(vec)}e", *(x / norm for x in vec))
 
 
-def _vec_unpack(text: str) -> list[float]:
+def _vec_unpack(raw: bytes) -> tuple[float, ...]:
     import struct
 
-    raw = base64.b64decode(text)
-    return list(struct.unpack(f"<{len(raw) // 2}e", raw))
+    return struct.unpack(f"<{len(raw) // 2}e", raw)
+
+
+def _dot(a: Any, b: Any) -> float:
+    return sum(map(operator.mul, a, b))
 
 
 def _embed_texts(texts: list[str], *, llm: str, url: str, model: str, secret: str, timeout: float) -> list[list[float]]:
@@ -4797,27 +4796,39 @@ def _classify_text(item: Any, template: str) -> str:
     return re.sub(r"\s+", " ", text).strip()[:2000]
 
 
-def _knn_vote(vec: list[float], examples: list[dict[str, Any]], k: int) -> tuple[str, float, list[dict[str, Any]]]:
-    """Similarity-weighted vote of the k most similar examples: (label, share of the vote, neighbours)."""
-    scored = []
-    for ex in examples:
-        ev = ex.get("_vec")
-        if ev is None:
-            ev = ex["_vec"] = _vec_unpack(ex["vec"])
-        if len(ev) != len(vec):
+def _knn_votes(queries: list[list[float]], examples: Any, k: int) -> list[tuple[str, float, list[dict[str, Any]]]]:
+    """Similarity-weighted vote of the k most similar examples for every query vector:
+    (label, share of the vote, neighbours) per query.
+
+    `examples` yields (vec bytes, label, text) rows. Memory stays flat: each example is unpacked
+    once, compared with every query and dropped; only the k best per query are kept.
+    """
+    tops: list[list[tuple[float, int, dict[str, Any]]]] = [[] for _ in queries]
+    for i, (raw, ex_label, ex_text) in enumerate(examples):
+        ev = _vec_unpack(raw)
+        ex = {"label": ex_label, "text": ex_text}
+        for q, top in zip(queries, tops):
+            if len(ev) != len(q):
+                continue
+            sim = _dot(q, ev)
+            if len(top) < k:
+                heapq.heappush(top, (sim, i, ex))
+            elif sim > top[0][0]:
+                heapq.heapreplace(top, (sim, i, ex))
+    results = []
+    for top in tops:
+        ranked = sorted(top, key=lambda t: t[0], reverse=True)
+        if not ranked:
+            results.append(("", 0.0, []))
             continue
-        scored.append((sum(a * b for a, b in zip(vec, ev)), ex))
-    scored.sort(key=lambda t: t[0], reverse=True)
-    top = scored[:max(1, k)]
-    if not top:
-        return "", 0.0, []
-    weights: dict[str, float] = defaultdict(float)
-    for sim, ex in top:
-        weights[ex["label"]] += max(sim, 0.0)
-    total = sum(weights.values()) or 1.0
-    label = max(weights, key=lambda lb: weights[lb])
-    neighbours = [{"label": ex["label"], "text": ex["text"][:120], "similarity": round(sim, 3)} for sim, ex in top]
-    return label, weights[label] / total, neighbours
+        weights: dict[str, float] = defaultdict(float)
+        for sim, _i, ex in ranked:
+            weights[ex["label"]] += max(sim, 0.0)
+        total = sum(weights.values()) or 1.0
+        label = max(weights, key=lambda lb: weights[lb])
+        neighbours = [{"label": ex["label"], "text": ex["text"][:120], "similarity": round(sim, 3)} for sim, _i, ex in ranked]
+        results.append((label, weights[label] / total, neighbours))
+    return results
 
 
 def classify_items(
@@ -4851,7 +4862,9 @@ def classify_items(
     store_name = _state_scope(ctx, store)
     allowed = _split_csv(labels)
     if not items:
-        return NodeResult("ok", data={"sure": [], "unsure": [], "counts": {}, "examples": len(_classify_load(store_name)["examples"])})
+        with _CLASSIFY_LOCK, contextlib.closing(_classify_db(store_name)) as conn:
+            n = conn.execute("SELECT COUNT(*) FROM examples").fetchone()[0]
+        return NodeResult("ok", data={"sure": [], "unsure": [], "counts": {}, "examples": n})
 
     texts = [_classify_text(it, text) for it in items]
     try:
@@ -4859,19 +4872,23 @@ def classify_items(
     except Exception as exc:
         return NodeResult("error", error=tr("Classifier could not get embeddings: {exc}", exc=exc))
 
-    with _CLASSIFY_LOCK:
-        data = _classify_load(store_name)
-        examples = data["examples"]
-        warm = len(examples) >= max(1, int(min_examples or 1))
+    with _CLASSIFY_LOCK, contextlib.closing(_classify_db(store_name)) as conn:
+        n_examples = conn.execute("SELECT COUNT(*) FROM examples").fetchone()[0]
+        warm = n_examples >= max(1, int(min_examples or 1))
+        units = []
+        for vec in vectors:
+            norm = math.sqrt(sum(x * x for x in vec)) or 1.0
+            units.append([x / norm for x in vec])
+        rows = conn.execute("SELECT vec, label, text FROM examples")
+        votes = _knn_votes(units, rows, max(1, int(k or 5))) if warm else [("", 0.0, [])] * len(items)
+        del units
         sure: list[Any] = []
         unsure: list[Any] = []
         counts: dict[str, int] = defaultdict(int)
-        for i, (item, txt, vec) in enumerate(zip(items, texts, vectors)):
-            norm = math.sqrt(sum(x * x for x in vec)) or 1.0
-            unit = [x / norm for x in vec]
-            label, agreement, neighbours = _knn_vote(unit, examples, int(k or 5)) if warm else ("", 0.0, [])
+        now = int(time.time())
+        for item, txt, vec, (label, agreement, neighbours) in zip(items, texts, vectors, votes):
             item_id = str(item.get(id_field)) if isinstance(item, dict) and item.get(id_field) not in (None, "") else hashlib.sha1(txt.encode()).hexdigest()[:12]
-            data["pending"][item_id] = {"text": txt, "vec": _vec_pack(vec), "ts": int(time.time())}
+            conn.execute("INSERT OR REPLACE INTO pending (item_id, text, vec, ts) VALUES (?, ?, ?, ?)", (item_id, txt, _vec_pack(vec), now))
             out = dict(item) if isinstance(item, dict) else {"value": item}
             out.update({"_id": item_id, "_label": label, "_confidence": round(agreement, 3)})
             if label and agreement >= float(min_agreement) and (not allowed or label in allowed):
@@ -4880,14 +4897,10 @@ def classify_items(
             else:
                 out["_neighbours"] = neighbours[:3]
                 unsure.append(out)
-        pending = data["pending"]
-        if len(pending) > 1000:  # forget the oldest unlabelled items
-            for key in sorted(pending, key=lambda kk: pending[kk].get("ts", 0))[: len(pending) - 1000]:
-                pending.pop(key, None)
-        for ex in examples:
-            ex.pop("_vec", None)
-        _classify_save(store_name, data)
-    return NodeResult("ok", data={"sure": sure, "unsure": unsure, "counts": dict(counts), "examples": len(examples)})
+        # forget the oldest unlabelled items
+        conn.execute("DELETE FROM pending WHERE item_id NOT IN (SELECT item_id FROM pending ORDER BY ts DESC LIMIT 1000)")
+        conn.commit()
+    return NodeResult("ok", data={"sure": sure, "unsure": unsure, "counts": dict(counts), "examples": n_examples})
 
 
 def _classify_learn(store: str, item_id: str, label: str, allowed: list[str], max_examples: int) -> str:
@@ -4896,16 +4909,16 @@ def _classify_learn(store: str, item_id: str, label: str, allowed: list[str], ma
         return tr("Error: invalid label")
     if allowed and label not in allowed:
         return tr("Error: label '{label}' is not one of: {labels}", label=label, labels=", ".join(allowed))
-    with _CLASSIFY_LOCK:
-        data = _classify_load(store)
-        entry = data["pending"].pop(str(item_id), None)
-        if entry is None:
+    with _CLASSIFY_LOCK, contextlib.closing(_classify_db(store)) as conn:
+        row = conn.execute("SELECT text, vec FROM pending WHERE item_id = ?", (str(item_id),)).fetchone()
+        if row is None:
             return tr("Error: no item '{id}' waiting for a label (use the _id of an item from this run)", id=item_id)
-        data["examples"].append({"text": entry["text"], "vec": entry["vec"], "label": label, "ts": int(time.time())})
-        if len(data["examples"]) > max_examples:
-            data["examples"] = data["examples"][-max_examples:]
-        _classify_save(store, data)
-        return tr("Learned '{label}' for item {id} ({n} examples)", label=label, id=item_id, n=len(data["examples"]))
+        conn.execute("DELETE FROM pending WHERE item_id = ?", (str(item_id),))
+        conn.execute("INSERT INTO examples (text, label, vec, ts) VALUES (?, ?, ?, ?)", (row[0], label, row[1], int(time.time())))
+        conn.execute("DELETE FROM examples WHERE id NOT IN (SELECT id FROM examples ORDER BY id DESC LIMIT ?)", (max_examples,))
+        n = conn.execute("SELECT COUNT(*) FROM examples").fetchone()[0]
+        conn.commit()
+        return tr("Learned '{label}' for item {id} ({n} examples)", label=label, id=item_id, n=n)
 
 
 def _build_classifier_tools(cfg: dict[str, Any], ctx: Any) -> list[AgentTool]:
@@ -7450,6 +7463,54 @@ def clean_email_node(
     return NodeResult("ok", data=cleaned)
 
 
+def _imap_new_uids(mail: Any, crit: str, folder: str, scope: str, key: str, max_items: int) -> tuple[list[bytes], Callable[[], None]]:
+    """UIDs of the emails that arrived since the last run, newest first, and a callback that
+    stores the new high-water mark (call it once the emails have been read)."""
+    validity = ""
+    try:
+        resp = mail.response("UIDVALIDITY")[1]
+        if resp and resp[0]:
+            validity = resp[0].decode() if isinstance(resp[0], bytes) else str(resp[0])
+    except Exception:
+        validity = ""
+    saved = _state_load(scope).get(key) or {}
+    last = None
+    if isinstance(saved, dict) and str(saved.get("uidvalidity", "")) == validity:
+        try:
+            last = int(saved.get("uid"))
+        except (TypeError, ValueError):
+            last = None
+
+    args = [crit] if last is None else [crit, "UID", f"{last + 1}:*"]
+    status, data = mail.uid("SEARCH", None, *args)
+    found = sorted({int(x) for x in (data[0].split() if status == "OK" and data and data[0] else []) if x.isdigit()})
+    if last is not None:
+        found = [x for x in found if x > last]  # "n:*" always matches the newest message, even below n
+
+    if last is None:
+        picked = found[-max_items:]  # first run: the newest ones, not the whole mailbox history
+        mark = max(found) if found else 0
+        try:  # start after everything that is already there, matched by the filter or not
+            st, st_data = mail.status(f'"{folder}"', "(UIDNEXT)")
+            m = re.search(rb"UIDNEXT (\d+)", st_data[0] if st == "OK" and st_data else b"")
+            if m:
+                mark = max(mark, int(m.group(1)) - 1)
+        except Exception:
+            pass
+    else:
+        picked = found[:max_items]  # oldest first, so a backlog drains over the next runs
+        mark = picked[-1] if len(found) > max_items else (found[-1] if found else last)
+
+    def commit() -> None:
+        if last is not None and mark <= last:
+            return
+        def apply(state: dict[str, Any]) -> None:
+            state[key] = {"uid": mark, "uidvalidity": validity}
+        _state_update(scope, apply)
+
+    return [str(x).encode() for x in reversed(picked)], commit
+
+
 def imap_read(
     ctx: Any,
     inputs: list[NodeResult],
@@ -7466,8 +7527,16 @@ def imap_read(
     clean_body: bool = True,
     strip_signatures: bool = True,
     max_body_chars: int = 3000,
+    only_new: bool = False,
+    state_scope: str = "",
 ) -> NodeResult:
-    """Lee correos electrónicos vía IMAP sobre TLS con imaplib nativo y sanitización anti prompt-injection."""
+    """Lee correos electrónicos vía IMAP sobre TLS con imaplib nativo y sanitización anti prompt-injection.
+
+    With only_new, emails are read by UID and the highest UID handed out is stored in the state
+    store (data/state/memory/<scope>.json), so every run returns only mail that arrived since the
+    previous one. The first run returns the newest `limit` emails; a backlog larger than `limit`
+    is drained oldest first over the following runs. A new UIDVALIDITY starts over.
+    """
     h = host.strip()
     u = username.strip()
     if not h or not u:
@@ -7486,19 +7555,30 @@ def imap_read(
         mail.select(folder or "INBOX")
 
         crit = filter.strip() or "UNSEEN"
-        status, messages = mail.search(None, crit)
-        if status != "OK" or not messages or not messages[0]:
-            mail.logout()
-            return NodeResult("ok", data=[])
-
-        mail_ids = messages[0].split()
-        selected_ids = mail_ids[-max_items:]
-        selected_ids.reverse()
+        fetch_cmd = "(RFC822)" if mark_as_read else "(BODY.PEEK[])"
+        if only_new:
+            scope = _state_scope(ctx, state_scope)
+            selected_ids, commit_uid = _imap_new_uids(mail, crit, folder or "INBOX", scope, f"imap:{u}@{h}/{folder or 'INBOX'}", max_items)
+            if not selected_ids:
+                commit_uid()
+                mail.logout()
+                return NodeResult("ok", data=[])
+        else:
+            commit_uid = None
+            status, messages = mail.search(None, crit)
+            if status != "OK" or not messages or not messages[0]:
+                mail.logout()
+                return NodeResult("ok", data=[])
+            mail_ids = messages[0].split()
+            selected_ids = mail_ids[-max_items:]
+            selected_ids.reverse()
 
         emails_res: list[dict[str, Any]] = []
         for mid in selected_ids:
-            fetch_cmd = "(RFC822)" if mark_as_read else "(BODY.PEEK[])"
-            status, data = mail.fetch(mid, fetch_cmd)
+            if only_new:
+                status, data = mail.uid("FETCH", mid, fetch_cmd)
+            else:
+                status, data = mail.fetch(mid, fetch_cmd)
             if status != "OK" or not data or not data[0]:
                 continue
 
@@ -7571,6 +7651,7 @@ def imap_read(
             clean_subject = _INVISIBLE_CHARS_RE.sub("", subject).strip()
             clean_sender = _INVISIBLE_CHARS_RE.sub("", sender).strip()
 
+            precedence = str(msg.get("Precedence", "")).strip().lower()
             emails_res.append({
                 "id": mid.decode() if isinstance(mid, bytes) else str(mid),
                 "subject": clean_subject,
@@ -7578,8 +7659,12 @@ def imap_read(
                 "date": date_str,
                 "body": final_body,
                 "attachments": attachment_names,
+                # Newsletters and mailing lists announce themselves in their headers.
+                "bulk": bool(msg.get("List-Unsubscribe") or msg.get("List-Id") or precedence in ("bulk", "list", "junk")),
             })
 
+        if commit_uid is not None:
+            commit_uid()
         mail.logout()
         return NodeResult("ok", data=emails_res)
     except Exception as exc:
