@@ -6,6 +6,7 @@ Los scripts compilados invocan directamente estas funciones sin sobrecarga de ru
 
 from __future__ import annotations
 
+import contextlib
 import base64
 import ctypes
 import datetime
@@ -14,9 +15,11 @@ import email.header
 import gc
 import gzip
 import hashlib
+import heapq
 import html
 import json
 import math
+import operator
 import os
 import random
 import re
@@ -4496,12 +4499,252 @@ def state_write(ctx: Any, inputs: list[NodeResult], *, key: str, scope: str = ""
     return NodeResult("ok", data=value)
 
 
+# -- Fast classifier (embeddings + nearest labelled examples) -------------------
+
+CLASSIFY_BATCH = 32
+_CLASSIFY_LOCK = threading.Lock()
+
+
+def _classify_path(store: str) -> Path:
+    clean = re.sub(r"[^A-Za-z0-9_-]+", "_", str(store or "")).strip("_") or "default"
+    return Path("data/state") / "classifier" / f"{clean[:80]}.sqlite"
+
+
+def _classify_db(store: str) -> sqlite3.Connection:
+    """Example store: SQLite (stdlib), so examples are streamed row by row instead of loading and
+    rewriting one big JSON file, and teaching a label is a single INSERT."""
+    path = _classify_path(store)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path, timeout=10.0)
+    conn.execute("PRAGMA journal_mode = WAL;")
+    conn.execute("PRAGMA cache_size = -1000;")
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS examples (id INTEGER PRIMARY KEY, text TEXT NOT NULL, label TEXT NOT NULL, vec BLOB NOT NULL, ts INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS pending (item_id TEXT PRIMARY KEY, text TEXT NOT NULL, vec BLOB NOT NULL, ts INTEGER NOT NULL);
+    """)
+    return conn
+
+
+def _vec_pack(vec: list[float]) -> bytes:
+    """Unit-normalised vector as float16 bytes: 2 KB for 1024 dimensions."""
+    import struct
+
+    norm = math.sqrt(sum(x * x for x in vec)) or 1.0
+    return struct.pack(f"<{len(vec)}e", *(x / norm for x in vec))
+
+
+def _vec_unpack(raw: bytes) -> tuple[float, ...]:
+    import struct
+
+    return struct.unpack(f"<{len(raw) // 2}e", raw)
+
+
+def _dot(a: Any, b: Any) -> float:
+    return sum(map(operator.mul, a, b))
+
+
+def _embed_texts(texts: list[str], *, llm: str, url: str, model: str, secret: str, timeout: float) -> list[list[float]]:
+    """Embeddings from any OpenAI-compatible /embeddings endpoint (Workers AI, OpenAI, Ollama, vLLM...)."""
+    resolved = llms.resolve(name=llm, overrides={"url": url, "secret": secret})
+    model_name = (model or os.environ.get("DEDALO_EMBED_MODEL", "")).strip()
+    if not model_name:
+        raise ValueError(tr("No embedding model: set 'model' on the node or DEDALO_EMBED_MODEL"))
+    headers = {"Content-Type": "application/json"}
+    if resolved["api_key"]:
+        headers["Authorization"] = f"Bearer {resolved['api_key']}"
+    endpoint = resolved["url"].rstrip("/") + "/embeddings"
+    out: list[list[float]] = []
+    with httpx.Client(timeout=float(timeout)) as client:
+        for i in range(0, len(texts), CLASSIFY_BATCH):
+            batch = texts[i:i + CLASSIFY_BATCH]
+            resp = client.post(endpoint, headers=headers, json={"model": model_name, "input": batch})
+            if resp.status_code >= 400:
+                raise RuntimeError(tr("Embeddings API returned HTTP {status}: {text}", status=resp.status_code, text=resp.text[:200]))
+            rows = sorted(resp.json().get("data") or [], key=lambda r: r.get("index", 0))
+            if len(rows) != len(batch):
+                raise RuntimeError(tr("Embeddings API returned {got} vectors for {sent} texts", got=len(rows), sent=len(batch)))
+            out.extend([float(x) for x in r["embedding"]] for r in rows)
+    return out
+
+
+def _classify_text(item: Any, template: str) -> str:
+    if isinstance(item, dict):
+        def repl(m: re.Match[str]) -> str:
+            val = item.get(m.group(1).strip(), "")
+            return ", ".join(map(str, val)) if isinstance(val, list) else str(val)
+        text = re.sub(r"\{([^{}]+)\}", repl, template) if template else json.dumps(item, ensure_ascii=False)
+    else:
+        text = str(item)
+    return re.sub(r"\s+", " ", text).strip()[:2000]
+
+
+def _knn_votes(queries: list[list[float]], examples: Any, k: int) -> list[tuple[str, float, list[dict[str, Any]]]]:
+    """Similarity-weighted vote of the k most similar examples for every query vector:
+    (label, share of the vote, neighbours) per query.
+
+    `examples` yields (vec bytes, label, text) rows. Memory stays flat: each example is unpacked
+    once, compared with every query and dropped; only the k best per query are kept.
+    """
+    tops: list[list[tuple[float, int, dict[str, Any]]]] = [[] for _ in queries]
+    for i, (raw, ex_label, ex_text) in enumerate(examples):
+        ev = _vec_unpack(raw)
+        ex = {"label": ex_label, "text": ex_text}
+        for q, top in zip(queries, tops):
+            if len(ev) != len(q):
+                continue
+            sim = _dot(q, ev)
+            if len(top) < k:
+                heapq.heappush(top, (sim, i, ex))
+            elif sim > top[0][0]:
+                heapq.heapreplace(top, (sim, i, ex))
+    results = []
+    for top in tops:
+        ranked = sorted(top, key=lambda t: t[0], reverse=True)
+        if not ranked:
+            results.append(("", 0.0, []))
+            continue
+        weights: dict[str, float] = defaultdict(float)
+        for sim, _i, ex in ranked:
+            weights[ex["label"]] += max(sim, 0.0)
+        total = sum(weights.values()) or 1.0
+        label = max(weights, key=lambda lb: weights[lb])
+        neighbours = [{"label": ex["label"], "text": ex["text"][:120], "similarity": round(sim, 3)} for sim, _i, ex in ranked]
+        results.append((label, weights[label] / total, neighbours))
+    return results
+
+
+def classify_items(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    text: str = "",
+    store: str = "",
+    labels: str = "",
+    id_field: str = "id",
+    k: int = 5,
+    min_agreement: float = 0.8,
+    min_examples: int = 20,
+    llm: str = "",
+    url: str = "",
+    model: str = "",
+    secret: str = "",
+    timeout: float = 60.0,
+) -> NodeResult:
+    """Fast classifier: labels each item with the vote of its most similar labelled examples.
+
+    Items it is not sure about go to `unsure`, usually for a transform.harness that decides and
+    teaches the classifier back through tool.classifier. Every item is kept as `pending` (with its
+    vector) so that a later label does not need a new embedding call.
+    """
+    items: list[Any] = []
+    for r in inputs:
+        if not r.ok or r.data is None:
+            continue
+        items.extend(r.data if isinstance(r.data, list) else [r.data])
+    store_name = _state_scope(ctx, store)
+    allowed = _split_csv(labels)
+    if not items:
+        with _CLASSIFY_LOCK, contextlib.closing(_classify_db(store_name)) as conn:
+            n = conn.execute("SELECT COUNT(*) FROM examples").fetchone()[0]
+        return NodeResult("ok", data={"sure": [], "unsure": [], "counts": {}, "examples": n})
+
+    texts = [_classify_text(it, text) for it in items]
+    try:
+        vectors = _embed_texts(texts, llm=llm, url=url, model=model, secret=secret, timeout=timeout)
+    except Exception as exc:
+        return NodeResult("error", error=tr("Classifier could not get embeddings: {exc}", exc=exc))
+
+    with _CLASSIFY_LOCK, contextlib.closing(_classify_db(store_name)) as conn:
+        n_examples = conn.execute("SELECT COUNT(*) FROM examples").fetchone()[0]
+        warm = n_examples >= max(1, int(min_examples or 1))
+        units = []
+        for vec in vectors:
+            norm = math.sqrt(sum(x * x for x in vec)) or 1.0
+            units.append([x / norm for x in vec])
+        rows = conn.execute("SELECT vec, label, text FROM examples")
+        votes = _knn_votes(units, rows, max(1, int(k or 5))) if warm else [("", 0.0, [])] * len(items)
+        del units
+        sure: list[Any] = []
+        unsure: list[Any] = []
+        counts: dict[str, int] = defaultdict(int)
+        now = int(time.time())
+        for item, txt, vec, (label, agreement, neighbours) in zip(items, texts, vectors, votes):
+            item_id = str(item.get(id_field)) if isinstance(item, dict) and item.get(id_field) not in (None, "") else hashlib.sha1(txt.encode()).hexdigest()[:12]
+            conn.execute("INSERT OR REPLACE INTO pending (item_id, text, vec, ts) VALUES (?, ?, ?, ?)", (item_id, txt, _vec_pack(vec), now))
+            out = dict(item) if isinstance(item, dict) else {"value": item}
+            out.update({"_id": item_id, "_label": label, "_confidence": round(agreement, 3)})
+            if label and agreement >= float(min_agreement) and (not allowed or label in allowed):
+                sure.append(out)
+                counts[label] += 1
+            else:
+                out["_neighbours"] = neighbours[:3]
+                unsure.append(out)
+        # forget the oldest unlabelled items
+        conn.execute("DELETE FROM pending WHERE item_id NOT IN (SELECT item_id FROM pending ORDER BY ts DESC LIMIT 1000)")
+        conn.commit()
+    return NodeResult("ok", data={"sure": sure, "unsure": unsure, "counts": dict(counts), "examples": n_examples})
+
+
+def _classify_learn(store: str, item_id: str, label: str, allowed: list[str], max_examples: int) -> str:
+    label = str(label or "").strip()
+    if not label or len(label) > 60 or any(c in label for c in "\r\n"):
+        return tr("Error: invalid label")
+    if allowed and label not in allowed:
+        return tr("Error: label '{label}' is not one of: {labels}", label=label, labels=", ".join(allowed))
+    with _CLASSIFY_LOCK, contextlib.closing(_classify_db(store)) as conn:
+        row = conn.execute("SELECT text, vec FROM pending WHERE item_id = ?", (str(item_id),)).fetchone()
+        if row is None:
+            return tr("Error: no item '{id}' waiting for a label (use the _id of an item from this run)", id=item_id)
+        conn.execute("DELETE FROM pending WHERE item_id = ?", (str(item_id),))
+        conn.execute("INSERT INTO examples (text, label, vec, ts) VALUES (?, ?, ?, ?)", (row[0], label, row[1], int(time.time())))
+        conn.execute("DELETE FROM examples WHERE id NOT IN (SELECT id FROM examples ORDER BY id DESC LIMIT ?)", (max_examples,))
+        n = conn.execute("SELECT COUNT(*) FROM examples").fetchone()[0]
+        conn.commit()
+        return tr("Learned '{label}' for item {id} ({n} examples)", label=label, id=item_id, n=n)
+
+
+def _build_classifier_tools(cfg: dict[str, Any], ctx: Any) -> list[AgentTool]:
+    store = _state_scope(ctx, cfg.get("store") or "")
+    allowed = _split_csv(cfg.get("labels") or "")
+    max_examples = max(1, int(cfg.get("max_examples") or 2000))
+    label_param: dict[str, Any] = {"type": "string", "description": tr("Label for the item.")}
+    if allowed:
+        label_param["enum"] = allowed
+
+    def learn(args: dict[str, Any]) -> str:
+        return _classify_learn(store, str(args.get("id") or ""), str(args.get("label") or ""), allowed, max_examples)
+
+    return [AgentTool(
+        name=_safe_tool_name("learn_label", cfg.get("prefix") or ""),
+        description=tr("Teaches the fast classifier the right label for an item, by its _id. Use it for every item you classified yourself and for any item the classifier got wrong."),
+        parameters={"type": "object", "properties": {"id": {"type": "string", "description": tr("The item's _id.")}, "label": label_param}, "required": ["id", "label"]},
+        handler=learn,
+        risk="write",
+        approval=cfg.get("approval") or "never",
+    )]
+
+
+def tool_classifier(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    store: str = "",
+    labels: str = "",
+    max_examples: int = 2000,
+    prefix: str = "",
+    approval: str = "never",
+) -> NodeResult:
+    """learn_label tool for transform.harness: teaches a transform.classify store."""
+    return _tool_descriptor("classifier", store=store, labels=labels, max_examples=max_examples, prefix=prefix, approval=approval)
+
+
 _TOOL_BUILDERS: dict[str, Callable[[dict[str, Any], Any], list[AgentTool]]] = {
     "mail": _build_mail_tools,
     "http": _build_http_tools,
     "mcp": _build_mcp_tools,
     "flow": _build_flow_tools,
     "memory": _build_memory_tools,
+    "classifier": _build_classifier_tools,
 }
 
 

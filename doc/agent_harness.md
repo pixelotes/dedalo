@@ -76,6 +76,22 @@ tool.mcp  url=http://127.0.0.1:8092/mcp  secret=beanie-token  allowed_tools=get_
 
 `secret` holds the server's bearer token. If the server sits behind Cloudflare Access, put the service token headers in a secret as JSON (`{"CF-Access-Client-Id": "...", "CF-Access-Client-Secret": "..."}`) and choose it in `headers_secret`.
 
+## Fast classifier in front of the agent
+
+An agent reasons well but is slow and costs a model call per turn. For repetitive sorting (mail, tickets, alerts) put a cheap classifier in front of it and let the agent handle only what the classifier is not sure about:
+
+```text
+input.imap ──▶ transform.classify ──▶ transform.harness ──▶ output.telegram
+                                         ▲
+                       tool.classifier ──┘  (learn_label)
+```
+
+- `transform.classify` turns each item into an embedding (any OpenAI-compatible `/embeddings`: Workers AI `@cf/baai/bge-m3`, Ollama, OpenAI...) and lets the `k` most similar labelled examples vote. It returns `sure` (with `_label` and `_confidence`) and `unsure`.
+- The agent gets both lists as context, decides the `unsure` ones and calls `learn_label(_id, label)` from `tool.classifier`. Each label becomes an example, so the next run sends fewer items to the agent. It can also correct a `sure` item.
+- Until the store has `min_examples` examples everything is `unsure` (cold start). Examples live in a SQLite file, `data/state/classifier/<store>.sqlite`, as float16 vectors (2 KB each for 1024 dimensions), capped by `max_examples`. The classifier streams them row by row and keeps only the best `k` per item, so memory does not grow with the store: with 2,000 examples a run peaks at about 4 MB.
+
+Measured on a real mailbox with Gemma as teacher: after 50 labelled emails the classifier decided 20 of the next 30 on its own in 1.9 s, 18 of them right; both mistakes had a confidence below 0.85, so `min_agreement: 0.85` sends them to the agent instead.
+
 ## Reasoning models
 
 Models such as Gemma, Qwen or DeepSeek reason before answering. In a tool loop that can mean thousands of hidden tokens per turn: the mail triage agent went from about 220 s to 60 s on Workers AI with `thinking` set to `off`, with the same results. `on` forces it and `default` sends nothing. Each family has its own switch: `chat_template_kwargs.enable_thinking` for Gemma, GLM and DeepSeek, that plus `/no_think` in the system prompt for Qwen, `reasoning_effort: low` for gpt-oss (it cannot stop reasoning), and nothing for Mistral, which rejects template parameters. Raise `timeout` (seconds per model request) if you keep reasoning on.

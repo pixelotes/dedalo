@@ -1105,6 +1105,39 @@ NODE_TYPES: dict[str, NodeSpec] = {
             "thinking": "Turns the model's reasoning on or off with each family's switch (chat_template_kwargs for Gemma, Qwen, GLM, DeepSeek; /no_think for Qwen; reasoning_effort low for gpt-oss; Mistral has none). Off is much faster for simple tasks.",
         },
     ),
+    "transform.classify": NodeSpec(
+        category="transform",
+        runtime_fn="classify_items",
+        optional={
+            "text": "",
+            "store": "",
+            "labels": "",
+            "id_field": "id",
+            "k": 5,
+            "min_agreement": 0.8,
+            "min_examples": 20,
+            "llm": "",
+            "url": "",
+            "model": "",
+            "secret": "",
+            "timeout": 60.0,
+        },
+        label='Fast Classifier (embeddings)',
+        output="dict with sure (items with _label and _confidence), unsure (items for an agent), counts and examples",
+        choices_from={"llm": "llms", "secret": "secrets"},
+        help={
+            "text": 'Template of the text compared for each item, with {field} placeholders (e.g. {from} | {subject}). Empty: the whole item.',
+            "store": 'Name of the example store, shared with tool.classifier (empty: the flow id).',
+            "labels": 'Allowed labels, comma separated (optional).',
+            "id_field": 'Item field that identifies it (the agent teaches labels by this id).',
+            "k": 'Number of most similar examples that vote.',
+            "min_agreement": 'Share of the vote (0-1) the winning label needs; below it the item goes to unsure.',
+            "min_examples": 'Until the store has this many examples, every item goes to unsure (cold start).',
+            "llm": 'LLM endpoint configuration to use for embeddings (empty: the default endpoint). Any OpenAI-compatible /embeddings works.',
+            "model": 'Embedding model (e.g. @cf/baai/bge-m3, nomic-embed-text, text-embedding-3-small). Empty: DEDALO_EMBED_MODEL.',
+            "timeout": 'Maximum time in seconds per embeddings request.',
+        },
+    ),
     "transform.analyzer": NodeSpec(
         category="transform",
         runtime_fn="analyzer_agent",
@@ -1595,6 +1628,25 @@ NODE_TYPES: dict[str, NodeSpec] = {
         help={
             "scope": 'Memory name, shared with input.state and output.state (empty: the flow id).',
             "max_bytes": 'Maximum size of the stored memory.',
+            "approval": 'When the harness must ask a human before running a call: never, write (only calls that change or send something) or always. Needs an approval channel on the harness; without one, calls that need approval are denied.',
+        },
+    ),
+    "tool.classifier": NodeSpec(
+        category="tool",
+        runtime_fn="tool_classifier",
+        optional={"store": "", "labels": "", "max_examples": 2000, "prefix": "", "approval": "never"},
+        label='Classifier Teaching Tool',
+        output='learn_label tool for an Agent Harness',
+        choices={"approval": [
+                {"value": "never", "label": 'Never ask'},
+                {"value": "write", "label": 'Ask for actions that change things'},
+                {"value": "always", "label": 'Ask for every call'},
+            ]},
+        help={
+            "store": 'Example store of the transform.classify node to teach (empty: the flow id).',
+            "labels": 'Allowed labels, comma separated (optional; the model can only use these).',
+            "max_examples": 'Examples kept; the oldest are forgotten first.',
+            "prefix": 'Prefix for the tool name, to use two classifiers on one harness.',
             "approval": 'When the harness must ask a human before running a call: never, write (only calls that change or send something) or always. Needs an approval channel on the harness; without one, calls that need approval are denied.',
         },
     ),
@@ -2352,6 +2404,7 @@ def _extract_runtime_tree_shaken(graph: Graph) -> tuple[str, list[str]]:
             "transform.agent",
             "transform.coder",
             "transform.harness",
+            "transform.classify",
             "tool.http",
             "tool.mcp",
             "transform.analyzer",
@@ -2400,7 +2453,7 @@ def _analyze_standalone_requirements(graph: Graph) -> dict[str, Any]:
             if val and isinstance(val, str) and val.strip():
                 required_secrets.add(val.strip())
 
-        if node.type in ("transform.agent", "transform.coder", "transform.harness", "transform.analyzer", "transform.planner") or "llm" in cfg:
+        if node.type in ("transform.agent", "transform.coder", "transform.harness", "transform.classify", "transform.analyzer", "transform.planner") or "llm" in cfg:
             uses_llm = True
 
         if node.type == "input.webhook":
