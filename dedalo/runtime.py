@@ -3225,6 +3225,106 @@ def _normalize_assistant_message(msg: Any, turn: int) -> dict[str, Any]:
     return clean
 
 
+_JSON_TYPES: dict[str, Any] = {
+    "object": dict, "array": list, "string": str, "boolean": bool, "null": type(None),
+}
+
+
+def _schema_errors(value: Any, schema: Any, path: str = "$", limit: int = 10) -> list[str]:
+    """Checks a value against the common subset of JSON Schema (type, properties, required,
+    additionalProperties, items, enum, const, min/max length, items and values, anyOf/oneOf).
+    Unknown keywords are ignored. Returns readable errors, at most `limit`."""
+    errors: list[str] = []
+    if not isinstance(schema, dict):
+        return errors
+
+    def add(msg: str) -> None:
+        if len(errors) < limit:
+            errors.append(f"{path}: {msg}")
+
+    for key in ("anyOf", "oneOf"):
+        options = schema.get(key)
+        if isinstance(options, list) and options:
+            if not any(not _schema_errors(value, opt, path, 1) for opt in options):
+                add(tr("does not match any allowed shape"))
+            return errors
+
+    types = schema.get("type")
+    if types is not None:
+        wanted = types if isinstance(types, list) else [types]
+        def is_type(t: str) -> bool:
+            if t == "integer":
+                return isinstance(value, int) and not isinstance(value, bool)
+            if t == "number":
+                return isinstance(value, (int, float)) and not isinstance(value, bool)
+            py = _JSON_TYPES.get(t)
+            return py is not None and isinstance(value, py) and not (t != "boolean" and isinstance(value, bool))
+        if not any(is_type(str(t)) for t in wanted):
+            add(tr("expected {types}, got {got}", types=" or ".join(map(str, wanted)), got=type(value).__name__))
+            return errors
+
+    if "const" in schema and value != schema["const"]:
+        add(tr("must be {value}", value=json.dumps(schema["const"], ensure_ascii=False)))
+    if isinstance(schema.get("enum"), list) and value not in schema["enum"]:
+        add(tr("must be one of {values}", values=", ".join(json.dumps(v, ensure_ascii=False) for v in schema["enum"])))
+
+    if isinstance(value, str):
+        if "minLength" in schema and len(value) < int(schema["minLength"]):
+            add(tr("shorter than {n} characters", n=schema["minLength"]))
+        if "maxLength" in schema and len(value) > int(schema["maxLength"]):
+            add(tr("longer than {n} characters", n=schema["maxLength"]))
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if "minimum" in schema and value < schema["minimum"]:
+            add(tr("below the minimum {n}", n=schema["minimum"]))
+        if "maximum" in schema and value > schema["maximum"]:
+            add(tr("above the maximum {n}", n=schema["maximum"]))
+    if isinstance(value, list):
+        if "minItems" in schema and len(value) < int(schema["minItems"]):
+            add(tr("fewer than {n} items", n=schema["minItems"]))
+        if "maxItems" in schema and len(value) > int(schema["maxItems"]):
+            add(tr("more than {n} items", n=schema["maxItems"]))
+        if isinstance(schema.get("items"), dict):
+            for i, item in enumerate(value):
+                errors += _schema_errors(item, schema["items"], f"{path}[{i}]", limit - len(errors))
+                if len(errors) >= limit:
+                    break
+    if isinstance(value, dict):
+        props = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+        for req in schema.get("required") or []:
+            if req not in value:
+                add(tr("missing required field '{field}'", field=req))
+        for k, v in value.items():
+            if k in props:
+                errors += _schema_errors(v, props[k], f"{path}.{k}", limit - len(errors))
+            elif schema.get("additionalProperties") is False:
+                add(tr("unexpected field '{field}'", field=k))
+            elif isinstance(schema.get("additionalProperties"), dict):
+                errors += _schema_errors(v, schema["additionalProperties"], f"{path}.{k}", limit - len(errors))
+            if len(errors) >= limit:
+                break
+    return errors[:limit]
+
+
+def _json_from_text(text: str) -> Any:
+    """Parses a JSON value from a model reply that may wrap it in prose or a ``` fence."""
+    text = (text or "").strip()
+    fence = re.search(r"```(?:json)?\s*(.*?)```", text, re.S)
+    if fence:
+        text = fence.group(1).strip()
+    try:
+        return json.loads(text)
+    except ValueError:
+        pass
+    for opener in "{[":
+        start = text.find(opener)
+        if start != -1:
+            try:
+                return json.JSONDecoder().raw_decode(text[start:])[0]
+            except ValueError:
+                continue
+    raise ValueError(tr("no JSON found in the reply"))
+
+
 RETRY_STATUSES = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 520, 522, 524})
 
 
@@ -3304,6 +3404,9 @@ def _react_loop(
     max_tokens: int = 0,
     token_budget: int = 0,
     usage: dict[str, Any] | None = None,
+    finish_tool: str = "",
+    result_schema: dict[str, Any] | None = None,
+    result_wrapped: bool = False,
 ) -> dict[str, Any]:
     """Multi-turn ReAct loop shared by the agent nodes.
 
@@ -3314,6 +3417,11 @@ def _react_loop(
     raises `_LLMHTTPError` (the model endpoint returned an HTTP error).
     """
     usage = usage if usage is not None else {}
+    # Structured output: the run ends when `finish_tool` is called with arguments that match
+    # `result_schema` (wrapped in {"result": ...} when the schema is not an object).
+    result: Any = None
+    has_result = False
+    nudges = 0
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -3392,6 +3500,24 @@ def _react_loop(
             tool_calls = msg.get("tool_calls")
             if not tool_calls:
                 final_response = (msg.get("content") or "").strip()
+                if finish_tool:
+                    # The model answered in text: accept it if it is valid JSON for the schema.
+                    try:
+                        candidate = _json_from_text(final_response)
+                        problems = _schema_errors(candidate, result_schema or {})
+                    except ValueError as exc:
+                        candidate, problems = None, [str(exc)]
+                    if not problems:
+                        result, has_result, completed = candidate, True, True
+                        break
+                    if nudges < 2:
+                        nudges += 1
+                        messages.append({"role": "user", "content": tr(
+                            "Your answer is not a valid result ({problems}). Call {tool} with the final result.",
+                            problems="; ".join(problems[:5]), tool=finish_tool)})
+                        continue
+                    stop_reason = "no_result"
+                    break
                 completed = True
                 break
 
@@ -3412,7 +3538,16 @@ def _react_loop(
 
                 tool = by_name.get(fn_name)
                 approval_note = ""
-                if call_id in invalid_calls:
+                if finish_tool and fn_name == finish_tool and call_id not in invalid_calls:
+                    candidate = args.get("result") if result_wrapped else args
+                    problems = _schema_errors(candidate, result_schema or {})
+                    if problems:
+                        result_str = tr("Error: the result does not match the schema: {problems}. Fix it and call {tool} again.",
+                                        problems="; ".join(problems), tool=finish_tool)
+                    else:
+                        result, has_result = candidate, True
+                        result_str = tr("Result accepted.")
+                elif call_id in invalid_calls:
                     result_str = tr("Error: The arguments for '{fn_name}' were not valid JSON. Call the tool again with a single JSON object.", fn_name=fn_name)
                 elif tool is None:
                     result_str = tr("Error: The tool '{fn_name}' is not available or is not authorized on this node.", fn_name=fn_name)
@@ -3462,6 +3597,11 @@ def _react_loop(
                     "content": clipped,
                 })
 
+            if has_result:
+                completed = True
+                final_response = json.dumps(result, ensure_ascii=False)
+                break
+
             # Loop detection: has any tool failed >= 3 times in a row?
             loop_warnings = []
             for t_name, failures in list(consecutive_tool_failures.items()):
@@ -3486,7 +3626,7 @@ def _react_loop(
                     "output_preview": warning_msg[:200],
                 })
 
-        if not completed:
+        if not completed and stop_reason != "no_result":
             stop_reason = stop_reason or "turn_limit"
             # Compaction check before the final summary
             messages, _ = _compact_conversation_history(
@@ -3536,6 +3676,7 @@ def _react_loop(
         ]),
         "tool_history": tool_calls_log,
         "usage": dict(usage),
+        **({"result": result if has_result else None} if finish_tool else {}),
     }
 
 
@@ -5012,6 +5153,7 @@ def harness_agent(
     max_tokens: int = 0,
     token_budget: int = 0,
     daily_token_budget: int = 0,
+    output_schema: str = "",
 ) -> NodeResult:
     """Generic agent harness: ReAct loop whose tools come from connected tool.* nodes."""
     ledger_scope = str(getattr(ctx, "flow_name", "") or "default")
@@ -5034,6 +5176,26 @@ def harness_agent(
             tools += builder(dict(desc.get("config") or {}), ctx)
     except Exception as exc:
         return NodeResult("error", error=tr("Error preparing tool '{kind}': {exc}", kind=desc.get(TOOL_MARKER), exc=exc))
+
+    finish_tool, result_schema, result_wrapped = "", None, False
+    if str(output_schema or "").strip():
+        try:
+            result_schema = json.loads(output_schema) if isinstance(output_schema, str) else dict(output_schema)
+        except ValueError as exc:
+            return NodeResult("error", error=tr("output_schema is not valid JSON: {exc}", exc=exc))
+        if not isinstance(result_schema, dict):
+            return NodeResult("error", error=tr("output_schema must be a JSON Schema object"))
+        result_wrapped = result_schema.get("type") != "object"
+        params = {"type": "object", "properties": {"result": result_schema}, "required": ["result"]} if result_wrapped else result_schema
+        finish_tool = "submit_result"
+        tools.append(AgentTool(
+            name=finish_tool,
+            description=tr("Submit the final result of the task. Call it once, when you are done; the run ends when the result is valid."),
+            parameters=params,
+            handler=lambda args: "",
+            risk="read",
+            approval="never",
+        ))
 
     seen: set[str] = set()
     for t in tools:
@@ -5067,6 +5229,8 @@ def harness_agent(
     sys_content = (system_prompt.strip() or default_system) + "\n\n" + tr(
         "Current date and time: {now}.", now=now.strftime("%Y-%m-%d %H:%M %Z (%A)")
     )
+    if finish_tool:
+        sys_content += "\n\n" + tr("When you are done, call {tool} with the final result instead of answering in text.", tool=finish_tool)
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": sys_content},
         {"role": "user", "content": user_msg},
@@ -5100,6 +5264,9 @@ def harness_agent(
             max_tokens=max_tokens,
             token_budget=run_budget,
             usage=run_usage,
+            finish_tool=finish_tool,
+            result_schema=result_schema,
+            result_wrapped=result_wrapped,
         )
     except _LLMHTTPError as exc:
         return NodeResult("error", error=tr('LLM API returned HTTP {status_code}: {text}', status_code=exc.status_code, text=exc.text))
@@ -5108,13 +5275,16 @@ def harness_agent(
     finally:
         _usage_record(ledger_scope, run_usage)
 
-    res_data["tools"] = sorted(seen)
+    res_data["tools"] = sorted(seen - {finish_tool})
+    if finish_tool and res_data.get("result") is None:
+        return NodeResult("error", data=res_data, error=tr(
+            "The agent did not return a result that matches output_schema (stopped by {reason})", reason=res_data.get("stop_reason") or "?"))
     response = res_data["response"]
     marker = str(skip_if_response or "").strip()
     if marker and response.strip().strip(".").strip().upper().startswith(marker.upper()):
         return NodeResult("skipped", data=res_data)
     if (output_format or "").lower().strip() == "text":
-        return NodeResult("ok", data=response)
+        return NodeResult("ok", data=res_data["result"] if finish_tool else response)
     return NodeResult("ok", data=res_data)
 
 

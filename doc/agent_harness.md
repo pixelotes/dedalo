@@ -96,6 +96,24 @@ Measured on a real mailbox with Gemma as teacher: after 50 labelled emails the c
 
 Models such as Gemma, Qwen or DeepSeek reason before answering. In a tool loop that can mean thousands of hidden tokens per turn: the mail triage agent went from about 220 s to 60 s on Workers AI with `thinking` set to `off`, with the same results. `on` forces it and `default` sends nothing. Each family has its own switch: `chat_template_kwargs.enable_thinking` for Gemma, GLM and DeepSeek, that plus `/no_think` in the system prompt for Qwen, `reasoning_effort: low` for gpt-oss (it cannot stop reasoning), and nothing for Mistral, which rejects template parameters. Raise `timeout` (seconds per model request) if you keep reasoning on.
 
+## Structured output
+
+Set `output_schema` to a JSON Schema and the agent must finish by calling `submit_result` with data that matches it, instead of writing free text. The next nodes then get fields, not prose to parse:
+
+```json
+{"type": "object",
+ "properties": {
+   "important": {"type": "array", "items": {"type": "object", "properties": {"from": {"type": "string"}, "subject": {"type": "string"}, "why": {"type": "string"}}, "required": ["from", "subject", "why"]}},
+   "subscriptions": {"type": "integer"},
+   "spam": {"type": "integer"}},
+ "required": ["important", "subscriptions", "spam"]}
+```
+
+- It works with any model that can call tools: the schema becomes the parameters of `submit_result`, so it does not depend on the server supporting `response_format`.
+- The harness validates the result itself (types, `required`, `properties`, `additionalProperties`, `items`, `enum`, `const`, lengths, ranges, `anyOf`/`oneOf`), with no extra library. An invalid result goes back to the model with the errors so it can fix it.
+- A plain JSON answer (even inside a ``` fence) is accepted when it matches. Otherwise the model is reminded twice, and then the node fails, so the failure branch can tell you.
+- With `output_format: text` the node outputs the result object; with `full`, it is under `result`. A schema that is not an object (a list, for example) is wrapped as `{"result": ...}` for the tool call and unwrapped again.
+
 ## Retries and cost control
 
 - **Retries** (`retries`, default 2): model and embedding requests are repeated after a 429, a 5xx, a timeout or a dropped connection, waiting 1, 2, 4... seconds with jitter or what `Retry-After` asks for, and never past the run's time budget. Other 4xx errors are not retried. Tool calls are not retried automatically: a tool that sends or changes something must not run twice.

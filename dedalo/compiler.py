@@ -1067,6 +1067,7 @@ NODE_TYPES: dict[str, NodeSpec] = {
             "max_tokens": 0,
             "token_budget": 0,
             "daily_token_budget": 0,
+            "output_schema": "",
         },
         label='Agent Harness',
         output='dict with the response, turns, tool log and tools used (or text); SKIPPED if the response starts with skip_if_response',
@@ -1107,6 +1108,7 @@ NODE_TYPES: dict[str, NodeSpec] = {
             "max_tokens": 'Maximum tokens per model reply (0: no limit). Also cuts runaway reasoning.',
             "token_budget": 'Maximum tokens for the whole run (0: no limit); when used up the agent summarizes and stops.',
             "daily_token_budget": 'Maximum tokens per day for this flow (0: no limit); once spent, runs fail until the next day. Usage is kept in data/state/usage.sqlite.',
+            "output_schema": 'JSON Schema of the result (optional). The agent must finish by calling submit_result with data that matches it; invalid results are sent back for a fix. With output_format text the node outputs the result object.',
         },
     ),
     "transform.classify": NodeSpec(
