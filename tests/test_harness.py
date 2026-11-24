@@ -377,3 +377,27 @@ def test_workers_ai_null_fields_are_normalized_before_the_next_turn():
     call = assistant["tool_calls"][0]
     assert call["id"] and call["id"] == tool_msg["tool_call_id"]
     assert call["function"]["arguments"] == '{"q": 1}'
+
+
+def test_workers_ai_merged_tool_calls_are_split():
+    # Workers AI merges parallel calls to one tool into one call with the JSON objects back to back
+    raw = MagicMock(status_code=200)
+    raw.json.return_value = {"choices": [{"message": {"role": "assistant", "content": None, "tool_calls": [
+        {"id": "c1", "type": "function", "function": {"name": "look",
+         "arguments": '{"key": "a"}{"key": "b"} {"key": "c"}'}},
+        {"id": "c2", "type": "function", "function": {"name": "look", "arguments": "not json"}},
+    ]}}]}
+    seen: list[dict[str, Any]] = []
+    tool = AgentTool("look", "d", {}, lambda a: seen.append(a) or "result", risk="read")
+    with patch("httpx.Client.post", side_effect=[raw, _llm_reply("done")]) as post:
+        out = _loop([tool])
+    assert seen == [{"key": "a"}, {"key": "b"}, {"key": "c"}] and out["response"] == "done"
+    sent = post.call_args_list[1].kwargs["json"]["messages"]
+    calls = sent[2]["tool_calls"]
+    assert [c["id"] for c in calls] == ["c1", "c1_1", "c1_2", "c2"]
+    for c in calls:
+        json.loads(c["function"]["arguments"])  # every call sent back is valid JSON
+    assert "_dedalo_invalid_calls" not in sent[2]
+    results = {m["tool_call_id"]: m["content"] for m in sent if m.get("role") == "tool"}
+    assert set(results) == {"c1", "c1_1", "c1_2", "c2"}
+    assert "not valid JSON" in results["c2"]
