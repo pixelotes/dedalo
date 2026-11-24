@@ -6,6 +6,7 @@ Los scripts compilados invocan directamente estas funciones sin sobrecarga de ru
 
 from __future__ import annotations
 
+import contextlib
 import base64
 import ctypes
 import datetime
@@ -14,9 +15,11 @@ import email.header
 import gc
 import gzip
 import hashlib
+import heapq
 import html
 import json
 import math
+import operator
 import os
 import random
 import re
@@ -4504,44 +4507,40 @@ _CLASSIFY_LOCK = threading.Lock()
 
 def _classify_path(store: str) -> Path:
     clean = re.sub(r"[^A-Za-z0-9_-]+", "_", str(store or "")).strip("_") or "default"
-    return Path("data/state") / "classifier" / f"{clean[:80]}.json"
+    return Path("data/state") / "classifier" / f"{clean[:80]}.sqlite"
 
 
-def _classify_load(store: str) -> dict[str, Any]:
-    path = _classify_path(store)
-    if path.is_file():
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                data.setdefault("examples", [])
-                data.setdefault("pending", {})
-                return data
-        except Exception:
-            pass
-    return {"examples": [], "pending": {}}
-
-
-def _classify_save(store: str, data: dict[str, Any]) -> None:
+def _classify_db(store: str) -> sqlite3.Connection:
+    """Example store: SQLite (stdlib), so examples are streamed row by row instead of loading and
+    rewriting one big JSON file, and teaching a label is a single INSERT."""
     path = _classify_path(store)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    os.replace(tmp, path)
+    conn = sqlite3.connect(path, timeout=10.0)
+    conn.execute("PRAGMA journal_mode = WAL;")
+    conn.execute("PRAGMA cache_size = -1000;")
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS examples (id INTEGER PRIMARY KEY, text TEXT NOT NULL, label TEXT NOT NULL, vec BLOB NOT NULL, ts INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS pending (item_id TEXT PRIMARY KEY, text TEXT NOT NULL, vec BLOB NOT NULL, ts INTEGER NOT NULL);
+    """)
+    return conn
 
 
-def _vec_pack(vec: list[float]) -> str:
-    """Unit-normalised vector as base64 float16: about 2.7 KB for 1024 dimensions."""
+def _vec_pack(vec: list[float]) -> bytes:
+    """Unit-normalised vector as float16 bytes: 2 KB for 1024 dimensions."""
     import struct
 
     norm = math.sqrt(sum(x * x for x in vec)) or 1.0
-    return base64.b64encode(struct.pack(f"<{len(vec)}e", *(x / norm for x in vec))).decode()
+    return struct.pack(f"<{len(vec)}e", *(x / norm for x in vec))
 
 
-def _vec_unpack(text: str) -> list[float]:
+def _vec_unpack(raw: bytes) -> tuple[float, ...]:
     import struct
 
-    raw = base64.b64decode(text)
-    return list(struct.unpack(f"<{len(raw) // 2}e", raw))
+    return struct.unpack(f"<{len(raw) // 2}e", raw)
+
+
+def _dot(a: Any, b: Any) -> float:
+    return sum(map(operator.mul, a, b))
 
 
 def _embed_texts(texts: list[str], *, llm: str, url: str, model: str, secret: str, timeout: float) -> list[list[float]]:
@@ -4579,27 +4578,39 @@ def _classify_text(item: Any, template: str) -> str:
     return re.sub(r"\s+", " ", text).strip()[:2000]
 
 
-def _knn_vote(vec: list[float], examples: list[dict[str, Any]], k: int) -> tuple[str, float, list[dict[str, Any]]]:
-    """Similarity-weighted vote of the k most similar examples: (label, share of the vote, neighbours)."""
-    scored = []
-    for ex in examples:
-        ev = ex.get("_vec")
-        if ev is None:
-            ev = ex["_vec"] = _vec_unpack(ex["vec"])
-        if len(ev) != len(vec):
+def _knn_votes(queries: list[list[float]], examples: Any, k: int) -> list[tuple[str, float, list[dict[str, Any]]]]:
+    """Similarity-weighted vote of the k most similar examples for every query vector:
+    (label, share of the vote, neighbours) per query.
+
+    `examples` yields (vec bytes, label, text) rows. Memory stays flat: each example is unpacked
+    once, compared with every query and dropped; only the k best per query are kept.
+    """
+    tops: list[list[tuple[float, int, dict[str, Any]]]] = [[] for _ in queries]
+    for i, (raw, ex_label, ex_text) in enumerate(examples):
+        ev = _vec_unpack(raw)
+        ex = {"label": ex_label, "text": ex_text}
+        for q, top in zip(queries, tops):
+            if len(ev) != len(q):
+                continue
+            sim = _dot(q, ev)
+            if len(top) < k:
+                heapq.heappush(top, (sim, i, ex))
+            elif sim > top[0][0]:
+                heapq.heapreplace(top, (sim, i, ex))
+    results = []
+    for top in tops:
+        ranked = sorted(top, key=lambda t: t[0], reverse=True)
+        if not ranked:
+            results.append(("", 0.0, []))
             continue
-        scored.append((sum(a * b for a, b in zip(vec, ev)), ex))
-    scored.sort(key=lambda t: t[0], reverse=True)
-    top = scored[:max(1, k)]
-    if not top:
-        return "", 0.0, []
-    weights: dict[str, float] = defaultdict(float)
-    for sim, ex in top:
-        weights[ex["label"]] += max(sim, 0.0)
-    total = sum(weights.values()) or 1.0
-    label = max(weights, key=lambda lb: weights[lb])
-    neighbours = [{"label": ex["label"], "text": ex["text"][:120], "similarity": round(sim, 3)} for sim, ex in top]
-    return label, weights[label] / total, neighbours
+        weights: dict[str, float] = defaultdict(float)
+        for sim, _i, ex in ranked:
+            weights[ex["label"]] += max(sim, 0.0)
+        total = sum(weights.values()) or 1.0
+        label = max(weights, key=lambda lb: weights[lb])
+        neighbours = [{"label": ex["label"], "text": ex["text"][:120], "similarity": round(sim, 3)} for sim, _i, ex in ranked]
+        results.append((label, weights[label] / total, neighbours))
+    return results
 
 
 def classify_items(
@@ -4633,7 +4644,9 @@ def classify_items(
     store_name = _state_scope(ctx, store)
     allowed = _split_csv(labels)
     if not items:
-        return NodeResult("ok", data={"sure": [], "unsure": [], "counts": {}, "examples": len(_classify_load(store_name)["examples"])})
+        with _CLASSIFY_LOCK, contextlib.closing(_classify_db(store_name)) as conn:
+            n = conn.execute("SELECT COUNT(*) FROM examples").fetchone()[0]
+        return NodeResult("ok", data={"sure": [], "unsure": [], "counts": {}, "examples": n})
 
     texts = [_classify_text(it, text) for it in items]
     try:
@@ -4641,19 +4654,23 @@ def classify_items(
     except Exception as exc:
         return NodeResult("error", error=tr("Classifier could not get embeddings: {exc}", exc=exc))
 
-    with _CLASSIFY_LOCK:
-        data = _classify_load(store_name)
-        examples = data["examples"]
-        warm = len(examples) >= max(1, int(min_examples or 1))
+    with _CLASSIFY_LOCK, contextlib.closing(_classify_db(store_name)) as conn:
+        n_examples = conn.execute("SELECT COUNT(*) FROM examples").fetchone()[0]
+        warm = n_examples >= max(1, int(min_examples or 1))
+        units = []
+        for vec in vectors:
+            norm = math.sqrt(sum(x * x for x in vec)) or 1.0
+            units.append([x / norm for x in vec])
+        rows = conn.execute("SELECT vec, label, text FROM examples")
+        votes = _knn_votes(units, rows, max(1, int(k or 5))) if warm else [("", 0.0, [])] * len(items)
+        del units
         sure: list[Any] = []
         unsure: list[Any] = []
         counts: dict[str, int] = defaultdict(int)
-        for i, (item, txt, vec) in enumerate(zip(items, texts, vectors)):
-            norm = math.sqrt(sum(x * x for x in vec)) or 1.0
-            unit = [x / norm for x in vec]
-            label, agreement, neighbours = _knn_vote(unit, examples, int(k or 5)) if warm else ("", 0.0, [])
+        now = int(time.time())
+        for item, txt, vec, (label, agreement, neighbours) in zip(items, texts, vectors, votes):
             item_id = str(item.get(id_field)) if isinstance(item, dict) and item.get(id_field) not in (None, "") else hashlib.sha1(txt.encode()).hexdigest()[:12]
-            data["pending"][item_id] = {"text": txt, "vec": _vec_pack(vec), "ts": int(time.time())}
+            conn.execute("INSERT OR REPLACE INTO pending (item_id, text, vec, ts) VALUES (?, ?, ?, ?)", (item_id, txt, _vec_pack(vec), now))
             out = dict(item) if isinstance(item, dict) else {"value": item}
             out.update({"_id": item_id, "_label": label, "_confidence": round(agreement, 3)})
             if label and agreement >= float(min_agreement) and (not allowed or label in allowed):
@@ -4662,14 +4679,10 @@ def classify_items(
             else:
                 out["_neighbours"] = neighbours[:3]
                 unsure.append(out)
-        pending = data["pending"]
-        if len(pending) > 1000:  # forget the oldest unlabelled items
-            for key in sorted(pending, key=lambda kk: pending[kk].get("ts", 0))[: len(pending) - 1000]:
-                pending.pop(key, None)
-        for ex in examples:
-            ex.pop("_vec", None)
-        _classify_save(store_name, data)
-    return NodeResult("ok", data={"sure": sure, "unsure": unsure, "counts": dict(counts), "examples": len(examples)})
+        # forget the oldest unlabelled items
+        conn.execute("DELETE FROM pending WHERE item_id NOT IN (SELECT item_id FROM pending ORDER BY ts DESC LIMIT 1000)")
+        conn.commit()
+    return NodeResult("ok", data={"sure": sure, "unsure": unsure, "counts": dict(counts), "examples": n_examples})
 
 
 def _classify_learn(store: str, item_id: str, label: str, allowed: list[str], max_examples: int) -> str:
@@ -4678,16 +4691,16 @@ def _classify_learn(store: str, item_id: str, label: str, allowed: list[str], ma
         return tr("Error: invalid label")
     if allowed and label not in allowed:
         return tr("Error: label '{label}' is not one of: {labels}", label=label, labels=", ".join(allowed))
-    with _CLASSIFY_LOCK:
-        data = _classify_load(store)
-        entry = data["pending"].pop(str(item_id), None)
-        if entry is None:
+    with _CLASSIFY_LOCK, contextlib.closing(_classify_db(store)) as conn:
+        row = conn.execute("SELECT text, vec FROM pending WHERE item_id = ?", (str(item_id),)).fetchone()
+        if row is None:
             return tr("Error: no item '{id}' waiting for a label (use the _id of an item from this run)", id=item_id)
-        data["examples"].append({"text": entry["text"], "vec": entry["vec"], "label": label, "ts": int(time.time())})
-        if len(data["examples"]) > max_examples:
-            data["examples"] = data["examples"][-max_examples:]
-        _classify_save(store, data)
-        return tr("Learned '{label}' for item {id} ({n} examples)", label=label, id=item_id, n=len(data["examples"]))
+        conn.execute("DELETE FROM pending WHERE item_id = ?", (str(item_id),))
+        conn.execute("INSERT INTO examples (text, label, vec, ts) VALUES (?, ?, ?, ?)", (row[0], label, row[1], int(time.time())))
+        conn.execute("DELETE FROM examples WHERE id NOT IN (SELECT id FROM examples ORDER BY id DESC LIMIT ?)", (max_examples,))
+        n = conn.execute("SELECT COUNT(*) FROM examples").fetchone()[0]
+        conn.commit()
+        return tr("Learned '{label}' for item {id} ({n} examples)", label=label, id=item_id, n=n)
 
 
 def _build_classifier_tools(cfg: dict[str, Any], ctx: Any) -> list[AgentTool]:
