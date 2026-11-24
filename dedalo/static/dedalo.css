@@ -31,6 +31,11 @@
   --cat-output-bg: rgba(52, 211, 153, 0.12);
   --cat-output-border: rgba(52, 211, 153, 0.32);
   --cat-output-text: #a7f3d0;
+
+  --cat-tool: #fbbf24;
+  --cat-tool-bg: rgba(251, 191, 36, 0.12);
+  --cat-tool-border: rgba(251, 191, 36, 0.32);
+  --cat-tool-text: #fde68a;
 }
 
 [data-theme="light"] {
@@ -62,6 +67,11 @@
   --cat-output-bg: rgba(5, 150, 105, 0.10);
   --cat-output-border: rgba(5, 150, 105, 0.28);
   --cat-output-text: #047857;
+
+  --cat-tool: #b45309;
+  --cat-tool-bg: rgba(180, 83, 9, 0.10);
+  --cat-tool-border: rgba(180, 83, 9, 0.28);
+  --cat-tool-text: #92400e;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -441,6 +451,7 @@ select {
 .category-block.cat-input .category-head-title { color: var(--cat-input); }
 .category-block.cat-transform .category-head-title { color: var(--cat-transform); }
 .category-block.cat-output .category-head-title { color: var(--cat-output); }
+.category-block.cat-tool .category-head-title { color: var(--cat-tool); }
 
 .node-pill {
   background: var(--bg-subtle);
@@ -506,6 +517,21 @@ select {
   background: rgba(52, 211, 153, 0.18);
   border-color: var(--cat-output-border);
   color: var(--cat-output-text);
+}
+
+.node-pill.cat-tool {
+  background: var(--cat-tool-bg);
+  border-color: var(--cat-tool-border);
+  border-left: 3px solid var(--cat-tool);
+}
+.node-pill.cat-tool:hover {
+  background: rgba(251, 191, 36, 0.22);
+  border-color: var(--cat-tool);
+}
+.node-pill.cat-tool .badge {
+  background: rgba(251, 191, 36, 0.18);
+  border-color: var(--cat-tool-border);
+  color: var(--cat-tool-text);
 }
 
 /* Buscador de nodos en paleta */
@@ -893,6 +919,15 @@ body.is-wiring .wire-del-btn {
   color: var(--cat-output-text);
   background: rgba(52, 211, 153, 0.18);
   border: 1px solid var(--cat-output-border);
+}
+.node-header.cat-tool {
+  background: var(--cat-tool-bg);
+  border-bottom-color: var(--cat-tool-border);
+}
+.node-header.cat-tool .node-type-tag {
+  color: var(--cat-tool-text);
+  background: rgba(251, 191, 36, 0.18);
+  border: 1px solid var(--cat-tool-border);
 }
 .node-title-wrap {
   display: flex;

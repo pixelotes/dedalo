@@ -23,7 +23,7 @@ const state = {
   isDirty: false,
   activeTab: 'flows',
   paletteFilter: 'all',
-  paletteCollapsed: { input: false, transform: false, output: false },
+  paletteCollapsed: { input: false, transform: false, output: false, tool: false },
   // Transformación y navegación 2D del lienzo (Pan y Zoom)
   view: { k: 1, x: 0, y: 0 },
   isPanning: false,
@@ -886,7 +886,7 @@ function nodeMatchesChip(typeKey, spec, chip) {
 function renderPalette() {
   const p = $('palette');
   p.innerHTML = '';
-  const categories = { input: t('palette.cat_input'), transform: t('palette.cat_transform'), output: t('palette.cat_output') };
+  const categories = { input: t('palette.cat_input'), transform: t('palette.cat_transform'), output: t('palette.cat_output'), tool: t('palette.cat_tool') };
   const query = ($('paletteSearch') && $('paletteSearch').value || '').trim().toLowerCase();
   const activeChip = state.paletteFilter || 'all';
   let totalMatched = 0;
@@ -2853,7 +2853,7 @@ function createCoderToolsSection(node) {
       });
       updatePresetButtons();
       markDirty();
-      if (node.type.startsWith('transform.')) triggerLivePreview(node);
+      if (node.type.startsWith('transform.') && node.type !== 'transform.harness') triggerLivePreview(node);
     };
 
     presetButtons[opt.id] = btn;
@@ -2900,7 +2900,7 @@ function createCoderToolsSection(node) {
       });
       updatePresetButtons();
       markDirty();
-      if (node.type.startsWith('transform.')) triggerLivePreview(node);
+      if (node.type.startsWith('transform.') && node.type !== 'transform.harness') triggerLivePreview(node);
     };
     catHead.appendChild(catToggle);
     toolsBox.appendChild(catHead);
@@ -2924,7 +2924,7 @@ function createCoderToolsSection(node) {
         else activeTools.delete(tool.id);
         updatePresetButtons();
         markDirty();
-        if (node.type.startsWith('transform.')) triggerLivePreview(node);
+        if (node.type.startsWith('transform.') && node.type !== 'transform.harness') triggerLivePreview(node);
       };
 
       const info = document.createElement('div');
@@ -3094,7 +3094,7 @@ function renderNodeInspector(node, body) {
       inputEl.onchange = (e) => {
         node.config[key] = e.target.value;
         markDirty();
-        if (node.type.startsWith('transform.')) triggerLivePreview(node);
+        if (node.type.startsWith('transform.') && node.type !== 'transform.harness') triggerLivePreview(node);
       };
     } else if (choicesFrom === 'llms') {
       inputEl = document.createElement('select');
@@ -3122,7 +3122,7 @@ function renderNodeInspector(node, body) {
       inputEl.onchange = (e) => {
         node.config[key] = e.target.value;
         markDirty();
-        if (node.type.startsWith('transform.')) triggerLivePreview(node);
+        if (node.type.startsWith('transform.') && node.type !== 'transform.harness') triggerLivePreview(node);
       };
     } else if (typeof defaultVal === 'boolean') {
       inputEl = document.createElement('input');
@@ -3131,7 +3131,7 @@ function renderNodeInspector(node, body) {
       inputEl.onchange = (e) => {
         node.config[key] = e.target.checked;
         markDirty();
-        if (node.type.startsWith('transform.')) triggerLivePreview(node);
+        if (node.type.startsWith('transform.') && node.type !== 'transform.harness') triggerLivePreview(node);
       };
     } else {
       const multilineKeys = ['template', 'query', 'cmd', 'prompt', 'system_prompt', 'body', 'headers', 'message'];
@@ -3146,7 +3146,7 @@ function renderNodeInspector(node, body) {
       inputEl.oninput = (e) => {
         node.config[key] = e.target.value;
         markDirty();
-        if (node.type.startsWith('transform.')) triggerLivePreview(node);
+        if (node.type.startsWith('transform.') && node.type !== 'transform.harness') triggerLivePreview(node);
       };
     }
 
@@ -3167,7 +3167,8 @@ function renderNodeInspector(node, body) {
   });
 
   // Si es un nodo de transformación, añadir el panel de Vista Previa en Vivo
-  if (node.type.startsWith('transform.')) {
+  // (no en el arnés de agente: ejecutaría herramientas reales en cada cambio de configuración)
+  if (node.type.startsWith('transform.') && node.type !== 'transform.harness') {
     renderLivePreviewSection(node, spec, body);
   }
 

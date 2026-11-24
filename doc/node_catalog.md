@@ -136,6 +136,12 @@ Dédalo has **74 modular nodes** grouped into three families:
 - **Interactive Inspector Panel**: Lets you enable or revoke individual tools with checkboxes grouped by permission category (Read, Write, Shell and Network), or pick quick profiles (`Coding`, `Read-Only`, `All`, `Custom`).
 - **Compaction**: When the context reaches 90% of the model's window, the history is compacted automatically using the **Blackhole** or **Luhn+** algorithms.
 
+### `transform.harness`
+- **Label**: Agent Harness.
+- **Description**: Generic agent with the ReAct loop of `transform.coder` but no built-in tools: it uses the tools of the `tool.*` nodes connected to it. Other inputs are added to the prompt as context, and the current date and time go into the system prompt.
+- **Parameters**: `prompt` (*required*), `max_turns` (up to 50), `max_seconds`, `skip_if_response`, `approval_channel` (`none`, `telegram`, `auto_approve`), `approval_chat_id`, `approval_token_secret`, `approval_timeout`, plus the LLM settings of `transform.coder`.
+- **Output**: dict with `response`, `turns_used`, `completed`, `stop_reason`, `tools` and `tool_history` (or the response text); `SKIPPED` when the response starts with `skip_if_response`. See [Agent harness](agent_harness.md).
+
 ### `transform.agent`
 - **Label**: LLM Agent.
 - **Description**: Flexible invocation of any OpenAI API-compatible endpoint (local Ollama, vLLM, OpenAI, Groq, etc.) with `{entrada}` variable injection, temperature control and JSON mode.
@@ -203,7 +209,35 @@ Dédalo has **74 modular nodes** grouped into three families:
 
 ---
 
-## 3. Output Nodes (`output.*`)
+## 3. Tool Nodes (`tool.*`)
+
+Tool nodes only connect to `transform.harness`. They emit a tool descriptor, not data, and every one has an `approval` policy (`never`, `write`, `always`). See [Agent harness](agent_harness.md).
+
+### `tool.mail`
+- **Label**: Mail Tool (IMAP/SMTP).
+- **Tools**: `mail_list`, `mail_read` (read), `mail_flag`, `mail_move` (write), `mail_send` (dangerous, needs `smtp_host`), selected with `actions` (default `list,read`).
+
+### `tool.http`
+- **Label**: HTTP API Tool.
+- **Description**: One API endpoint as a tool. `{placeholders}` in `url` become required arguments; `parameters` is the JSON Schema of the rest (query string for GET/DELETE, JSON body otherwise).
+
+### `tool.mcp`
+- **Label**: MCP Server Tools.
+- **Description**: Connects to an MCP server over Streamable HTTP (JSON or SSE responses) and offers its tools, filtered by `allowed_tools`. The risk of each tool comes from its `readOnlyHint` / `destructiveHint` annotations.
+
+### `tool.flow`
+- **Label**: Flow as Tool.
+- **Description**: Runs a saved flow (without its `output.*` nodes by default) and returns its result.
+
+### `tool.memory`
+- **Label**: Memory Tool.
+- **Description**: `memory_get` and `memory_set` over `data/state/memory/<scope>.json`, shared with `input.state` and `output.state`.
+
+### `input.state` and `output.state`
+- **Labels**: Read State / Save State.
+- **Description**: Read a key (or the whole scope) and store the input under a key (`set` or `append`) in the same store as `tool.memory`.
+
+## 4. Output Nodes (`output.*`)
 
 ### `output.evidence_vault`
 - **Label**: Evidence Vault.

@@ -1039,6 +1039,61 @@ NODE_TYPES: dict[str, NodeSpec] = {
             "timeout": 'Maximum time in seconds per HTTP turn.',
         },
     ),
+    "transform.harness": NodeSpec(
+        category="transform",
+        runtime_fn="harness_agent",
+        required=frozenset({"prompt"}),
+        optional={
+            "llm": "",
+            "system_prompt": "",
+            "max_turns": 10,
+            "max_seconds": 900.0,
+            "max_tool_chars": 4000,
+            "max_context": 0,
+            "compaction_engine": "blackhole",
+            "output_format": "full",
+            "skip_if_response": "",
+            "approval_channel": "none",
+            "approval_chat_id": "",
+            "approval_token_secret": "telegram-token",
+            "approval_timeout": 600.0,
+            "model": "",
+            "url": "",
+            "secret": "",
+            "temperature": 0.2,
+            "timeout": 120.0,
+        },
+        label='Agent Harness',
+        output='dict with the response, turns, tool log and tools used (or text); SKIPPED if the response starts with skip_if_response',
+        choices={
+            "compaction_engine": ["blackhole", "blackhole_llm", "luhn+"],
+            "output_format": ["full", "text"],
+            "approval_channel": [
+                {"value": "none", "label": 'None (deny calls that need approval)'},
+                {"value": "telegram", "label": 'Telegram (Approve/Deny buttons)'},
+                {"value": "auto_approve", "label": 'Auto-approve (testing only)'},
+            ],
+        },
+        choices_from={"llm": "llms", "secret": "secrets", "approval_token_secret": "secrets"},
+        help={
+            "prompt": 'Task for the agent. Connect tool.* nodes to give it tools; other inputs are added as context.',
+            "llm": 'LLM endpoint configuration to use (empty uses the default global endpoint). The model must support tool calling.',
+            "system_prompt": 'Replaces the default system prompt (the current date and time are always appended).',
+            "max_turns": 'Maximum number of model turns (up to 50).',
+            "max_seconds": 'Time budget for the whole run, in seconds; when it runs out the agent summarizes and stops.',
+            "max_tool_chars": 'Character limit on the output of each tool call.',
+            "max_context": 'Token limit of the context window (0 to auto-detect; compacts when 90% is reached).',
+            "compaction_engine": 'Context compaction engine (see transform.coder).',
+            "output_format": "'full' (response plus metrics and tool log) or 'text' (response only).",
+            "skip_if_response": 'If the final response starts with this text (e.g. NOTHING), the node emits SKIPPED and the following nodes do not run.',
+            "approval_channel": 'How to ask a human before calls that need approval (see each tool node).',
+            "approval_chat_id": 'Telegram chat that receives approval requests (empty uses DEDALO_TELEGRAM_CHAT_ID).',
+            "approval_token_secret": 'Secret with the Telegram bot token for approvals. Use a bot that no other program polls.',
+            "approval_timeout": 'Seconds to wait for an answer; with no answer the call is denied.',
+            "temperature": 'Model temperature.',
+            "timeout": 'Maximum time in seconds per model request.',
+        },
+    ),
     "transform.analyzer": NodeSpec(
         category="transform",
         runtime_fn="analyzer_agent",
@@ -1374,6 +1429,175 @@ NODE_TYPES: dict[str, NodeSpec] = {
         label='Python Code',
         code_field="code",
         output='the value returned by your code',
+    ),
+    # -- Herramientas (se conectan a transform.harness) ---------------------
+    "tool.mail": NodeSpec(
+        category="tool",
+        runtime_fn="tool_mail",
+        required=frozenset({"host", "username"}),
+        optional={
+            "secret": "",
+            "port": 993,
+            "folder": "INBOX",
+            "actions": "list,read",
+            "limit": 20,
+            "max_body_chars": 3000,
+            "smtp_host": "",
+            "smtp_port": 587,
+            "smtp_user": "",
+            "from_addr": "",
+            "prefix": "mail",
+            "approval": "write",
+            "timeout": 15.0,
+        },
+        label='Mail Tool (IMAP/SMTP)',
+        output='tool for an Agent Harness',
+        choices={"approval": [
+                {"value": "never", "label": 'Never ask'},
+                {"value": "write", "label": 'Ask for actions that change things'},
+                {"value": "always", "label": 'Ask for every call'},
+            ]},
+        choices_from={"secret": "secrets"},
+        help={
+            "host": 'IMAP server (e.g. imap.gmail.com).',
+            "username": 'Login username or email.',
+            "secret": 'Secret with the password or App Password (also used for SMTP).',
+            "folder": 'Mailbox the tools work on.',
+            "actions": 'Comma-separated actions to offer: list, read (read only), flag, move (change the mailbox), send (needs smtp_host).',
+            "limit": 'Maximum number of emails a list call can return.',
+            "max_body_chars": 'Maximum characters of a cleaned email body.',
+            "smtp_host": 'SMTP server for the send action (empty disables sending).',
+            "smtp_user": 'SMTP login (empty uses username).',
+            "from_addr": 'Sender address (empty uses the SMTP login).',
+            "prefix": 'Prefix of the tool names (mail_list, mail_read...). Change it to connect two mailboxes to one harness.',
+            "approval": 'When the harness must ask a human before running a call: never, write (only calls that change or send something) or always. Needs an approval channel on the harness; without one, calls that need approval are denied.',
+        },
+    ),
+    "tool.http": NodeSpec(
+        category="tool",
+        runtime_fn="tool_http",
+        required=frozenset({"name", "url"}),
+        optional={
+            "description": "",
+            "method": "GET",
+            "parameters": "",
+            "headers": "",
+            "secret": "",
+            "auth_header": "Authorization",
+            "risk": "",
+            "approval": "write",
+            "timeout": 20.0,
+        },
+        label='HTTP API Tool',
+        output='tool for an Agent Harness',
+        choices={
+            "method": ["GET", "POST", "PUT", "PATCH", "DELETE"],
+            "risk": [
+                {"value": "", "label": 'Automatic (GET reads, others write)'},
+                {"value": "read", "label": 'Read'},
+                {"value": "write", "label": 'Write'},
+                {"value": "dangerous", "label": 'Dangerous'},
+            ],
+            "approval": [
+                {"value": "never", "label": 'Never ask'},
+                {"value": "write", "label": 'Ask for actions that change things'},
+                {"value": "always", "label": 'Ask for every call'},
+            ],
+        },
+        choices_from={"secret": "secrets"},
+        help={
+            "name": 'Tool name the model sees (letters, numbers, _ and -).',
+            "url": 'Endpoint URL. {placeholders} become required arguments, URL-encoded.',
+            "description": 'What the tool does and when to use it (the model reads this).',
+            "parameters": 'JSON Schema of the arguments. GET/DELETE send them as query string, other methods as JSON body.',
+            "headers": 'Extra headers as JSON (no secrets here: use secret).',
+            "secret": 'Secret with the token sent in auth_header (Bearer added for Authorization).',
+            "risk": 'What a call does, used by the approval policy.',
+            "approval": 'When the harness must ask a human before running a call: never, write (only calls that change or send something) or always. Needs an approval channel on the harness; without one, calls that need approval are denied.',
+        },
+    ),
+    "tool.mcp": NodeSpec(
+        category="tool",
+        runtime_fn="tool_mcp",
+        required=frozenset({"url"}),
+        optional={
+            "secret": "",
+            "headers_secret": "",
+            "allowed_tools": "",
+            "prefix": "",
+            "approval": "write",
+            "timeout": 30.0,
+        },
+        label='MCP Server Tools',
+        output='tools for an Agent Harness',
+        choices={"approval": [
+                {"value": "never", "label": 'Never ask'},
+                {"value": "write", "label": 'Ask for actions that change things'},
+                {"value": "always", "label": 'Ask for every call'},
+            ]},
+        choices_from={"secret": "secrets", "headers_secret": "secrets"},
+        help={
+            "url": 'MCP endpoint over Streamable HTTP (e.g. http://127.0.0.1:8092/mcp).',
+            "secret": 'Secret with the bearer token of the MCP server.',
+            "headers_secret": 'Secret holding a JSON object of extra headers (e.g. Cloudflare Access service token).',
+            "allowed_tools": 'Comma-separated tool names to offer (empty offers all).',
+            "prefix": 'Prefix added to every tool name, to avoid clashes between servers.',
+            "approval": 'When the harness must ask a human before running a call: never, write (only calls that change or send something) or always. Needs an approval channel on the harness; without one, calls that need approval are denied.' + ' Tools marked read-only by the server never ask in write mode.',
+        },
+    ),
+    "tool.flow": NodeSpec(
+        category="tool",
+        runtime_fn="tool_flow",
+        required=frozenset({"flow"}),
+        optional={
+            "name": "",
+            "description": "",
+            "skip_outputs": True,
+            "approval": "write",
+        },
+        label='Flow as Tool',
+        output='tool for an Agent Harness',
+        choices={"approval": [
+                {"value": "never", "label": 'Never ask'},
+                {"value": "write", "label": 'Ask for actions that change things'},
+                {"value": "always", "label": 'Ask for every call'},
+            ]},
+        help={
+            "flow": 'Id of the saved flow to run (the file name in data/flows).',
+            "name": 'Tool name the model sees (empty: flow_<id>).',
+            "description": 'What the flow does and when to use it (the model reads this).',
+            "skip_outputs": 'Runs the flow without its output.* nodes, so the call only reads. Disable it to let the flow send or write (then it counts as a write).',
+            "approval": 'When the harness must ask a human before running a call: never, write (only calls that change or send something) or always. Needs an approval channel on the harness; without one, calls that need approval are denied.',
+        },
+    ),
+    "tool.memory": NodeSpec(
+        category="tool",
+        runtime_fn="tool_memory",
+        optional={"scope": "", "max_bytes": 200000, "approval": "never"},
+        label='Memory Tool',
+        output='memory_get and memory_set tools for an Agent Harness',
+        choices={"approval": [
+                {"value": "never", "label": 'Never ask'},
+                {"value": "write", "label": 'Ask for actions that change things'},
+                {"value": "always", "label": 'Ask for every call'},
+            ]},
+        help={
+            "scope": 'Memory name, shared with input.state and output.state (empty: the flow id).',
+            "max_bytes": 'Maximum size of the stored memory.',
+            "approval": 'When the harness must ask a human before running a call: never, write (only calls that change or send something) or always. Needs an approval channel on the harness; without one, calls that need approval are denied.',
+        },
+    ),
+    "input.state": NodeSpec(
+        category="input",
+        runtime_fn="state_read",
+        optional={"key": "", "scope": "", "default": ""},
+        label='Read State',
+        output='stored value (or the whole scope as a dict)',
+        help={
+            "key": 'Key to read (empty returns every key of the scope).',
+            "scope": 'State name, shared with tool.memory (empty: the flow id).',
+            "default": 'Value when the key does not exist.',
+        },
     ),
     # -- Salidas ------------------------------------------------------------
     "output.file": NodeSpec(
@@ -1728,6 +1952,20 @@ NODE_TYPES: dict[str, NodeSpec] = {
             "body": 'JSON to send. Use {entrada} to inject the data.',
         },
     ),
+    "output.state": NodeSpec(
+        category="output",
+        runtime_fn="state_write",
+        required=frozenset({"key"}),
+        optional={"scope": "", "mode": "set", "max_bytes": 200000},
+        label='Save State',
+        output='the stored value',
+        choices={"mode": ["set", "append"]},
+        help={
+            "key": 'Key to store the input under.',
+            "scope": 'State name, shared with tool.memory (empty: the flow id).',
+            "mode": 'set replaces the value, append adds it to a list.',
+        },
+    ),
     "output.telegram": NodeSpec(
         category="output",
         runtime_fn="telegram",
@@ -1880,6 +2118,16 @@ def validate(graph: Graph) -> list[str]:
         if e.port not in PORTS:
             errors.append(tr('invalid edge port: "{port}" (only {PORTS})', port=e.port, PORTS=PORTS))
 
+    for e in graph.edges:
+        src, dst = graph.node(e.source), graph.node(e.target)
+        if src and _is_tool_node(src):
+            if not dst or dst.type != "transform.harness":
+                errors.append(tr('"{id}": a tool node can only connect to an Agent Harness (transform.harness)', id=e.source))
+            elif e.port != "ok":
+                errors.append(tr('"{id}": tool edges must use the ok port', id=e.source))
+        if dst and _is_tool_node(dst):
+            errors.append(tr('"{id}": tool nodes take no inputs', id=e.target))
+
     if _topological_order(graph) is None:
         errors.append(tr('the graph contains a cycle -- it cannot be executed in any order'))
 
@@ -1896,7 +2144,7 @@ def validate(graph: Graph) -> list[str]:
                 )
 
     for n in graph.nodes:
-        incoming = graph.incoming(n.id)
+        incoming = _data_edges(graph, graph.incoming(n.id))
         if len({e.source for e in incoming}) > 1:
             policy = n.config.get("fan_in")
             if policy not in FAN_IN_POLICIES:
@@ -1918,9 +2166,24 @@ def without_outputs(graph: Graph) -> Graph:
     )
 
 
+def _is_tool_node(node: Node) -> bool:
+    spec = NODE_TYPES.get(node.type)
+    return bool(spec and spec.category == "tool")
+
+
+def _data_edges(graph: Graph, edges: list[Edge]) -> list[Edge]:
+    """Edges that carry data, i.e. not the ones from tool nodes (those only hand tools to a harness)."""
+    out = []
+    for e in edges:
+        src = graph.node(e.source)
+        if src is None or not _is_tool_node(src):
+            out.append(e)
+    return out
+
+
 def _guard_expression(graph: Graph, node: Node) -> str | None:
     """Expresión condicional para determinar si el nodo debe ejecutarse."""
-    incoming = graph.incoming(node.id)
+    incoming = _data_edges(graph, graph.incoming(node.id))
     if not incoming:
         return None
 
@@ -2077,6 +2340,9 @@ def _extract_runtime_tree_shaken(graph: Graph) -> tuple[str, list[str]]:
             "input.calendar",
             "transform.agent",
             "transform.coder",
+            "transform.harness",
+            "tool.http",
+            "tool.mcp",
             "transform.analyzer",
             "transform.planner",
             "transform.cve_audit",
@@ -2115,12 +2381,15 @@ def _analyze_standalone_requirements(graph: Graph) -> dict[str, Any]:
 
     for node in graph.nodes:
         cfg = node.config or {}
-        for key in ("secret", "token_secret"):
+        keys = ["secret", "token_secret", "headers_secret"]
+        if cfg.get("approval_channel") == "telegram":
+            keys.append("approval_token_secret")
+        for key in keys:
             val = cfg.get(key)
             if val and isinstance(val, str) and val.strip():
                 required_secrets.add(val.strip())
 
-        if node.type in ("transform.agent", "transform.coder", "transform.analyzer", "transform.planner") or "llm" in cfg:
+        if node.type in ("transform.agent", "transform.coder", "transform.harness", "transform.analyzer", "transform.planner") or "llm" in cfg:
             uses_llm = True
 
         if node.type == "input.webhook":
@@ -2138,7 +2407,7 @@ def compile_standalone(graph: Graph) -> str:
     errors = validate(graph)
     if errors:
         raise GraphError(errors)
-    if any(n.type == "input.subflows" for n in graph.nodes):
+    if any(n.type in ("input.subflows", "tool.flow") for n in graph.nodes):
         raise GraphError([tr("Sub-flows are not supported in the standalone export yet")])
 
     order = _topological_order(graph)

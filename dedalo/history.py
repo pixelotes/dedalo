@@ -43,7 +43,7 @@ _init_lock = threading.Lock()
 def init_db(db_path: Path | str | None = None) -> None:
     """Inicializa las tablas e índices si no existen y migra columnas nuevas (una vez por proceso y base)."""
     target = Path(db_path) if db_path else DB_PATH
-    key = str(target)
+    key = str(target.resolve())  # ruta absoluta: la relativa por defecto cambia de base si cambia el cwd
     if key in _initialized and target.exists():
         return
     with _init_lock:  # varios hilos (webhooks, sub-flujos) pueden llegar a la vez en la primera ejecución
