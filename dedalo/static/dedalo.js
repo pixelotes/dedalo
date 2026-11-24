@@ -2526,6 +2526,9 @@ function renderNodeExecutionSection(node, container) {
 
 let livePreviewDebounceTimer = null;
 
+// Nodes that call paid APIs or change state: never run them on every edit.
+const NO_LIVE_PREVIEW = new Set(['transform.harness', 'transform.classify']);
+
 function renderLivePreviewSection(node, spec, container) {
   const box = document.createElement('div');
   box.className = 'live-preview-box';
@@ -2853,7 +2856,7 @@ function createCoderToolsSection(node) {
       });
       updatePresetButtons();
       markDirty();
-      if (node.type.startsWith('transform.') && node.type !== 'transform.harness') triggerLivePreview(node);
+      if (node.type.startsWith('transform.') && !NO_LIVE_PREVIEW.has(node.type)) triggerLivePreview(node);
     };
 
     presetButtons[opt.id] = btn;
@@ -2900,7 +2903,7 @@ function createCoderToolsSection(node) {
       });
       updatePresetButtons();
       markDirty();
-      if (node.type.startsWith('transform.') && node.type !== 'transform.harness') triggerLivePreview(node);
+      if (node.type.startsWith('transform.') && !NO_LIVE_PREVIEW.has(node.type)) triggerLivePreview(node);
     };
     catHead.appendChild(catToggle);
     toolsBox.appendChild(catHead);
@@ -2924,7 +2927,7 @@ function createCoderToolsSection(node) {
         else activeTools.delete(tool.id);
         updatePresetButtons();
         markDirty();
-        if (node.type.startsWith('transform.') && node.type !== 'transform.harness') triggerLivePreview(node);
+        if (node.type.startsWith('transform.') && !NO_LIVE_PREVIEW.has(node.type)) triggerLivePreview(node);
       };
 
       const info = document.createElement('div');
@@ -3094,7 +3097,7 @@ function renderNodeInspector(node, body) {
       inputEl.onchange = (e) => {
         node.config[key] = e.target.value;
         markDirty();
-        if (node.type.startsWith('transform.') && node.type !== 'transform.harness') triggerLivePreview(node);
+        if (node.type.startsWith('transform.') && !NO_LIVE_PREVIEW.has(node.type)) triggerLivePreview(node);
       };
     } else if (choicesFrom === 'llms') {
       inputEl = document.createElement('select');
@@ -3122,7 +3125,7 @@ function renderNodeInspector(node, body) {
       inputEl.onchange = (e) => {
         node.config[key] = e.target.value;
         markDirty();
-        if (node.type.startsWith('transform.') && node.type !== 'transform.harness') triggerLivePreview(node);
+        if (node.type.startsWith('transform.') && !NO_LIVE_PREVIEW.has(node.type)) triggerLivePreview(node);
       };
     } else if (typeof defaultVal === 'boolean') {
       inputEl = document.createElement('input');
@@ -3131,7 +3134,7 @@ function renderNodeInspector(node, body) {
       inputEl.onchange = (e) => {
         node.config[key] = e.target.checked;
         markDirty();
-        if (node.type.startsWith('transform.') && node.type !== 'transform.harness') triggerLivePreview(node);
+        if (node.type.startsWith('transform.') && !NO_LIVE_PREVIEW.has(node.type)) triggerLivePreview(node);
       };
     } else {
       const multilineKeys = ['template', 'query', 'cmd', 'prompt', 'system_prompt', 'body', 'headers', 'message'];
@@ -3146,7 +3149,7 @@ function renderNodeInspector(node, body) {
       inputEl.oninput = (e) => {
         node.config[key] = e.target.value;
         markDirty();
-        if (node.type.startsWith('transform.') && node.type !== 'transform.harness') triggerLivePreview(node);
+        if (node.type.startsWith('transform.') && !NO_LIVE_PREVIEW.has(node.type)) triggerLivePreview(node);
       };
     }
 
@@ -3168,7 +3171,7 @@ function renderNodeInspector(node, body) {
 
   // Si es un nodo de transformación, añadir el panel de Vista Previa en Vivo
   // (no en el arnés de agente: ejecutaría herramientas reales en cada cambio de configuración)
-  if (node.type.startsWith('transform.') && node.type !== 'transform.harness') {
+  if (node.type.startsWith('transform.') && !NO_LIVE_PREVIEW.has(node.type)) {
     renderLivePreviewSection(node, spec, body);
   }
 
