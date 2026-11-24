@@ -88,7 +88,7 @@ input.imap ──▶ transform.classify ──▶ transform.harness ──▶ ou
 
 - `transform.classify` turns each item into an embedding (any OpenAI-compatible `/embeddings`: Workers AI `@cf/baai/bge-m3`, Ollama, OpenAI...) and lets the `k` most similar labelled examples vote. It returns `sure` (with `_label` and `_confidence`) and `unsure`.
 - The agent gets both lists as context, decides the `unsure` ones and calls `learn_label(_id, label)` from `tool.classifier`. Each label becomes an example, so the next run sends fewer items to the agent. It can also correct a `sure` item.
-- Until the store has `min_examples` examples everything is `unsure` (cold start). Examples live in `data/state/classifier/<store>.json` as compact float16 vectors, capped by `max_examples`.
+- Until the store has `min_examples` examples everything is `unsure` (cold start). Examples live in a SQLite file, `data/state/classifier/<store>.sqlite`, as float16 vectors (2 KB each for 1024 dimensions), capped by `max_examples`. The classifier streams them row by row and keeps only the best `k` per item, so memory does not grow with the store: with 2,000 examples a run peaks at about 4 MB.
 
 Measured on a real mailbox with Gemma as teacher: after 50 labelled emails the classifier decided 20 of the next 30 on its own in 1.9 s, 18 of them right; both mistakes had a confidence below 0.85, so `min_agreement: 0.85` sends them to the agent instead.
 
