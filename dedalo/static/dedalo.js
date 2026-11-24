@@ -870,7 +870,7 @@ async function runScheduleModalNow() {
 const NODE_CHIP_TAGS = {
   net: ['http', 'web', 'rss', 'imap', 'mqtt', 'ping', 'dns', 'ssl', 'webhook', 'weather', 'ntfy', 'telegram', 'discord', 'slack', 'email'],
   data: ['html', 'regex', 'template', 'array', 'filter', 'diff', 'dedup', 'summarize', 'clean_email', 'datetime', 'sqlite', 'file', 'json'],
-  ai: ['coder', 'agent', 'summarize'],
+  ai: ['coder', 'agent', 'harness', 'tool.', 'summarize'],
   git: ['git'],
   sys: ['pi_health', 'disk_free', 'command', 'healthcheck', 'script', 'threshold', 'router'],
 };
