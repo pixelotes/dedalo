@@ -3146,19 +3146,52 @@ def _drop_nulls(value: Any) -> Any:
     return value
 
 
+def _split_tool_arguments(raw: str) -> list[str] | None:
+    """Splits tool call arguments into one JSON object per call.
+
+    Workers AI merges several parallel calls to the same tool into one call whose arguments are
+    the JSON objects back to back (`{"key": "a"}{"key": "b"}`), and then rejects that reply when it
+    is sent back. Returns None when the text is not a sequence of JSON objects.
+    """
+    text = raw.strip()
+    if not text:
+        return ["{}"]
+    decoder = json.JSONDecoder()
+    parts: list[str] = []
+    pos = 0
+    while pos < len(text):
+        try:
+            obj, end = decoder.raw_decode(text, pos)
+        except ValueError:
+            return None
+        if not isinstance(obj, dict):
+            return None
+        parts.append(json.dumps(obj, ensure_ascii=False))
+        pos = end
+        while pos < len(text) and text[pos] in " \t\r\n,;":
+            pos += 1
+    return parts or None
+
+
+INVALID_CALLS_KEY = "_dedalo_invalid_calls"
+
+
 def _normalize_assistant_message(msg: Any, turn: int) -> dict[str, Any]:
     """Makes a model reply safe to send back in the next turn.
 
     Some OpenAI-compatible servers (Workers AI) fill absent fields with null: `"role": null`,
     tool calls with `"id": null`. Sent back as is, the next request carries a message without a
     role and tool results whose `tool_call_id` matches no call. Drop nulls, restore the role and
-    give every tool call an id.
+    give every tool call an id. Arguments holding several JSON objects become one call each;
+    arguments that are not JSON are replaced with `{}` and their call ids listed under
+    INVALID_CALLS_KEY (pop it before sending the message) so the caller can report the error.
     """
     clean = _drop_nulls(msg) if isinstance(msg, dict) else {}
     clean["role"] = "assistant"
     calls = clean.get("tool_calls")
     if isinstance(calls, list) and calls:
         fixed = []
+        invalid: list[str] = []
         for i, call in enumerate(calls):
             if not isinstance(call, dict):
                 continue
@@ -3168,8 +3201,19 @@ def _normalize_assistant_message(msg: Any, turn: int) -> dict[str, Any]:
             if isinstance(fn.get("arguments"), (dict, list)):
                 fn["arguments"] = json.dumps(fn["arguments"], ensure_ascii=False)
             fn.setdefault("arguments", "{}")
-            fixed.append(call)
+            parts = _split_tool_arguments(str(fn["arguments"]))
+            if parts is None:
+                fn["arguments"] = "{}"
+                invalid.append(call["id"])
+                parts = ["{}"]
+            for k, part in enumerate(parts):
+                copy = {**call, "function": {**fn, "arguments": part}}
+                if k:
+                    copy["id"] = f"{call['id']}_{k}"
+                fixed.append(copy)
         clean["tool_calls"] = fixed
+        if invalid:
+            clean[INVALID_CALLS_KEY] = invalid
         if not fixed:
             clean.pop("tool_calls")
     else:
@@ -3266,6 +3310,7 @@ def _react_loop(
             data = resp.json()
             choice = data["choices"][0]
             msg = _normalize_assistant_message(choice["message"], turns)
+            invalid_calls = set(msg.pop(INVALID_CALLS_KEY, ()))
             messages.append(msg)
 
             tool_calls = msg.get("tool_calls")
@@ -3291,7 +3336,9 @@ def _react_loop(
 
                 tool = by_name.get(fn_name)
                 approval_note = ""
-                if tool is None:
+                if call_id in invalid_calls:
+                    result_str = tr("Error: The arguments for '{fn_name}' were not valid JSON. Call the tool again with a single JSON object.", fn_name=fn_name)
+                elif tool is None:
                     result_str = tr("Error: The tool '{fn_name}' is not available or is not authorized on this node.", fn_name=fn_name)
                 else:
                     allowed = True
