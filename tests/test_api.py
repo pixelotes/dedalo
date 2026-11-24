@@ -189,3 +189,13 @@ def test_cross_origin_post_rejected():
 def test_same_origin_post_allowed():
     res = client.post("/api/compile", json={"graph": {}}, headers={"Origin": "http://testserver"})
     assert res.status_code != 403
+
+
+def test_editor_assets_are_revalidated():
+    # Without Cache-Control, browsers and Cloudflare kept an old dedalo.js for hours after a release.
+    res = client.get("/assets/dedalo.js")
+    assert res.status_code == 200
+    assert res.headers["cache-control"] == "no-cache"
+    assert res.headers.get("etag")
+    again = client.get("/assets/dedalo.js", headers={"If-None-Match": res.headers["etag"]})
+    assert again.status_code == 304

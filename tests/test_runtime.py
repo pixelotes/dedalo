@@ -1938,3 +1938,64 @@ def test_calendar_webcal_and_size_limit(monkeypatch):
     res = runtime.calendar_read(None, [], url="webcal://example.com/c.ics")
     assert seen["url"] == "https://example.com/c.ics"
     assert "limit" in res.error
+
+
+class _UidIMAP:
+    """IMAP server double with UIDs: SEARCH "UID n:*" also returns the newest message, like real servers."""
+
+    uids: list[int] = []
+    validity = b"7"
+    fetched: list[bytes] = []
+
+    def __init__(self, host, port, timeout=None): pass
+    def login(self, u, p): return ("OK", [b"ok"])
+    def select(self, f): return ("OK", [str(len(self.uids)).encode()])
+    def response(self, code): return (code, [self.validity])
+    def status(self, folder, what): return ("OK", [b'"INBOX" (UIDNEXT %d)' % (max(self.uids, default=0) + 1)])
+    def logout(self): return ("BYE", [b""])
+
+    def uid(self, cmd, *args):
+        if cmd == "SEARCH":
+            found = list(self.uids)
+            if "UID" in args:
+                low = int(args[args.index("UID") + 1].split(":")[0])
+                found = [u for u in found if u >= low] or found[-1:]
+            return ("OK", [" ".join(map(str, found)).encode()])
+        uid = args[0]
+        type(self).fetched.append(uid)
+        raw = (b"Subject: Mail " + uid + b"\r\nFrom: a@example.com\r\nList-Unsubscribe: <mailto:x@example.com>\r\n"
+               b"Content-Type: text/plain\r\n\r\nbody")
+        return ("OK", [(uid + b" (UID " + uid + b")", raw)])
+
+
+def test_imap_read_only_new_tracks_uids(monkeypatch, tmp_path):
+    from dedalo import secrets
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(secrets, "get", lambda name: "pwd")
+    monkeypatch.setattr("imaplib.IMAP4_SSL", _UidIMAP)
+    kw = dict(host="imap.example.com", username="u@example.com", secret="s", filter="ALL", limit=2, only_new=True, state_scope="t")
+
+    def ids():
+        res = runtime.imap_read(None, [], **kw)
+        assert res.ok, res.error
+        return [m["id"] for m in res.data]
+
+    _UidIMAP.uids = [10, 11, 12, 13]
+    assert ids() == ["13", "12"]          # first run: newest `limit`, not the whole history
+    assert ids() == []                    # nothing new ("14:*" still matches 13 on the server)
+    _UidIMAP.uids += [20, 21, 22]
+    assert ids() == ["21", "20"]          # backlog larger than limit: oldest first...
+    assert ids() == ["22"]                # ...and the rest on the next run
+    assert ids() == []
+    _UidIMAP.validity = b"8"              # mailbox recreated: start over
+    assert ids() == ["22", "21"]
+
+
+def test_imap_read_flags_bulk_mail(monkeypatch, tmp_path):
+    from dedalo import secrets
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(secrets, "get", lambda name: "pwd")
+    monkeypatch.setattr("imaplib.IMAP4_SSL", _UidIMAP)
+    _UidIMAP.uids, _UidIMAP.validity = [5], b"1"
+    res = runtime.imap_read(None, [], host="h", username="u", secret="s", only_new=True, state_scope="b")
+    assert res.ok and res.data[0]["bulk"] is True

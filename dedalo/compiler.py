@@ -663,6 +663,8 @@ NODE_TYPES: dict[str, NodeSpec] = {
             "clean_body": True,
             "strip_signatures": True,
             "max_body_chars": 3000,
+            "only_new": False,
+            "state_scope": "",
         },
         label='Mail Reader (IMAP)',
         output='list of incoming emails with subject, sender and body',
@@ -684,6 +686,8 @@ NODE_TYPES: dict[str, NodeSpec] = {
             "clean_body": 'Cleans HTML, hidden styles and invisible characters (anti prompt injection).',
             "strip_signatures": 'Removes mechanical signatures and legal/GDPR clauses from the body.',
             "max_body_chars": 'Maximum character limit per email body.',
+            "only_new": 'Return only emails that arrived since the previous run (tracked by IMAP UID in the state store). The first run returns the newest emails up to limit; a larger backlog is drained over the next runs. Ids are then IMAP UIDs.',
+            "state_scope": 'State store name for only_new (empty: the flow id). Shared with tool.memory, input.state and output.state.',
         },
     ),
     "input.sitemap": NodeSpec(

@@ -11,6 +11,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `input.state` and `output.state` nodes: key/value state between runs in `data/state/memory/`, shared with `tool.memory`.
 - `avisar-facturas` template: daily invoice alert agent (mail + memory + Telegram).
 - `transform.harness`: retries with backoff for rate limits, 5xx and dropped connections (`retries`), token usage in the output and in `data/state/usage.sqlite`, and `max_tokens`, `token_budget` and `daily_token_budget` limits.
+- `input.imap`: `only_new` returns only the mail that arrived since the previous run (tracked by IMAP UID in the state store), and every email has a `bulk` flag from its mailing-list headers.
 - `transform.classify` node and `tool.classifier`: a fast embeddings + nearest-examples classifier that decides the easy items and sends the rest to an agent, which teaches it back with `learn_label`.
 
 - `input.subflows` node: runs other flows in parallel with a timeout and returns each result (status, data, error); sub-flows skip their `output.*` nodes by default, are limited to 3 levels with cycle detection, and are linked to the parent run in the history. Not available in the standalone export. See `doc/subflows.md`.

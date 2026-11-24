@@ -54,6 +54,8 @@ Dédalo has **74 modular nodes** grouped into three families:
 ### `input.imap`
 - **Label**: Mail Reader (IMAP).
 - **Description**: Connects to mailboxes via IMAP/TLS, searches for unread messages or messages filtered by subject/sender, and extracts body, sender and attachments with injection sanitization.
+- **Only new mail**: with `only_new: True` each run returns only the emails that arrived since the previous run. The node reads by IMAP UID and stores the highest UID it handed out in the state store (`state_scope`, default the flow id), so a flow scheduled twice a day sees each email once. The first run returns the newest `limit` emails, not the whole history; a backlog larger than `limit` is drained oldest first over the next runs; if the mailbox `UIDVALIDITY` changes it starts over. Ids are then IMAP UIDs. The mark is stored when the emails are read, so if a later node fails those emails are not returned again.
+- **Output**: list of emails with `id`, `subject`, `from`, `date`, `body`, `attachments` and `bulk` (true when the headers mark a newsletter or mailing list: `List-Unsubscribe`, `List-Id` or `Precedence: bulk`).
 
 ### `input.rss`
 - **Label**: RSS / Atom Feed.
