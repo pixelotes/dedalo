@@ -62,7 +62,13 @@ def test_export_and_import_flow_zip():
 
 
 def test_export_all_flows_zip():
-    backup_bytes = store.export_all_flows_zip()
+    flow_id = "test-backup-flow"
+    graph = {"version": 1, "name": flow_id, "nodes": [{"id": "ping", "type": "input.ping", "config": {"host": "1.1.1.1"}}], "edges": []}
+    store.save_flow(flow_id, graph, force=True)
+    try:
+        backup_bytes = store.export_all_flows_zip()
+    finally:
+        store.delete_flow(flow_id)
     assert backup_bytes
     assert zipfile.is_zipfile(io.BytesIO(backup_bytes))
 
