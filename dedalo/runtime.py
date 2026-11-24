@@ -7152,6 +7152,54 @@ def clean_email_node(
     return NodeResult("ok", data=cleaned)
 
 
+def _imap_new_uids(mail: Any, crit: str, folder: str, scope: str, key: str, max_items: int) -> tuple[list[bytes], Callable[[], None]]:
+    """UIDs of the emails that arrived since the last run, newest first, and a callback that
+    stores the new high-water mark (call it once the emails have been read)."""
+    validity = ""
+    try:
+        resp = mail.response("UIDVALIDITY")[1]
+        if resp and resp[0]:
+            validity = resp[0].decode() if isinstance(resp[0], bytes) else str(resp[0])
+    except Exception:
+        validity = ""
+    saved = _state_load(scope).get(key) or {}
+    last = None
+    if isinstance(saved, dict) and str(saved.get("uidvalidity", "")) == validity:
+        try:
+            last = int(saved.get("uid"))
+        except (TypeError, ValueError):
+            last = None
+
+    args = [crit] if last is None else [crit, "UID", f"{last + 1}:*"]
+    status, data = mail.uid("SEARCH", None, *args)
+    found = sorted({int(x) for x in (data[0].split() if status == "OK" and data and data[0] else []) if x.isdigit()})
+    if last is not None:
+        found = [x for x in found if x > last]  # "n:*" always matches the newest message, even below n
+
+    if last is None:
+        picked = found[-max_items:]  # first run: the newest ones, not the whole mailbox history
+        mark = max(found) if found else 0
+        try:  # start after everything that is already there, matched by the filter or not
+            st, st_data = mail.status(f'"{folder}"', "(UIDNEXT)")
+            m = re.search(rb"UIDNEXT (\d+)", st_data[0] if st == "OK" and st_data else b"")
+            if m:
+                mark = max(mark, int(m.group(1)) - 1)
+        except Exception:
+            pass
+    else:
+        picked = found[:max_items]  # oldest first, so a backlog drains over the next runs
+        mark = picked[-1] if len(found) > max_items else (found[-1] if found else last)
+
+    def commit() -> None:
+        if last is not None and mark <= last:
+            return
+        def apply(state: dict[str, Any]) -> None:
+            state[key] = {"uid": mark, "uidvalidity": validity}
+        _state_update(scope, apply)
+
+    return [str(x).encode() for x in reversed(picked)], commit
+
+
 def imap_read(
     ctx: Any,
     inputs: list[NodeResult],
@@ -7168,8 +7216,16 @@ def imap_read(
     clean_body: bool = True,
     strip_signatures: bool = True,
     max_body_chars: int = 3000,
+    only_new: bool = False,
+    state_scope: str = "",
 ) -> NodeResult:
-    """Lee correos electrónicos vía IMAP sobre TLS con imaplib nativo y sanitización anti prompt-injection."""
+    """Lee correos electrónicos vía IMAP sobre TLS con imaplib nativo y sanitización anti prompt-injection.
+
+    With only_new, emails are read by UID and the highest UID handed out is stored in the state
+    store (data/state/memory/<scope>.json), so every run returns only mail that arrived since the
+    previous one. The first run returns the newest `limit` emails; a backlog larger than `limit`
+    is drained oldest first over the following runs. A new UIDVALIDITY starts over.
+    """
     h = host.strip()
     u = username.strip()
     if not h or not u:
@@ -7188,19 +7244,30 @@ def imap_read(
         mail.select(folder or "INBOX")
 
         crit = filter.strip() or "UNSEEN"
-        status, messages = mail.search(None, crit)
-        if status != "OK" or not messages or not messages[0]:
-            mail.logout()
-            return NodeResult("ok", data=[])
-
-        mail_ids = messages[0].split()
-        selected_ids = mail_ids[-max_items:]
-        selected_ids.reverse()
+        fetch_cmd = "(RFC822)" if mark_as_read else "(BODY.PEEK[])"
+        if only_new:
+            scope = _state_scope(ctx, state_scope)
+            selected_ids, commit_uid = _imap_new_uids(mail, crit, folder or "INBOX", scope, f"imap:{u}@{h}/{folder or 'INBOX'}", max_items)
+            if not selected_ids:
+                commit_uid()
+                mail.logout()
+                return NodeResult("ok", data=[])
+        else:
+            commit_uid = None
+            status, messages = mail.search(None, crit)
+            if status != "OK" or not messages or not messages[0]:
+                mail.logout()
+                return NodeResult("ok", data=[])
+            mail_ids = messages[0].split()
+            selected_ids = mail_ids[-max_items:]
+            selected_ids.reverse()
 
         emails_res: list[dict[str, Any]] = []
         for mid in selected_ids:
-            fetch_cmd = "(RFC822)" if mark_as_read else "(BODY.PEEK[])"
-            status, data = mail.fetch(mid, fetch_cmd)
+            if only_new:
+                status, data = mail.uid("FETCH", mid, fetch_cmd)
+            else:
+                status, data = mail.fetch(mid, fetch_cmd)
             if status != "OK" or not data or not data[0]:
                 continue
 
@@ -7273,6 +7340,7 @@ def imap_read(
             clean_subject = _INVISIBLE_CHARS_RE.sub("", subject).strip()
             clean_sender = _INVISIBLE_CHARS_RE.sub("", sender).strip()
 
+            precedence = str(msg.get("Precedence", "")).strip().lower()
             emails_res.append({
                 "id": mid.decode() if isinstance(mid, bytes) else str(mid),
                 "subject": clean_subject,
@@ -7280,8 +7348,12 @@ def imap_read(
                 "date": date_str,
                 "body": final_body,
                 "attachments": attachment_names,
+                # Newsletters and mailing lists announce themselves in their headers.
+                "bulk": bool(msg.get("List-Unsubscribe") or msg.get("List-Id") or precedence in ("bulk", "list", "junk")),
             })
 
+        if commit_uid is not None:
+            commit_uid()
         mail.logout()
         return NodeResult("ok", data=emails_res)
     except Exception as exc:
