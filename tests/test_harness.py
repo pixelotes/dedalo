@@ -356,3 +356,24 @@ def test_state_write_set_and_append(tmp_path, monkeypatch):
     assert state_read(Ctx(), [], key="missing", default="none").data == "none"
     assert state_write(Ctx(), [NodeResult("ok", data=1)], key="../evil").failed
     assert state_write(Ctx(), [NodeResult("ok", data="z" * 300)], key="big", max_bytes=200).failed
+
+
+def test_workers_ai_null_fields_are_normalized_before_the_next_turn():
+    # Workers AI returns "role": null, "content": null and tool calls with "id": null
+    raw = MagicMock(status_code=200)
+    raw.json.return_value = {"choices": [{"message": {
+        "role": None, "content": None, "reasoning_content": None,
+        "tool_calls": [{"id": None, "type": "function", "function": {"name": "look", "arguments": {"q": 1}}}],
+    }}]}
+    seen: list[dict[str, Any]] = []
+    tool = AgentTool("look", "d", {}, lambda a: seen.append(a) or "result", risk="read")
+    with patch("httpx.Client.post", side_effect=[raw, _llm_reply("done")]) as post:
+        out = _loop([tool])
+    assert seen == [{"q": 1}] and out["response"] == "done"
+    sent = post.call_args_list[1].kwargs["json"]["messages"]
+    assistant, tool_msg = sent[2], sent[3]
+    assert assistant["role"] == "assistant" and assistant["content"] == ""
+    assert "reasoning_content" not in assistant
+    call = assistant["tool_calls"][0]
+    assert call["id"] and call["id"] == tool_msg["tool_call_id"]
+    assert call["function"]["arguments"] == '{"q": 1}'

@@ -3138,6 +3138,47 @@ class AgentTool:
         return False
 
 
+def _drop_nulls(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_drop_nulls(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _drop_nulls(v) for k, v in value.items() if v is not None}
+    return value
+
+
+def _normalize_assistant_message(msg: Any, turn: int) -> dict[str, Any]:
+    """Makes a model reply safe to send back in the next turn.
+
+    Some OpenAI-compatible servers (Workers AI) fill absent fields with null: `"role": null`,
+    tool calls with `"id": null`. Sent back as is, the next request carries a message without a
+    role and tool results whose `tool_call_id` matches no call. Drop nulls, restore the role and
+    give every tool call an id.
+    """
+    clean = _drop_nulls(msg) if isinstance(msg, dict) else {}
+    clean["role"] = "assistant"
+    calls = clean.get("tool_calls")
+    if isinstance(calls, list) and calls:
+        fixed = []
+        for i, call in enumerate(calls):
+            if not isinstance(call, dict):
+                continue
+            call.setdefault("type", "function")
+            call.setdefault("id", f"call_{turn}_{i}")
+            fn = call.setdefault("function", {})
+            if isinstance(fn.get("arguments"), (dict, list)):
+                fn["arguments"] = json.dumps(fn["arguments"], ensure_ascii=False)
+            fn.setdefault("arguments", "{}")
+            fixed.append(call)
+        clean["tool_calls"] = fixed
+        if not fixed:
+            clean.pop("tool_calls")
+    else:
+        clean.pop("tool_calls", None)
+    if "content" not in clean:
+        clean["content"] = ""
+    return clean
+
+
 def _react_loop(
     *,
     messages: list[dict[str, Any]],
@@ -3224,7 +3265,7 @@ def _react_loop(
 
             data = resp.json()
             choice = data["choices"][0]
-            msg = choice["message"]
+            msg = _normalize_assistant_message(choice["message"], turns)
             messages.append(msg)
 
             tool_calls = msg.get("tool_calls")
@@ -3234,7 +3275,7 @@ def _react_loop(
                 break
 
             for call in tool_calls:
-                call_id = call.get("id") or f"call_{len(tool_calls_log)}"
+                call_id = call["id"]
                 fn = call.get("function", {})
                 fn_name = fn.get("name", "")
                 raw_args = fn.get("arguments", "{}")
