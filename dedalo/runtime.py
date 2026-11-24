@@ -7,6 +7,7 @@ Los scripts compilados invocan directamente estas funciones sin sobrecarga de ru
 from __future__ import annotations
 
 import base64
+import contextlib
 import ctypes
 import datetime
 import email
@@ -16,6 +17,7 @@ import gzip
 import hashlib
 import html
 import json
+import logging
 import math
 import os
 import random
@@ -3223,6 +3225,64 @@ def _normalize_assistant_message(msg: Any, turn: int) -> dict[str, Any]:
     return clean
 
 
+RETRY_STATUSES = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 520, 522, 524})
+
+
+def _post_with_retry(
+    client: httpx.Client,
+    url: str,
+    *,
+    headers: dict[str, str],
+    json: dict[str, Any],
+    retries: int = 2,
+    deadline: float | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+) -> httpx.Response:
+    """POST that retries rate limits (429), server errors (5xx), timeouts and dropped connections.
+
+    Waits 1, 2, 4... seconds with jitter, or what Retry-After asks for (up to 60 s), and never
+    waits past `deadline`. Other 4xx responses are returned at once: repeating them cannot help.
+    """
+    attempts = max(0, int(retries or 0)) + 1
+    for attempt in range(attempts):
+        last = attempt == attempts - 1
+        try:
+            resp = client.post(url, headers=headers, json=json)
+        except (httpx.TimeoutException, httpx.TransportError):
+            if last:
+                raise
+            resp = None
+        if resp is not None and (resp.status_code not in RETRY_STATUSES or last):
+            return resp
+        wait = min(30.0, 2.0 ** attempt) * random.uniform(0.6, 1.0)
+        if resp is not None:
+            try:
+                wait = min(60.0, max(wait, float(resp.headers.get("retry-after", "") or 0)))
+            except ValueError:
+                pass
+        if deadline is not None and time.monotonic() + wait >= deadline:
+            if resp is not None:
+                return resp
+            raise httpx.TimeoutException(tr("No time left to retry the request"))
+        sleep(wait)
+    raise RuntimeError("unreachable")  # pragma: no cover
+
+
+def _add_usage(total: dict[str, Any], data: Any) -> None:
+    """Adds a response's `usage` (tokens; Workers AI also reports neurons) to the running total."""
+    total["requests"] = total.get("requests", 0) + 1
+    usage = data.get("usage") if isinstance(data, dict) else None
+    if not isinstance(usage, dict):
+        return
+    prompt = int(usage.get("prompt_tokens") or 0)
+    completion = int(usage.get("completion_tokens") or 0)
+    total["prompt_tokens"] = total.get("prompt_tokens", 0) + prompt
+    total["completion_tokens"] = total.get("completion_tokens", 0) + completion
+    total["total_tokens"] = total.get("total_tokens", 0) + int(usage.get("total_tokens") or prompt + completion)
+    if usage.get("neurons") is not None:
+        total["neurons"] = round(total.get("neurons", 0.0) + float(usage["neurons"]), 3)
+
+
 def _react_loop(
     *,
     messages: list[dict[str, Any]],
@@ -3240,13 +3300,20 @@ def _react_loop(
     deadline: float | None = None,
     on_tool_result: Callable[[str, dict[str, Any]], None] | None = None,
     extra_body: dict[str, Any] | None = None,
+    retries: int = 2,
+    max_tokens: int = 0,
+    token_budget: int = 0,
+    usage: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Multi-turn ReAct loop shared by the agent nodes.
 
     Calls the model, runs the tools it asks for, feeds the results back and repeats until the
-    model answers without tool calls, the turn limit is hit or the deadline passes. Raises
-    `_LLMHTTPError` when the model endpoint returns an HTTP error.
+    model answers without tool calls, the turn limit is hit, the deadline passes or the run has
+    used `token_budget` tokens. Transient errors are retried (`retries`); `max_tokens` caps each
+    reply. Token usage is added to `usage` as it happens, so the caller keeps it even when this
+    raises `_LLMHTTPError` (the model endpoint returned an HTTP error).
     """
+    usage = usage if usage is not None else {}
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -3267,6 +3334,9 @@ def _react_loop(
         for _ in range(turn_limit):
             if deadline is not None and time.monotonic() >= deadline:
                 stop_reason = "deadline"
+                break
+            if token_budget and usage.get("total_tokens", 0) >= int(token_budget):
+                stop_reason = "token_budget"
                 break
             turns += 1
 
@@ -3303,14 +3373,17 @@ def _react_loop(
             }
             if tools_spec:
                 payload["tools"] = tools_spec
+            if max_tokens and int(max_tokens) > 0:
+                payload["max_tokens"] = int(max_tokens)
             if extra_body:
                 payload.update(extra_body)
 
-            resp = client.post(endpoint, headers=headers, json=payload)
+            resp = _post_with_retry(client, endpoint, headers=headers, json=payload, retries=retries, deadline=deadline)
             if resp.status_code >= 400:
                 raise _LLMHTTPError(resp.status_code, resp.text[:300])
 
             data = resp.json()
+            _add_usage(usage, data)
             choice = data["choices"][0]
             msg = _normalize_assistant_message(choice["message"], turns)
             invalid_calls = set(msg.pop(INVALID_CALLS_KEY, ()))
@@ -3428,20 +3501,22 @@ def _react_loop(
             )
             messages.append({
                 "role": "user",
-                "content": tr('The turn limit has been reached. Briefly summarize the actions performed and the current state.'),
+                "content": tr('The token budget for this run has been used up. Briefly summarize the actions performed and the current state.') if stop_reason == "token_budget" else tr('The turn limit has been reached. Briefly summarize the actions performed and the current state.'),
             })
             try:
-                final_resp = client.post(
-                    endpoint,
-                    headers=headers,
-                    json={
-                        "model": target_model,
-                        "messages": messages,
-                        "temperature": float(temperature),
-                    },
-                )
+                summary_body: dict[str, Any] = {
+                    "model": target_model,
+                    "messages": messages,
+                    "temperature": float(temperature),
+                }
+                if max_tokens and int(max_tokens) > 0:
+                    summary_body["max_tokens"] = int(max_tokens)
+                if extra_body:
+                    summary_body.update(extra_body)
+                final_resp = _post_with_retry(client, endpoint, headers=headers, json=summary_body, retries=retries)
                 if final_resp.status_code == 200:
                     final_data = final_resp.json()
+                    _add_usage(usage, final_data)
                     final_response = (final_data["choices"][0]["message"].get("content") or "").strip()
             except Exception:
                 final_response = (messages[-2].get("content") or tr('Turn limit reached.')).strip()
@@ -3460,6 +3535,7 @@ def _react_loop(
             if not c["tool"].endswith("_compact") and c["tool"] != "loop_detected_alert"
         ]),
         "tool_history": tool_calls_log,
+        "usage": dict(usage),
     }
 
 
@@ -3626,6 +3702,7 @@ def coder_agent(
         return NodeResult("error", error=tr('Error in programming agent loop: {exc}', exc=exc))
 
     res_data.pop("stop_reason", None)
+    res_data.pop("usage", None)
     if (output_format or "").lower().strip() == "text":
         return NodeResult("ok", data=res_data["response"])
     return NodeResult("ok", data=res_data)
@@ -4558,7 +4635,7 @@ def _embed_texts(texts: list[str], *, llm: str, url: str, model: str, secret: st
     with httpx.Client(timeout=float(timeout)) as client:
         for i in range(0, len(texts), CLASSIFY_BATCH):
             batch = texts[i:i + CLASSIFY_BATCH]
-            resp = client.post(endpoint, headers=headers, json={"model": model_name, "input": batch})
+            resp = _post_with_retry(client, endpoint, headers=headers, json={"model": model_name, "input": batch})
             if resp.status_code >= 400:
                 raise RuntimeError(tr("Embeddings API returned HTTP {status}: {text}", status=resp.status_code, text=resp.text[:200]))
             rows = sorted(resp.json().get("data") or [], key=lambda r: r.get("index", 0))
@@ -4859,6 +4936,51 @@ def _thinking_settings(thinking: str, model: str) -> tuple[dict[str, Any], str]:
     return body, suffix
 
 
+_USAGE_LOCK = threading.Lock()
+
+
+def _usage_db() -> sqlite3.Connection:
+    path = Path("data/state/usage.sqlite")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path, timeout=10.0)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS usage (day TEXT NOT NULL, scope TEXT NOT NULL, requests INTEGER NOT NULL DEFAULT 0, "
+        "prompt_tokens INTEGER NOT NULL DEFAULT 0, completion_tokens INTEGER NOT NULL DEFAULT 0, "
+        "total_tokens INTEGER NOT NULL DEFAULT 0, neurons REAL NOT NULL DEFAULT 0, PRIMARY KEY (day, scope))"
+    )
+    return conn
+
+
+def _usage_record(scope: str, usage: dict[str, Any]) -> None:
+    """Adds a run's model usage to today's row for the flow (data/state/usage.sqlite)."""
+    if not usage or not usage.get("requests"):
+        return
+    try:
+        with _USAGE_LOCK, contextlib.closing(_usage_db()) as conn:
+            conn.execute(
+                "INSERT INTO usage (day, scope, requests, prompt_tokens, completion_tokens, total_tokens, neurons) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(day, scope) DO UPDATE SET "
+                "requests = requests + excluded.requests, prompt_tokens = prompt_tokens + excluded.prompt_tokens, "
+                "completion_tokens = completion_tokens + excluded.completion_tokens, "
+                "total_tokens = total_tokens + excluded.total_tokens, neurons = neurons + excluded.neurons",
+                (datetime.date.today().isoformat(), scope, int(usage.get("requests", 0)), int(usage.get("prompt_tokens", 0)),
+                 int(usage.get("completion_tokens", 0)), int(usage.get("total_tokens", 0)), float(usage.get("neurons", 0.0))),
+            )
+            conn.commit()
+    except Exception:
+        logging.getLogger(__name__).warning("Could not record model usage for %s", scope, exc_info=True)
+
+
+def _usage_today(scope: str) -> dict[str, Any]:
+    try:
+        with _USAGE_LOCK, contextlib.closing(_usage_db()) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT * FROM usage WHERE day = ? AND scope = ?", (datetime.date.today().isoformat(), scope)).fetchone()
+            return dict(row) if row else {}
+    except Exception:
+        return {}
+
+
 HARNESS_MAX_TURNS = 50
 
 
@@ -4886,8 +5008,20 @@ def harness_agent(
     temperature: float | None = None,
     timeout: float = 120.0,
     thinking: str = "default",
+    retries: int = 2,
+    max_tokens: int = 0,
+    token_budget: int = 0,
+    daily_token_budget: int = 0,
 ) -> NodeResult:
     """Generic agent harness: ReAct loop whose tools come from connected tool.* nodes."""
+    ledger_scope = str(getattr(ctx, "flow_name", "") or "default")
+    run_budget = max(0, int(token_budget or 0))
+    if daily_token_budget and int(daily_token_budget) > 0:
+        spent = _usage_today(ledger_scope).get("total_tokens", 0)
+        left = int(daily_token_budget) - spent
+        if left <= 0:
+            return NodeResult("error", error=tr("Daily token budget reached for '{flow}': {spent} of {budget} tokens used today", flow=ledger_scope, spent=spent, budget=int(daily_token_budget)))
+        run_budget = min(run_budget, left) if run_budget else left
     descriptors = [r.data for r in inputs if r.ok and _is_tool_descriptor(r.data)]
     data_inputs = [r for r in inputs if not (r.ok and _is_tool_descriptor(r.data))]
 
@@ -4938,6 +5072,7 @@ def harness_agent(
         {"role": "user", "content": user_msg},
     ]
 
+    run_usage: dict[str, Any] = {}
     try:
         endpoint_cfg = _resolve_agent_llm(
             llm=llm, model=model, url=url, secret=secret, max_context=max_context,
@@ -4961,11 +5096,17 @@ def harness_agent(
             approver=approver,
             deadline=time.monotonic() + max(10.0, float(max_seconds or 900.0)),
             extra_body=extra_body,
+            retries=retries,
+            max_tokens=max_tokens,
+            token_budget=run_budget,
+            usage=run_usage,
         )
     except _LLMHTTPError as exc:
         return NodeResult("error", error=tr('LLM API returned HTTP {status_code}: {text}', status_code=exc.status_code, text=exc.text))
     except Exception as exc:
         return NodeResult("error", error=tr("Error in agent loop: {exc}", exc=exc))
+    finally:
+        _usage_record(ledger_scope, run_usage)
 
     res_data["tools"] = sorted(seen)
     response = res_data["response"]

@@ -96,6 +96,15 @@ Measured on a real mailbox with Gemma as teacher: after 50 labelled emails the c
 
 Models such as Gemma, Qwen or DeepSeek reason before answering. In a tool loop that can mean thousands of hidden tokens per turn: the mail triage agent went from about 220 s to 60 s on Workers AI with `thinking` set to `off`, with the same results. `on` forces it and `default` sends nothing. Each family has its own switch: `chat_template_kwargs.enable_thinking` for Gemma, GLM and DeepSeek, that plus `/no_think` in the system prompt for Qwen, `reasoning_effort: low` for gpt-oss (it cannot stop reasoning), and nothing for Mistral, which rejects template parameters. Raise `timeout` (seconds per model request) if you keep reasoning on.
 
+## Retries and cost control
+
+- **Retries** (`retries`, default 2): model and embedding requests are repeated after a 429, a 5xx, a timeout or a dropped connection, waiting 1, 2, 4... seconds with jitter or what `Retry-After` asks for, and never past the run's time budget. Other 4xx errors are not retried. Tool calls are not retried automatically: a tool that sends or changes something must not run twice.
+- **Usage**: the `full` output has `usage` (requests, prompt, completion and total tokens, and Workers AI neurons when reported). Every run adds it to `data/state/usage.sqlite`, one row per flow and day, also when the run fails half way.
+- **Limits**:
+  - `max_tokens` caps each reply (it also stops runaway reasoning);
+  - `token_budget` caps the run: when it is used up the agent summarizes and stops, with `stop_reason: token_budget`;
+  - `daily_token_budget` caps the flow per day: once spent, the node fails with a clear error (the failure branch can notify you) until the next day.
+
 ## Limits
 
 - The model must support OpenAI-style tool calling.

@@ -1070,5 +1070,12 @@
  "Example store of the transform.classify node to teach (empty: the flow id).": "Almacén de ejemplos del nodo transform.classify al que enseñar (vacío: el id del flujo).",
  "Allowed labels, comma separated (optional; the model can only use these).": "Etiquetas permitidas, separadas por comas (opcional; el modelo solo puede usar estas).",
  "Examples kept; the oldest are forgotten first.": "Ejemplos que se conservan; se olvidan primero los más antiguos.",
- "Prefix for the tool name, to use two classifiers on one harness.": "Prefijo del nombre de la herramienta, para usar dos clasificadores en un mismo arnés."
+ "Prefix for the tool name, to use two classifiers on one harness.": "Prefijo del nombre de la herramienta, para usar dos clasificadores en un mismo arnés.",
+ "Retries for each model request after a rate limit (429), a server error (5xx), a timeout or a dropped connection, waiting 1, 2, 4... seconds or what Retry-After asks for.": "Reintentos de cada petición al modelo tras un límite de peticiones (429), un error del servidor (5xx), un timeout o una conexión cortada, esperando 1, 2, 4... segundos o lo que pida Retry-After.",
+ "Maximum tokens per model reply (0: no limit). Also cuts runaway reasoning.": "Tokens máximos por respuesta del modelo (0: sin límite). También corta razonamientos desbocados.",
+ "Maximum tokens for the whole run (0: no limit); when used up the agent summarizes and stops.": "Tokens máximos para toda la ejecución (0: sin límite); al agotarse el agente resume y para.",
+ "Maximum tokens per day for this flow (0: no limit); once spent, runs fail until the next day. Usage is kept in data/state/usage.sqlite.": "Tokens máximos al día para este flujo (0: sin límite); una vez gastados, las ejecuciones fallan hasta el día siguiente. El consumo se guarda en data/state/usage.sqlite.",
+ "Daily token budget reached for '{flow}': {spent} of {budget} tokens used today": "Presupuesto diario de tokens agotado para '{flow}': {spent} de {budget} tokens usados hoy",
+ "The token budget for this run has been used up. Briefly summarize the actions performed and the current state.": "Se ha agotado el presupuesto de tokens de esta ejecución. Resume brevemente las acciones realizadas y el estado actual.",
+ "No time left to retry the request": "No queda tiempo para reintentar la petición"
 }

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 from dedalo import compiler, runtime
@@ -24,6 +26,12 @@ from dedalo.runtime import (
     tool_mcp,
     tool_memory,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_data_dir(tmp_path, monkeypatch):
+    """The harness writes state and usage under data/: keep it out of the repository."""
+    monkeypatch.chdir(tmp_path)
 
 
 class Ctx:
@@ -424,3 +432,81 @@ def test_thinking_option_uses_each_model_switch(model, mode, body, suffix):
         assert system.endswith(suffix)
     else:
         assert "/no_think" not in system and "/think" not in system
+
+
+# -- Retries and cost control ---------------------------------------------------
+
+
+def _with_usage(resp: MagicMock, prompt: int, completion: int, neurons: float | None = None) -> MagicMock:
+    body = resp.json.return_value
+    body["usage"] = {"prompt_tokens": prompt, "completion_tokens": completion}
+    if neurons is not None:
+        body["usage"]["neurons"] = neurons
+    return resp
+
+
+def _status(code: int, retry_after: str = "") -> MagicMock:
+    resp = MagicMock(status_code=code, text=f"error {code}")
+    resp.headers = {"retry-after": retry_after} if retry_after else {}
+    return resp
+
+
+def test_post_with_retry_retries_transient_errors_only():
+    waits: list[float] = []
+    client = MagicMock()
+    client.post.side_effect = [_status(429, "3"), httpx.ConnectError("reset"), _status(200)]
+    resp = runtime._post_with_retry(client, "u", headers={}, json={}, retries=2, sleep=waits.append)
+    assert resp.status_code == 200 and client.post.call_count == 3
+    assert waits[0] == 3.0  # Retry-After is honoured
+    assert 1.2 <= waits[1] <= 2.0  # then exponential backoff with jitter
+
+    client.post.side_effect = [_status(400)]
+    assert runtime._post_with_retry(client, "u", headers={}, json={}, retries=2, sleep=waits.append).status_code == 400
+
+    client.post.side_effect = [_status(503), _status(503), _status(503)]
+    assert runtime._post_with_retry(client, "u", headers={}, json={}, retries=2, sleep=lambda s: None).status_code == 503
+
+
+def test_post_with_retry_never_waits_past_the_deadline():
+    client = MagicMock()
+    client.post.side_effect = [_status(429, "50"), _status(200)]
+    resp = runtime._post_with_retry(client, "u", headers={}, json={}, retries=2, deadline=time.monotonic() + 5,
+                                    sleep=lambda s: pytest.fail("must not sleep"))
+    assert resp.status_code == 429 and client.post.call_count == 1
+
+
+def test_harness_retries_a_rate_limited_model_and_reports_usage(monkeypatch):
+    monkeypatch.setattr(runtime.time, "sleep", lambda s: None)
+    replies = [_status(429), _with_usage(_llm_reply("done"), 100, 20, neurons=1.5)]
+    with patch("httpx.Client.post", side_effect=replies) as post:
+        res = harness_agent(Ctx(), [], prompt="go", **HARNESS_KW)
+    assert res.ok and post.call_count == 2
+    assert res.data["usage"] == {"requests": 1, "prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120, "neurons": 1.5}
+    assert runtime._usage_today("invoices")["total_tokens"] == 120  # recorded for the flow
+
+
+def test_max_tokens_is_sent_and_token_budget_stops_the_loop():
+    calls = [_with_usage(_llm_reply(tool_calls=[_call("memory_get", {"key": "x"}, f"c{i}")]), 900, 200) for i in range(2)]
+    calls.append(_llm_reply("summary"))
+    with patch("httpx.Client.post", side_effect=calls) as post:
+        res = harness_agent(Ctx(), [tool_memory(Ctx(), [])], prompt="go", max_turns=10, max_tokens=256, token_budget=2000, **HARNESS_KW)
+    assert res.ok
+    assert res.data["stop_reason"] == "token_budget"
+    assert res.data["turns_used"] == 2  # 1100 + 1100 tokens >= 2000 after the second reply
+    assert res.data["response"] == "summary"
+    assert all(c.kwargs["json"].get("max_tokens") == 256 for c in post.call_args_list)
+
+
+def test_daily_token_budget_blocks_the_run_once_spent():
+    runtime._usage_record("invoices", {"requests": 1, "total_tokens": 5000})
+    with patch("httpx.Client.post") as post:
+        res = harness_agent(Ctx(), [], prompt="go", daily_token_budget=5000, **HARNESS_KW)
+    assert not res.ok and "Daily token budget" in res.error and post.call_count == 0
+
+
+def test_usage_is_recorded_even_when_the_model_fails_later():
+    replies = [_with_usage(_llm_reply(tool_calls=[_call("memory_get", {"key": "x"})]), 50, 10), _status(400)]
+    with patch("httpx.Client.post", side_effect=replies):
+        res = harness_agent(Ctx(), [tool_memory(Ctx(), [])], prompt="go", **HARNESS_KW)
+    assert not res.ok and "400" in res.error
+    assert runtime._usage_today("invoices")["total_tokens"] == 60
