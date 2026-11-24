@@ -10,6 +10,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Tool nodes: `tool.mail` (IMAP/SMTP), `tool.http`, `tool.mcp` (Streamable HTTP client, no SDK), `tool.flow` and `tool.memory`, each with an approval policy (`never`, `write`, `always`).
 - `input.state` and `output.state` nodes: key/value state between runs in `data/state/memory/`, shared with `tool.memory`.
 - `avisar-facturas` template: daily invoice alert agent (mail + memory + Telegram).
+- `transform.classify` node and `tool.classifier`: a fast embeddings + nearest-examples classifier that decides the easy items and sends the rest to an agent, which teaches it back with `learn_label`.
 
 - `input.subflows` node: runs other flows in parallel with a timeout and returns each result (status, data, error); sub-flows skip their `output.*` nodes by default, are limited to 3 levels with cycle detection, and are linked to the parent run in the history. Not available in the standalone export. See `doc/subflows.md`.
 - `input.calendar` node: reads iCalendar (`.ics`) URLs, such as Google Calendar's secret address, with recurring event expansion; the URL is meant to be stored as a secret.

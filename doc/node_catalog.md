@@ -136,6 +136,12 @@ Dédalo has **74 modular nodes** grouped into three families:
 - **Interactive Inspector Panel**: Lets you enable or revoke individual tools with checkboxes grouped by permission category (Read, Write, Shell and Network), or pick quick profiles (`Coding`, `Read-Only`, `All`, `Custom`).
 - **Compaction**: When the context reaches 90% of the model's window, the history is compacted automatically using the **Blackhole** or **Luhn+** algorithms.
 
+### `transform.classify`
+- **Label**: Fast Classifier (embeddings).
+- **Description**: Labels each input item with the similarity-weighted vote of its `k` most similar labelled examples, using any OpenAI-compatible `/embeddings` endpoint. Items whose winning label has less than `min_agreement` of the vote, or that arrive before the store has `min_examples` examples, go to `unsure`, usually for a `transform.harness` that decides them and teaches the classifier with `tool.classifier`. See `doc/agent_harness.md`.
+- **Parameters**: `text` (template such as `{from} | {subject}`), `store`, `labels`, `id_field` (`id`), `k` (5), `min_agreement` (0.8), `min_examples` (20), `llm`/`url`/`secret`, `model` (embedding model, or `DEDALO_EMBED_MODEL`), `timeout`.
+- **Output**: `{"sure": [...], "unsure": [...], "counts": {label: n}, "examples": n}`. Items keep their fields and get `_id`, `_label` and `_confidence`; unsure ones also `_neighbours`.
+
 ### `transform.harness`
 - **Label**: Agent Harness.
 - **Description**: Generic agent with the ReAct loop of `transform.coder` but no built-in tools: it uses the tools of the `tool.*` nodes connected to it. Other inputs are added to the prompt as context, and the current date and time go into the system prompt.
@@ -228,6 +234,10 @@ Tool nodes only connect to `transform.harness`. They emit a tool descriptor, not
 ### `tool.flow`
 - **Label**: Flow as Tool.
 - **Description**: Runs a saved flow (without its `output.*` nodes by default) and returns its result.
+
+### `tool.classifier`
+- **Label**: Classifier Teaching Tool.
+- **Description**: Gives the harness `learn_label(id, label)`, which stores an item seen by `transform.classify` as a labelled example (no new embedding call). Labels can be limited with `labels`; `max_examples` (2000) caps the store, forgetting the oldest.
 
 ### `tool.memory`
 - **Label**: Memory Tool.
