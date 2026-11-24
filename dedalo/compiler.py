@@ -1098,7 +1098,7 @@ NODE_TYPES: dict[str, NodeSpec] = {
             "approval_timeout": 'Seconds to wait for an answer; with no answer the call is denied.',
             "temperature": 'Model temperature.',
             "timeout": 'Maximum time in seconds per model request.',
-            "thinking": "Turns the model's reasoning on or off (chat_template_kwargs.enable_thinking, for Gemma, Qwen, GLM, DeepSeek...). Off is much faster for simple tasks. Some servers reject the field: keep 'Model default' if requests fail.",
+            "thinking": "Turns the model's reasoning on or off with each family's switch (chat_template_kwargs for Gemma, Qwen, GLM, DeepSeek; /no_think for Qwen; reasoning_effort low for gpt-oss; Mistral has none). Off is much faster for simple tasks.",
         },
     ),
     "transform.analyzer": NodeSpec(
