@@ -1077,5 +1077,12 @@
  "Maximum tokens per day for this flow (0: no limit); once spent, runs fail until the next day. Usage is kept in data/state/usage.sqlite.": "Tokens máximos al día para este flujo (0: sin límite); una vez gastados, las ejecuciones fallan hasta el día siguiente. El consumo se guarda en data/state/usage.sqlite.",
  "Daily token budget reached for '{flow}': {spent} of {budget} tokens used today": "Presupuesto diario de tokens agotado para '{flow}': {spent} de {budget} tokens usados hoy",
  "The token budget for this run has been used up. Briefly summarize the actions performed and the current state.": "Se ha agotado el presupuesto de tokens de esta ejecución. Resume brevemente las acciones realizadas y el estado actual.",
- "No time left to retry the request": "No queda tiempo para reintentar la petición"
+ "No time left to retry the request": "No queda tiempo para reintentar la petición",
+ "JSON Schema of the result (optional). The agent must finish by calling submit_result with data that matches it; invalid results are sent back for a fix. With output_format text the node outputs the result object.": "JSON Schema del resultado (opcional). El agente debe terminar llamando a submit_result con datos que lo cumplan; si no lo cumplen se le devuelven para que los corrija. Con output_format text el nodo emite el objeto resultado.",
+ "Submit the final result of the task. Call it once, when you are done; the run ends when the result is valid.": "Entrega el resultado final de la tarea. Llámala una vez, al terminar; la ejecución acaba cuando el resultado es válido.",
+ "When you are done, call {tool} with the final result instead of answering in text.": "Cuando termines, llama a {tool} con el resultado final en lugar de responder con texto.",
+ "Result accepted.": "Resultado aceptado.",
+ "output_schema is not valid JSON: {exc}": "output_schema no es JSON válido: {exc}",
+ "output_schema must be a JSON Schema object": "output_schema debe ser un objeto JSON Schema",
+ "The agent did not return a result that matches output_schema (stopped by {reason})": "El agente no devolvió un resultado que cumpla output_schema (se detuvo por {reason})"
 }

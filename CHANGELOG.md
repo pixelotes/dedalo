@@ -10,6 +10,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Tool nodes: `tool.mail` (IMAP/SMTP), `tool.http`, `tool.mcp` (Streamable HTTP client, no SDK), `tool.flow` and `tool.memory`, each with an approval policy (`never`, `write`, `always`).
 - `input.state` and `output.state` nodes: key/value state between runs in `data/state/memory/`, shared with `tool.memory`.
 - `avisar-facturas` template: daily invoice alert agent (mail + memory + Telegram).
+- `transform.harness`: `output_schema` for structured results through a `submit_result` tool, validated with a built-in JSON Schema subset and sent back to the model when invalid.
 - `transform.harness`: retries with backoff for rate limits, 5xx and dropped connections (`retries`), token usage in the output and in `data/state/usage.sqlite`, and `max_tokens`, `token_budget` and `daily_token_budget` limits.
 - `input.imap`: `only_new` returns only the mail that arrived since the previous run (tracked by IMAP UID in the state store), and every email has a `bulk` flag from its mailing-list headers.
 - `transform.classify` node and `tool.classifier`: a fast embeddings + nearest-examples classifier that decides the easy items and sends the rest to an agent, which teaches it back with `learn_label`.

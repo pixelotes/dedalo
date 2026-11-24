@@ -510,3 +510,72 @@ def test_usage_is_recorded_even_when_the_model_fails_later():
         res = harness_agent(Ctx(), [tool_memory(Ctx(), [])], prompt="go", **HARNESS_KW)
     assert not res.ok and "400" in res.error
     assert runtime._usage_today("invoices")["total_tokens"] == 60
+
+
+# -- Structured output -----------------------------------------------------------
+
+SCHEMA = json.dumps({
+    "type": "object",
+    "properties": {
+        "important": {"type": "array", "items": {"type": "string"}},
+        "count": {"type": "integer", "minimum": 0},
+        "mood": {"enum": ["calm", "busy"]},
+    },
+    "required": ["important", "count"],
+    "additionalProperties": False,
+})
+
+
+def test_schema_errors_cover_the_common_keywords():
+    schema = json.loads(SCHEMA)
+    assert runtime._schema_errors({"important": ["a"], "count": 2, "mood": "calm"}, schema) == []
+    errs = runtime._schema_errors({"important": [1], "count": -1, "mood": "x", "extra": 1}, schema)
+    text = " ".join(errs)
+    for part in ("$.important[0]", "$.count", "$.mood", "extra"):
+        assert part in text
+    assert runtime._schema_errors(True, {"type": "integer"})  # bool is not an integer
+    assert runtime._schema_errors({"a": 1}, {"type": "object"}) == []
+    assert runtime._schema_errors("x", {"anyOf": [{"type": "integer"}, {"type": "string"}]}) == []
+    assert runtime._schema_errors(None, {"anyOf": [{"type": "integer"}, {"type": "string"}]})
+
+
+def test_submit_result_is_validated_and_ends_the_run():
+    bad = _llm_reply(tool_calls=[_call("submit_result", {"important": "no", "count": 1}, "c1")])
+    good = _llm_reply(tool_calls=[_call("submit_result", {"important": ["bank"], "count": 1}, "c2")])
+    with patch("httpx.Client.post", side_effect=[bad, good]) as post:
+        res = harness_agent(Ctx(), [], prompt="go", output_schema=SCHEMA, output_format="text", **HARNESS_KW)
+    assert res.ok and res.data == {"important": ["bank"], "count": 1}
+    sent = post.call_args_list[1].kwargs["json"]
+    # the model saw why (the message list is shared, so look through it)
+    assert any("does not match the schema" in str(m.get("content")) for m in sent["messages"] if m.get("role") == "tool")
+    spec = next(t for t in sent["tools"] if t["function"]["name"] == "submit_result")
+    assert spec["function"]["parameters"]["required"] == ["important", "count"]
+    assert "submit_result" in sent["messages"][0]["content"]
+
+
+def test_a_text_reply_with_valid_json_is_accepted_and_invalid_text_is_nudged():
+    fenced = _llm_reply('Here it is:\n```json\n{"important": [], "count": 0}\n```')
+    with patch("httpx.Client.post", side_effect=[fenced]):
+        res = harness_agent(Ctx(), [], prompt="go", output_schema=SCHEMA, **HARNESS_KW)
+    assert res.ok and res.data["result"] == {"important": [], "count": 0}
+
+    prose = [_llm_reply("I could not find anything.") for _ in range(3)]
+    with patch("httpx.Client.post", side_effect=prose) as post:
+        res = harness_agent(Ctx(), [], prompt="go", output_schema=SCHEMA, **HARNESS_KW)
+    assert not res.ok and "output_schema" in res.error and post.call_count == 3  # two nudges, then it gives up
+
+
+def test_non_object_schemas_are_wrapped_and_unwrapped():
+    reply = _llm_reply(tool_calls=[_call("submit_result", {"result": ["a", "b"]})])
+    with patch("httpx.Client.post", side_effect=[reply]) as post:
+        res = harness_agent(Ctx(), [], prompt="go", output_schema='{"type": "array", "items": {"type": "string"}}',
+                            output_format="text", **HARNESS_KW)
+    assert res.ok and res.data == ["a", "b"]
+    spec = post.call_args_list[0].kwargs["json"]["tools"][0]["function"]["parameters"]
+    assert spec["required"] == ["result"]
+
+
+def test_invalid_output_schema_fails_early():
+    with patch("httpx.Client.post") as post:
+        res = harness_agent(Ctx(), [], prompt="go", output_schema="{not json", **HARNESS_KW)
+    assert not res.ok and "output_schema" in res.error and post.call_count == 0
