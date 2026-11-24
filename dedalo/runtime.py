@@ -3239,6 +3239,7 @@ def _react_loop(
     approver: Callable[[AgentTool, dict[str, Any]], tuple[bool, str]] | None = None,
     deadline: float | None = None,
     on_tool_result: Callable[[str, dict[str, Any]], None] | None = None,
+    extra_body: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Multi-turn ReAct loop shared by the agent nodes.
 
@@ -3302,6 +3303,8 @@ def _react_loop(
             }
             if tools_spec:
                 payload["tools"] = tools_spec
+            if extra_body:
+                payload.update(extra_body)
 
             resp = client.post(endpoint, headers=headers, json=payload)
             if resp.status_code >= 400:
@@ -4601,6 +4604,31 @@ def _telegram_approver(
 
 # -- transform.harness ---------------------------------------------------------
 
+def _thinking_settings(thinking: str, model: str) -> tuple[dict[str, Any], str]:
+    """Request fields and system prompt suffix that turn a model's reasoning on or off.
+
+    'default' changes nothing. Each family has its own switch (the same mapping as the
+    chat.pixelotes.com Worker, measured on Workers AI):
+      - Mistral rejects any chat_template parameter with a 400: nothing can be sent.
+      - gpt-oss cannot stop reasoning: reasoning_effort "low" when off.
+      - Qwen also reads the /no_think and /think soft switches in the system prompt.
+      - Gemma, Qwen, GLM and most chat templates: chat_template_kwargs.enable_thinking
+        (DeepSeek's templates call it `thinking`; templates ignore the kwarg they do not know).
+    """
+    mode = str(thinking or "default").strip().lower()
+    if mode not in ("on", "off"):
+        return {}, ""
+    on = mode == "on"
+    name = str(model or "").lower()
+    if "mistral" in name:
+        return {}, ""
+    if "gpt-oss" in name:
+        return ({} if on else {"reasoning_effort": "low"}), ""
+    body: dict[str, Any] = {"chat_template_kwargs": {"enable_thinking": on, "thinking": on}}
+    suffix = ("/think" if on else "/no_think") if re.search(r"qwen|qwq", name) else ""
+    return body, suffix
+
+
 HARNESS_MAX_TURNS = 50
 
 
@@ -4627,6 +4655,7 @@ def harness_agent(
     secret: str = "",
     temperature: float | None = None,
     timeout: float = 120.0,
+    thinking: str = "default",
 ) -> NodeResult:
     """Generic agent harness: ReAct loop whose tools come from connected tool.* nodes."""
     descriptors = [r.data for r in inputs if r.ok and _is_tool_descriptor(r.data)]
@@ -4684,6 +4713,9 @@ def harness_agent(
             llm=llm, model=model, url=url, secret=secret, max_context=max_context,
             temperature=temperature, default_temperature=0.2, timeout=timeout,
         )
+        extra_body, think_suffix = _thinking_settings(thinking, endpoint_cfg["target_model"])
+        if think_suffix:
+            messages[0]["content"] += "\n\n" + think_suffix
         res_data = _react_loop(
             messages=messages,
             tools=tools,
@@ -4698,6 +4730,7 @@ def harness_agent(
             timeout=float(timeout or 120.0),
             approver=approver,
             deadline=time.monotonic() + max(10.0, float(max_seconds or 900.0)),
+            extra_body=extra_body,
         )
     except _LLMHTTPError as exc:
         return NodeResult("error", error=tr('LLM API returned HTTP {status_code}: {text}', status_code=exc.status_code, text=exc.text))

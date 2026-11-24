@@ -76,6 +76,10 @@ tool.mcp  url=http://127.0.0.1:8092/mcp  secret=beanie-token  allowed_tools=get_
 
 `secret` holds the server's bearer token. If the server sits behind Cloudflare Access, put the service token headers in a secret as JSON (`{"CF-Access-Client-Id": "...", "CF-Access-Client-Secret": "..."}`) and choose it in `headers_secret`.
 
+## Reasoning models
+
+Models such as Gemma, Qwen or DeepSeek reason before answering. In a tool loop that can mean thousands of hidden tokens per turn: the mail triage agent went from about 220 s to 60 s on Workers AI with `thinking` set to `off`, with the same results. `on` forces it and `default` sends nothing. Each family has its own switch: `chat_template_kwargs.enable_thinking` for Gemma, GLM and DeepSeek, that plus `/no_think` in the system prompt for Qwen, `reasoning_effort: low` for gpt-oss (it cannot stop reasoning), and nothing for Mistral, which rejects template parameters. Raise `timeout` (seconds per model request) if you keep reasoning on.
+
 ## Limits
 
 - The model must support OpenAI-style tool calling.

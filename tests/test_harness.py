@@ -401,3 +401,26 @@ def test_workers_ai_merged_tool_calls_are_split():
     results = {m["tool_call_id"]: m["content"] for m in sent if m.get("role") == "tool"}
     assert set(results) == {"c1", "c1_1", "c1_2", "c2"}
     assert "not valid JSON" in results["c2"]
+
+
+@pytest.mark.parametrize("model,mode,body,suffix", [
+    ("@cf/google/gemma-4-26b-a4b-it", "off", {"chat_template_kwargs": {"enable_thinking": False, "thinking": False}}, None),
+    ("@cf/google/gemma-4-26b-a4b-it", "on", {"chat_template_kwargs": {"enable_thinking": True, "thinking": True}}, None),
+    ("@cf/qwen/qwen3-30b-a3b-fp8", "off", {"chat_template_kwargs": {"enable_thinking": False, "thinking": False}}, "/no_think"),
+    ("@cf/openai/gpt-oss-120b", "off", {"reasoning_effort": "low"}, None),
+    ("@cf/openai/gpt-oss-120b", "on", {}, None),
+    ("@cf/mistralai/mistral-small-3.1-24b-instruct", "off", {}, None),
+    ("@cf/google/gemma-4-26b-a4b-it", "default", {}, None),
+])
+def test_thinking_option_uses_each_model_switch(model, mode, body, suffix):
+    with patch("httpx.Client.post", return_value=_llm_reply("done")) as post:
+        res = harness_agent(Ctx(), [], prompt="hi", thinking=mode, **{**HARNESS_KW, "model": model})
+    assert res.ok
+    sent = post.call_args_list[-1].kwargs["json"]
+    for key in ("chat_template_kwargs", "reasoning_effort"):
+        assert sent.get(key) == body.get(key)
+    system = sent["messages"][0]["content"]
+    if suffix:
+        assert system.endswith(suffix)
+    else:
+        assert "/no_think" not in system and "/think" not in system

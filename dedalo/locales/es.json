@@ -1048,5 +1048,9 @@
  "❌ Deny": "❌ Denegar",
  "⌛ Expired, not run": "⌛ Caducada, no se ejecutó",
  "✅ Approved by {who}": "✅ Aprobada por {who}",
- "❌ Denied by {who}": "❌ Denegada por {who}"
+ "❌ Denied by {who}": "❌ Denegada por {who}",
+ "Model default": "Lo que haga el modelo",
+ "Off": "Desactivado",
+ "On": "Activado",
+ "Turns the model's reasoning on or off with each family's switch (chat_template_kwargs for Gemma, Qwen, GLM, DeepSeek; /no_think for Qwen; reasoning_effort low for gpt-oss; Mistral has none). Off is much faster for simple tasks.": "Activa o desactiva el razonamiento con el interruptor de cada familia (chat_template_kwargs en Gemma, Qwen, GLM y DeepSeek; /no_think en Qwen; reasoning_effort low en gpt-oss; Mistral no tiene). Desactivado es mucho más rápido en tareas sencillas."
 }

@@ -1062,12 +1062,18 @@ NODE_TYPES: dict[str, NodeSpec] = {
             "secret": "",
             "temperature": 0.2,
             "timeout": 120.0,
+            "thinking": "default",
         },
         label='Agent Harness',
         output='dict with the response, turns, tool log and tools used (or text); SKIPPED if the response starts with skip_if_response',
         choices={
             "compaction_engine": ["blackhole", "blackhole_llm", "luhn+"],
             "output_format": ["full", "text"],
+            "thinking": [
+                {"value": "default", "label": "Model default"},
+                {"value": "off", "label": "Off"},
+                {"value": "on", "label": "On"},
+            ],
             "approval_channel": [
                 {"value": "none", "label": 'None (deny calls that need approval)'},
                 {"value": "telegram", "label": 'Telegram (Approve/Deny buttons)'},
@@ -1092,6 +1098,7 @@ NODE_TYPES: dict[str, NodeSpec] = {
             "approval_timeout": 'Seconds to wait for an answer; with no answer the call is denied.',
             "temperature": 'Model temperature.',
             "timeout": 'Maximum time in seconds per model request.',
+            "thinking": "Turns the model's reasoning on or off with each family's switch (chat_template_kwargs for Gemma, Qwen, GLM, DeepSeek; /no_think for Qwen; reasoning_effort low for gpt-oss; Mistral has none). Off is much faster for simple tasks.",
         },
     ),
     "transform.analyzer": NodeSpec(
