@@ -63,6 +63,7 @@
   "palette.chip_sys": "System",
   "palette.cat_input": "Input",
   "palette.cat_transform": "Transform",
+  "palette.cat_tool": "Tools",
   "palette.cat_output": "Output",
   "palette.expand": "Expand category",
   "palette.collapse": "Collapse category",

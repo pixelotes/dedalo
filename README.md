@@ -41,6 +41,7 @@ The catalog includes more than 70 modular nodes (74 in total). Among the most co
 
 ### Transform nodes
 - `transform.coder`: Iterative programming micro-harness with a multi-turn ReAct loop and structured tools (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`). Auto-detects the inference server's context window and compacts earlier history with Luhn+ when it reaches 90% saturation.
+- `transform.harness`: Generic agent harness with the same ReAct loop but no built-in tools: it gets them from the `tool.*` nodes connected to it, asks a human on Telegram before risky calls and can end the flow silently with `skip_if_response` (see [Agent harness](doc/agent_harness.md)).
 - `transform.html_extract`: Extracts fields and records from HTML documents using CSS selectors.
 - `transform.regex`: Regular expression evaluation with match modes, group extraction and substitution.
 - `transform.filter` / `transform.array_ops`: Conditional filtering, sorting, limits and projection over data lists.
@@ -51,6 +52,13 @@ The catalog includes more than 70 modular nodes (74 in total). Among the most co
 - `transform.summarize`: Algorithmic extractive summarization using Luhn, Luhn+ and TextRank.
 - `transform.script`: Execution of custom Python logic with variable isolation.
 - `transform.agent`: Optional calls to OpenAI-compatible API endpoints (local models such as Ollama or remote services), with JSON mode support and field enrichment (`as_field`) over lists.
+
+### Tool nodes (connect to `transform.harness`)
+- `tool.mail`: List, read, flag, move and send emails (IMAP/SMTP), choosing which actions the agent gets.
+- `tool.http`: Any HTTP API endpoint as a tool, with a JSON Schema for its arguments.
+- `tool.mcp`: Every tool of an MCP server over Streamable HTTP (for example beanie).
+- `tool.flow`: A saved flow as a tool, so deterministic flows become agent tools.
+- `tool.memory`: Key/value memory that survives between runs, shared with `input.state` and `output.state`.
 
 ### Output nodes
 - `output.git`: Creates commits and optionally pushes to remote repositories, with configurable author and message.

@@ -517,6 +517,73 @@ TEMPLATES: tuple[Template, ...] = (
             [_edge("lector_git", "generador_tests"), _edge("generador_tests", "guardar_git")],
         ),
     ),
+    Template(
+        name="avisar-facturas",
+        title='Invoice alert agent (mail + Telegram)',
+        description='Every day an agent reviews the latest emails with the mail tool, decides which ones are invoices, remembers the ones already notified and sends a Telegram summary only when there are new ones.',
+        teaches='Agent Harness with tool nodes (mail and memory), skip_if_response and a schedule (set it to e.g. 0 9 * * *).',
+        graph=_graph(
+            "avisar-facturas",
+            [
+                _node(
+                    "correo",
+                    "tool.mail",
+                    {
+                        "host": "imap.gmail.com",
+                        "username": "you@example.com",
+                        "secret": "imap-password",
+                        "actions": "list,read",
+                        "limit": 30,
+                    },
+                    x=80,
+                    y=60,
+                    label='Mailbox (read only)',
+                ),
+                _node(
+                    "memoria",
+                    "tool.memory",
+                    {},
+                    x=80,
+                    y=240,
+                    label='Notified invoices',
+                ),
+                _node(
+                    "agente",
+                    "transform.harness",
+                    {
+                        "prompt": (
+                            "Find the invoices received by email in the last day.\n"
+                            "1. Call memory_get with key 'notified' to get the ids already reported.\n"
+                            "2. Call mail_list with since_days=1 and look at sender, subject and attachment names. "
+                            "Read an email with mail_read only when you cannot tell from that.\n"
+                            "3. An invoice is a bill or receipt asking for or confirming a payment (factura, invoice, recibo, receipt). "
+                            "Newsletters, offers and shipping notices are not invoices.\n"
+                            "4. Ignore ids already in 'notified'. If there are no new invoices, answer exactly NO_INVOICES.\n"
+                            "5. Otherwise call memory_set with key 'notified', mode 'append', once per new id, "
+                            "and answer with a short notice in Spanish: one line per invoice with issuer, subject, "
+                            "amount and due date when the email states them."
+                        ),
+                        "max_turns": 12,
+                        "skip_if_response": "NO_INVOICES",
+                        "output_format": "text",
+                        "temperature": 0.1,
+                    },
+                    x=380,
+                    y=140,
+                    label='Invoice agent',
+                ),
+                _node(
+                    "aviso",
+                    "output.telegram",
+                    {"parse_mode": "texto"},
+                    x=700,
+                    y=140,
+                    label='Telegram notice',
+                ),
+            ],
+            [_edge("correo", "agente"), _edge("memoria", "agente"), _edge("agente", "aviso")],
+        ),
+    ),
 )
 
 

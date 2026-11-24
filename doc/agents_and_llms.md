@@ -17,9 +17,9 @@ In many AI automation solutions, it is common to find dependencies on frameworks
 
 ---
 
-## 2. The 4 Agent Nodes in Dédalo
+## 2. Agent Nodes in Dédalo
 
-Dédalo offers four specialized nodes depending on the required task:
+Dédalo offers these specialized nodes depending on the required task. For agents whose tools you choose (mail, HTTP APIs, MCP servers, other flows, memory), use `transform.harness` with `tool.*` nodes: see [Agent harness](agent_harness.md).
 
 ```text
 ┌────────────────────────────────────────────────────────────────────────┐

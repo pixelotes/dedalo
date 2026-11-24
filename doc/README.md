@@ -22,6 +22,7 @@ Welcome to the technical documentation and architecture guide for **Dédalo**, t
    - The multi-turn ReAct micro-harness (`transform.coder`) with real tools (`bash`, `read`, `write`, `edit`, `grep`, `find`, `ls`).
    - Memory compaction algorithms: **Blackhole** and **Luhn+** for finite context windows.
    - In-memory secret masking (`sanitize_secrets`) for cybersecurity and infrastructure flows.
+   - **[Agent harness and tool nodes](agent_harness.md)**: `transform.harness` with `tool.mail`, `tool.http`, `tool.mcp`, `tool.flow` and `tool.memory`, human approval over Telegram and state between runs.
 
 4. **[Standalone Export and Tree-Shaking](standalone_export.md)**
    - How to compile any visual graph into a single, fully self-contained `.py` file.
