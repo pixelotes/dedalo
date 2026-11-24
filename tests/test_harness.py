@@ -401,3 +401,16 @@ def test_workers_ai_merged_tool_calls_are_split():
     results = {m["tool_call_id"]: m["content"] for m in sent if m.get("role") == "tool"}
     assert set(results) == {"c1", "c1_1", "c1_2", "c2"}
     assert "not valid JSON" in results["c2"]
+
+
+@pytest.mark.parametrize("mode,expected", [
+    ("off", {"enable_thinking": False, "thinking": False}),
+    ("on", {"enable_thinking": True, "thinking": True}),
+    ("default", None),
+])
+def test_thinking_option_sets_chat_template_kwargs(mode, expected):
+    with patch("httpx.Client.post", return_value=_llm_reply("done")) as post:
+        res = harness_agent(Ctx(), [], prompt="hi", thinking=mode, **HARNESS_KW)
+    assert res.ok
+    body = post.call_args_list[-1].kwargs["json"]
+    assert body.get("chat_template_kwargs") == expected

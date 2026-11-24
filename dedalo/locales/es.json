@@ -1048,5 +1048,9 @@
  "❌ Deny": "❌ Denegar",
  "⌛ Expired, not run": "⌛ Caducada, no se ejecutó",
  "✅ Approved by {who}": "✅ Aprobada por {who}",
- "❌ Denied by {who}": "❌ Denegada por {who}"
+ "❌ Denied by {who}": "❌ Denegada por {who}",
+ "Model default": "Lo que haga el modelo",
+ "Off": "Desactivado",
+ "On": "Activado",
+ "Turns the model's reasoning on or off (chat_template_kwargs.enable_thinking, for Gemma, Qwen, GLM, DeepSeek...). Off is much faster for simple tasks. Some servers reject the field: keep 'Model default' if requests fail.": "Activa o desactiva el razonamiento del modelo (chat_template_kwargs.enable_thinking, para Gemma, Qwen, GLM, DeepSeek...). Desactivado es mucho más rápido en tareas sencillas. Algunos servidores rechazan el campo: deja «Lo que haga el modelo» si las peticiones fallan."
 }

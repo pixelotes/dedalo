@@ -3239,6 +3239,7 @@ def _react_loop(
     approver: Callable[[AgentTool, dict[str, Any]], tuple[bool, str]] | None = None,
     deadline: float | None = None,
     on_tool_result: Callable[[str, dict[str, Any]], None] | None = None,
+    extra_body: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Multi-turn ReAct loop shared by the agent nodes.
 
@@ -3302,6 +3303,8 @@ def _react_loop(
             }
             if tools_spec:
                 payload["tools"] = tools_spec
+            if extra_body:
+                payload.update(extra_body)
 
             resp = client.post(endpoint, headers=headers, json=payload)
             if resp.status_code >= 400:
@@ -4601,6 +4604,19 @@ def _telegram_approver(
 
 # -- transform.harness ---------------------------------------------------------
 
+def _thinking_body(thinking: str) -> dict[str, Any]:
+    """Request fields that turn a model's reasoning on or off ('default' sends nothing).
+
+    Gemma, Qwen, GLM and most chat templates read chat_template_kwargs.enable_thinking; DeepSeek's
+    call it `thinking`. Templates ignore the kwarg they do not know.
+    """
+    mode = str(thinking or "default").strip().lower()
+    if mode not in ("on", "off"):
+        return {}
+    on = mode == "on"
+    return {"chat_template_kwargs": {"enable_thinking": on, "thinking": on}}
+
+
 HARNESS_MAX_TURNS = 50
 
 
@@ -4627,6 +4643,7 @@ def harness_agent(
     secret: str = "",
     temperature: float | None = None,
     timeout: float = 120.0,
+    thinking: str = "default",
 ) -> NodeResult:
     """Generic agent harness: ReAct loop whose tools come from connected tool.* nodes."""
     descriptors = [r.data for r in inputs if r.ok and _is_tool_descriptor(r.data)]
@@ -4698,6 +4715,7 @@ def harness_agent(
             timeout=float(timeout or 120.0),
             approver=approver,
             deadline=time.monotonic() + max(10.0, float(max_seconds or 900.0)),
+            extra_body=_thinking_body(thinking),
         )
     except _LLMHTTPError as exc:
         return NodeResult("error", error=tr('LLM API returned HTTP {status_code}: {text}', status_code=exc.status_code, text=exc.text))
