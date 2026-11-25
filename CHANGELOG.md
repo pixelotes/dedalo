@@ -4,8 +4,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Context compaction no longer separates parallel tool calls from their results, which strict servers rejected.
+
 ### Added
 
+- Built-in MCP server at `/mcp` (stateless Streamable HTTP, token required in `DEDALO_MCP_TOKEN`): flows that start with the new `input.mcp` node are served as tools with a name, a description and typed arguments, and return the data of the new `output.return` node, optionally checked against a JSON Schema. `tool.flow` reads the same contract, so the harness gets typed arguments too. See `doc/mcp_server.md`.
 - `transform.harness` node: generic agent harness built on the `transform.coder` ReAct loop, with tools from connected `tool.*` nodes, a turn and time budget, `skip_if_response` and human approval of risky calls over Telegram (Approve/Deny buttons). See `doc/agent_harness.md`.
 - Tool nodes: `tool.mail` (IMAP/SMTP), `tool.http`, `tool.mcp` (Streamable HTTP client, no SDK), `tool.flow` and `tool.memory`, each with an approval policy (`never`, `write`, `always`).
 - `input.state` and `output.state` nodes: key/value state between runs in `data/state/memory/`, shared with `tool.memory`.

@@ -3137,7 +3137,7 @@ function renderNodeInspector(node, body) {
         if (node.type.startsWith('transform.') && !NO_LIVE_PREVIEW.has(node.type)) triggerLivePreview(node);
       };
     } else {
-      const multilineKeys = ['template', 'query', 'cmd', 'prompt', 'system_prompt', 'body', 'headers', 'message'];
+      const multilineKeys = ['template', 'query', 'cmd', 'prompt', 'system_prompt', 'body', 'headers', 'message', 'parameters', 'schema', 'output_schema'];
       const isMultiline = multilineKeys.includes(key) || (typeof defaultVal === 'string' && (defaultVal.length > 40 || String(currentVal).includes('\n')));
       inputEl = document.createElement('textarea');
       inputEl.rows = ['template', 'query', 'prompt', 'system_prompt', 'body'].includes(key) ? 4 : (isMultiline ? 2 : 1);

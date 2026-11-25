@@ -22,6 +22,8 @@ _ENTRADA_REF_RE = re.compile(r"""entrada(?:\s*\[\s*|\.get\(\s*)['"]([^'"]+)['"]"
 _compile_source = compile
 
 VERSION = 1
+MCP_START_NODE = "input.mcp"
+RETURN_NODE = "output.return"
 PORTS = ("ok", "error")
 FAN_IN_POLICIES = ("all", "any")
 
@@ -141,6 +143,26 @@ NODE_TYPES: dict[str, NodeSpec] = {
         output='received payload (dict or text)',
         help={
             "url_info": 'Receives HTTP requests at /api/webhook/{flow_name}.',
+        },
+    ),
+    "input.mcp": NodeSpec(
+        category="input",
+        runtime_fn="mcp_trigger",
+        optional={
+            "tool_name": "",
+            "description": "",
+            "parameters": "",
+            "run_outputs": False,
+            "timeout": 120.0,
+        },
+        label='MCP Tool (start)',
+        output='the arguments of the call (dict)',
+        help={
+            "tool_name": 'Tool name that agents see (empty: the flow id). The flow is served at /mcp when DEDALO_MCP_TOKEN is set, and to a harness through tool.flow.',
+            "description": 'What the tool does and when to use it (the model reads this).',
+            "parameters": 'JSON Schema (type object) of the arguments, e.g. {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}. Calls that do not match are rejected.',
+            "run_outputs": 'Let MCP calls run the output.* nodes of the flow (messages, files). Off: the call only computes a result and the tool is announced as read-only.',
+            "timeout": 'Seconds an MCP call waits for the flow. After that the caller gets an error and the flow keeps running in the background.',
         },
     ),
     "input.http_call": NodeSpec(
@@ -2039,6 +2061,16 @@ NODE_TYPES: dict[str, NodeSpec] = {
             "mode": 'set replaces the value, append adds it to a list.',
         },
     ),
+    "output.return": NodeSpec(
+        category="output",
+        runtime_fn="return_result",
+        optional={"schema": ""},
+        label='Return Result',
+        output='the result of the flow',
+        help={
+            "schema": 'JSON Schema of the result (optional). The input must match it (JSON text from a model is parsed first); otherwise the node fails. Callers of the flow (MCP, tool.flow, sub-flows) get this node as the result.',
+        },
+    ),
     "output.telegram": NodeSpec(
         category="output",
         runtime_fn="telegram",
@@ -2201,6 +2233,10 @@ def validate(graph: Graph) -> list[str]:
         if dst and _is_tool_node(dst):
             errors.append(tr('"{id}": tool nodes take no inputs', id=e.target))
 
+    for single in (MCP_START_NODE, RETURN_NODE):
+        if sum(1 for n in graph.nodes if n.type == single) > 1:
+            errors.append(tr('a flow can have only one {type} node', type=single))
+
     if _topological_order(graph) is None:
         errors.append(tr('the graph contains a cycle -- it cannot be executed in any order'))
 
@@ -2229,8 +2265,11 @@ def validate(graph: Graph) -> list[str]:
 
 
 def without_outputs(graph: Graph) -> Graph:
-    """Copia del grafo sin los nodos `output.*` ni sus aristas (para ejecutar un flujo como sub-flujo)."""
-    keep = {n.id for n in graph.nodes if n.type not in NODE_TYPES or NODE_TYPES[n.type].category != "output"}
+    """Copia del grafo sin los nodos `output.*` (salvo `output.return`, que no envía nada) ni sus aristas."""
+    keep = {
+        n.id for n in graph.nodes
+        if n.type == RETURN_NODE or n.type not in NODE_TYPES or NODE_TYPES[n.type].category != "output"
+    }
     return Graph(
         name=graph.name,
         nodes=[n for n in graph.nodes if n.id in keep],

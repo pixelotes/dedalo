@@ -125,3 +125,12 @@ def webhook_token_ok(headers, query, expected: str) -> tuple[bool, str]:
         if value and hmac.compare_digest(value.encode(), expected.encode()):
             return True, source
     return False, ""
+
+
+def bearer_token_ok(headers, expected: str) -> bool:
+    """Valida un token compartido enviado en `Authorization: Bearer` o `X-Dedalo-Token` (nunca en la URL)."""
+    auth = headers.get("authorization", "")
+    for value in (auth[7:] if auth.lower().startswith("bearer ") else "", headers.get("x-dedalo-token", "")):
+        if value and hmac.compare_digest(value.encode(), expected.encode()):
+            return True
+    return False

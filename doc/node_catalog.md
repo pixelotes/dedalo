@@ -1,9 +1,9 @@
 # Complete Dédalo Node Catalog
 
-Dédalo has **74 modular nodes** grouped into three families:
-- **Inputs (`input.*`)**: 29 nodes to ingest data from APIs, services, queues, hardware, repositories or files.
+Dédalo has **76 modular nodes** grouped into three families:
+- **Inputs (`input.*`)**: 30 nodes to ingest data from APIs, services, queues, hardware, repositories or files.
 - **Transforms (`transform.*`)**: 28 nodes to clean, filter, aggregate, compute, deduplicate, audit vulnerabilities (CVE/SBOM), scan for secrets (DLP), map data, add human approval gates, or enrich data with local algorithms or LLM agents.
-- **Outputs (`output.*`)**: 17 nodes to persist evidence, open incidents, update wikis, send alerts to messaging platforms (including Microsoft Teams) or run actions.
+- **Outputs (`output.*`)**: 18 nodes to persist evidence, open incidents, update wikis, send alerts to messaging platforms (including Microsoft Teams) or run actions.
 
 ---
 
@@ -32,6 +32,12 @@ Dédalo has **74 modular nodes** grouped into three families:
 - **Description**: Reads information from local or remote Git repositories without installing heavy libraries (uses the `git` binary).
 - **Actions**: `log` (commit history), `diff` (change patch with a character limit), `clone_or_pull` (shallow clone or update), `status` (working tree).
 - **Parameters**: `action`, `repo_path`, `url`, `revision` (e.g. `HEAD~1..HEAD`), `limit`, `path_filter`, `max_chars`.
+
+### `input.mcp`
+- **Label**: MCP Tool (start).
+- **Description**: Makes the flow a tool with a name, a description and typed arguments (`parameters`, a JSON Schema). It is served to external agents at `/mcp` (when `DEDALO_MCP_TOKEN` is set) and to a harness through `tool.flow`. See [Flows as MCP tools](mcp_server.md).
+- **Parameters**: `tool_name` (empty: the flow id), `description`, `parameters`, `run_outputs` (off: MCP calls skip the other `output.*` nodes), `timeout` (120 s).
+- **Output**: The arguments of the call (`{}` on a manual or scheduled run).
 
 ### `input.webhook`
 - **Label**: Incoming Webhook.
@@ -235,7 +241,7 @@ Tool nodes only connect to `transform.harness`. They emit a tool descriptor, not
 
 ### `tool.flow`
 - **Label**: Flow as Tool.
-- **Description**: Runs a saved flow (without its `output.*` nodes by default) and returns its result.
+- **Description**: Runs a saved flow (without its `output.*` nodes by default) and returns its result. When the flow starts with `input.mcp`, the tool takes its name, description and typed arguments from it; otherwise it has a single text `input`.
 
 ### `tool.classifier`
 - **Label**: Classifier Teaching Tool.
@@ -250,6 +256,10 @@ Tool nodes only connect to `transform.harness`. They emit a tool descriptor, not
 - **Description**: Read a key (or the whole scope) and store the input under a key (`set` or `append`) in the same store as `tool.memory`.
 
 ## 4. Output Nodes (`output.*`)
+
+### `output.return`
+- **Label**: Return Result.
+- **Description**: The result that callers of the flow get (MCP, `tool.flow`, `input.subflows`). With `schema` (a JSON Schema) the input must match it or the node fails; JSON text from a model is parsed first. It sends nothing, so it also runs when the other outputs are skipped.
 
 ### `output.evidence_vault`
 - **Label**: Evidence Vault.
