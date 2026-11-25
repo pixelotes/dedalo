@@ -894,6 +894,72 @@ def webhook_trigger(ctx: Any, inputs: list[NodeResult], **config) -> NodeResult:
     return NodeResult("ok", data=payload)
 
 
+def _tool_schema(parameters: Any) -> dict[str, Any]:
+    """JSON Schema of a tool's arguments from a node field (JSON text or dict). Empty: no arguments."""
+    if isinstance(parameters, dict):
+        schema = dict(parameters)
+    elif str(parameters or "").strip():
+        schema = json.loads(parameters)
+        if not isinstance(schema, dict):
+            raise ValueError(tr("the schema must be a JSON object"))
+    else:
+        schema = {}
+    if schema.get("type", "object") != "object":
+        raise ValueError(tr("the arguments schema must have type object"))
+    return {"type": "object", "properties": {}, **schema}
+
+
+def mcp_trigger(
+    ctx: Any,
+    inputs: list[NodeResult],
+    *,
+    tool_name: str = "",
+    description: str = "",
+    parameters: str = "",
+    run_outputs: bool = False,
+    timeout: float = 120.0,
+) -> NodeResult:
+    """Start of a flow served as a tool (MCP server and tool.flow): outputs the call's arguments."""
+    try:
+        schema = _tool_schema(parameters)
+    except ValueError as exc:
+        return NodeResult("error", error=tr("Invalid JSON Schema in parameters: {exc}", exc=exc))
+    payload = getattr(ctx, "payload", None)
+    if payload is None:  # manual run or preview: there is no call
+        return NodeResult("ok", data={})
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except ValueError:
+            pass
+    problems = _schema_errors(payload, schema)
+    if problems:
+        return NodeResult("error", error=tr("Invalid tool arguments: {problems}", problems="; ".join(problems)))
+    return NodeResult("ok", data=payload)
+
+
+def return_result(ctx: Any, inputs: list[NodeResult], *, schema: str = "") -> NodeResult:
+    """Result of a flow served as a tool. With a schema, the input must match it (JSON text is parsed)."""
+    data = Inputs(inputs).first_data()
+    if not str(schema or "").strip():
+        return NodeResult("ok", data=data)
+    try:
+        wanted = json.loads(schema) if isinstance(schema, str) else dict(schema)
+        if not isinstance(wanted, dict):
+            raise ValueError(tr("the schema must be a JSON object"))
+    except ValueError as exc:
+        return NodeResult("error", error=tr("Invalid JSON Schema in schema: {exc}", exc=exc))
+    if isinstance(data, str) and wanted.get("type") != "string":
+        try:
+            data = _json_from_text(data)
+        except ValueError as exc:
+            return NodeResult("error", error=tr("The result does not match the schema: {problems}", problems=exc))
+    problems = _schema_errors(data, wanted)
+    if problems:
+        return NodeResult("error", error=tr("The result does not match the schema: {problems}", problems="; ".join(problems)))
+    return NodeResult("ok", data=data)
+
+
 def sqlite_query(
     ctx: Any,
     inputs: list[NodeResult],
@@ -2512,8 +2578,13 @@ def _compact_conversation_history(
         head = new_msgs[:2]  # system + user prompt original
         user_goal = str(head[1].get("content") or "") if len(head) > 1 else ""
         tail_len = min(len(new_msgs) - 2, max(2, preserve_recent_turns * 2))
-        tail = new_msgs[-tail_len:]
-        middle = new_msgs[2:-tail_len]
+        # Never cut inside a tool-call group: a `tool` message whose assistant `tool_calls`
+        # message was summarized away is rejected by strict servers.
+        cut = len(new_msgs) - tail_len
+        while cut > 2 and new_msgs[cut].get("role") == "tool":
+            cut -= 1
+        tail = new_msgs[cut:]
+        middle = new_msgs[2:cut]
         if middle:
             if eng in ("luhn", "luhn+", "luhn_plus", "luhnplus"):
                 chunks = []
@@ -4527,23 +4598,33 @@ def tool_mcp(
 
 
 def _build_flow_tools(cfg: dict[str, Any], ctx: Any) -> list[AgentTool]:
-    from dedalo import scheduler, store
+    from dedalo import mcp_server, scheduler, store
 
     fid = store.slug(str(cfg.get("flow") or ""))
     skip_outputs = bool(cfg.get("skip_outputs", True))
+    # A flow that starts with input.mcp declares its own name, description and typed arguments.
+    contract = mcp_server.contract(fid, store.load_flow(fid))
 
     def handler(args: dict[str, Any]) -> str:
-        payload = args.get("input")
+        if contract:
+            problems = _schema_errors(args, contract["parameters"])
+            if problems:
+                return tr("Error: invalid arguments: {problems}", problems="; ".join(problems))
+            payload: Any = args
+        else:
+            payload = args.get("input")
         out = scheduler.run_subflow_sync(fid, payload=payload, parent=ctx, skip_outputs=skip_outputs)
         if out.get("status") != "ok":
             return tr("Error: flow '{flow}' failed: {error}", flow=fid, error=out.get("error") or out.get("errors"))
         data = out.get("data")
         return data if isinstance(data, str) else json.dumps(data, ensure_ascii=False, default=str)
 
+    default_name = contract["name"] if contract else f"flow_{fid}"
+    default_description = (contract or {}).get("description") or tr("Runs the Dédalo flow '{flow}' and returns its result.", flow=fid)
     return [AgentTool(
-        name=_safe_tool_name(str(cfg.get("name") or f"flow_{fid}")),
-        description=str(cfg.get("description") or tr("Runs the Dédalo flow '{flow}' and returns its result.", flow=fid)),
-        parameters={
+        name=_safe_tool_name(str(cfg.get("name") or default_name)),
+        description=str(cfg.get("description") or default_description),
+        parameters=contract["parameters"] if contract else {
             "type": "object",
             "properties": {"input": {"type": "string", "description": tr("Optional input passed to the flow as its payload.")}},
         },

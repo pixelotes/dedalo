@@ -27,7 +27,7 @@ A tool node produces no data. It emits a **descriptor** (the tool kind and its c
 | `tool.mail` | `mail_list`, `mail_read`, `mail_flag`, `mail_move`, `mail_send` (pick them in `actions`; default `list,read`) | list/read: read · flag/move: write · send: dangerous |
 | `tool.http` | One tool that calls an API endpoint. `{placeholders}` in the URL become required arguments | GET reads, other methods write (or set `risk`) |
 | `tool.mcp` | Every tool of an MCP server over Streamable HTTP (`allowed_tools` filters them) | from the server's annotations: `readOnlyHint` reads, `destructiveHint` is dangerous, otherwise write |
-| `tool.flow` | Runs a saved flow and returns its result | read with `skip_outputs` (default), write without it |
+| `tool.flow` | Runs a saved flow and returns its result. A flow that starts with `input.mcp` brings its own name, description and typed arguments ([Flows as MCP tools](mcp_server.md)) | read with `skip_outputs` (default), write without it |
 | `tool.memory` | `memory_get`, `memory_set`: key/value memory that survives between runs | — (never asks by default) |
 
 Two mailboxes or two MCP servers on one harness need different `prefix` values; duplicate tool names stop the run with an error.

@@ -12,10 +12,10 @@ Welcome to the technical documentation and architecture guide for **Dédalo**, t
    - Key technical decisions: no frontend bundlers, a deterministic execution model, secrets encrypted at rest and skip sentinels (`SKIPPED`).
 
 2. **[Complete Node Catalog](node_catalog.md)**
-   - Exhaustive catalog of the **74 available nodes**:
-     - **29 Input Nodes (`input.*`)**: Webhooks, API calls, Git, incident telemetry, Jira, Confluence, WHOIS/RDAP, DNS DoH, Pi/Linux sensors, RSS, IMAP, iCalendar (`input.calendar`), sub-flows (`input.subflows`), etc.
+   - Exhaustive catalog of the **76 available nodes**:
+     - **30 Input Nodes (`input.*`)**: Webhooks, MCP tool start (`input.mcp`), API calls, Git, incident telemetry, Jira, Confluence, WHOIS/RDAP, DNS DoH, Pi/Linux sensors, RSS, IMAP, iCalendar (`input.calendar`), sub-flows (`input.subflows`), etc.
      - **28 Transform Nodes (`transform.*`)**: LLM agents, ReAct Coder, SecOps Analyzer and Planner, CVE/SBOM Audit, Secret Scanner (DLP), JSON Path extraction, Data Mapper, Human Approval Gate (`transform.approval`), list operators, hash diffs, fuzzy deduplication, regex, CSS selectors, sanitization and Python scripts.
-     - **17 Output Nodes (`output.*`)**: Microsoft Teams, Evidence Vault with gzip+sha256, Jira operations (create, comment, transition), Confluence pages (create, replace, append), Git commits/push, SQLite, Telegram, Discord, Slack, MQTT, etc.
+     - **18 Output Nodes (`output.*`)**: Return Result (`output.return`), Microsoft Teams, Evidence Vault with gzip+sha256, Jira operations (create, comment, transition), Confluence pages (create, replace, append), Git commits/push, SQLite, Telegram, Discord, Slack, MQTT, etc.
 
 3. **[Native Agents and Artificial Intelligence](agents_and_llms.md)**
    - Why we avoid bloated frameworks such as LangChain, LangGraph or monolithic SDKs.
@@ -23,6 +23,7 @@ Welcome to the technical documentation and architecture guide for **Dédalo**, t
    - Memory compaction algorithms: **Blackhole** and **Luhn+** for finite context windows.
    - In-memory secret masking (`sanitize_secrets`) for cybersecurity and infrastructure flows.
    - **[Agent harness and tool nodes](agent_harness.md)**: `transform.harness` with `tool.mail`, `tool.http`, `tool.mcp`, `tool.flow` and `tool.memory`, human approval over Telegram and state between runs.
+   - **[Flows as MCP tools](mcp_server.md)**: `input.mcp` and `output.return` turn a flow into a tool served at `/mcp` and to the harness.
 
 4. **[Standalone Export and Tree-Shaking](standalone_export.md)**
    - How to compile any visual graph into a single, fully self-contained `.py` file.

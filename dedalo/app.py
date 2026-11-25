@@ -19,12 +19,13 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from dedalo import compiler, history, i18n, llms, pycompile, runtime, sandbox, scheduler, secrets, store, templates
+from dedalo import compiler, history, i18n, llms, mcp_server, pycompile, runtime, sandbox, scheduler, secrets, store, templates
 from dedalo.i18n import tr
 from dedalo.security import (
     BodyLimitMiddleware,
     SameOriginMiddleware,
     SecurityHeadersMiddleware,
+    bearer_token_ok,
     webhook_token_ok,
 )
 
@@ -881,6 +882,33 @@ async def webhook_endpoint(flow_id: str, request: Request) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # API: Historial de Ejecuciones
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# MCP server: flows that start with input.mcp, served as tools
+# ---------------------------------------------------------------------------
+
+
+@app.api_route("/mcp", methods=["GET", "POST", "DELETE"])
+async def mcp_endpoint(request: Request) -> Response:
+    """Streamable HTTP endpoint (stateless, JSON responses). Disabled until DEDALO_MCP_TOKEN is set."""
+    expected = os.environ.get("DEDALO_MCP_TOKEN", "")
+    if not expected:
+        raise HTTPException(status_code=404, detail=tr('The MCP server is disabled: set DEDALO_MCP_TOKEN to enable it'))
+    if not bearer_token_ok(request.headers, expected):
+        raise HTTPException(status_code=401, detail=tr('Invalid MCP token'), headers={"WWW-Authenticate": "Bearer"})
+    if request.method != "POST":  # no SSE stream and no sessions to close
+        return Response(status_code=405, headers={"Allow": "POST"})
+    try:
+        message = json.loads(await request.body())
+    except ValueError:
+        message = None
+        reply: dict[str, Any] | None = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}}
+    else:
+        reply = await asyncio.to_thread(mcp_server.handle, message)
+    if reply is None:
+        return Response(status_code=202)
+    return Response(content=json.dumps(reply, ensure_ascii=False), media_type="application/json")
 
 
 @app.get("/api/history")

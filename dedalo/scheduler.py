@@ -101,11 +101,12 @@ def run_subflow_sync(
     payload: Any = None,
     parent: Any = None,
     skip_outputs: bool = True,
+    trigger_type: str = "subflow",
 ) -> dict[str, Any]:
     """Ejecuta un flujo como sub-flujo y devuelve {status, data, error, errors, duration, run_id}.
 
     El resultado son los datos de los nodos sumidero (sin aristas de salida): uno solo si hay uno, o un
-    dict por nodo. Con `skip_outputs` se compila sin los nodos `output.*`, así que el flujo no envía
+    dict por nodo. Si el flujo tiene un nodo `output.return`, el resultado es el suyo. Con `skip_outputs` se compila sin los nodos `output.*`, así que el flujo no envía
     mensajes ni escribe nada por su cuenta. Nunca lanza: los fallos vuelven con status "error".
     """
     fid = store.slug(flow_id)
@@ -131,7 +132,7 @@ def run_subflow_sync(
     run_id = history.record_run_start(
         flow_id=fid,
         flow_name=graph.name or fid,
-        trigger_type=f"subflow:{parent_run}" if parent_run else "subflow",
+        trigger_type=f"{trigger_type}:{parent_run}" if parent_run else trigger_type,
     )
     ctx = FlowContext(flow_name=fid, payload=payload, run_id=run_id, stack=chain)
     ns: dict[str, Any] = {}
@@ -147,7 +148,9 @@ def run_subflow_sync(
     duration = time.time() - t0
     history.record_run_finish(run_id=run_id, status="ok", duration=duration, results=res)
 
-    sinks = [n.id for n in graph.nodes if not graph.outgoing(n.id)]
+    sinks = [n.id for n in graph.nodes if n.type == compiler.RETURN_NODE] or [
+        n.id for n in graph.nodes if not graph.outgoing(n.id)
+    ]
     ok = {s: res[s]["data"] for s in sinks if res.get(s, {}).get("status") == "ok"}
     failed = {n: r["error"] for n, r in res.items() if r.get("status") == "error"}
     out: dict[str, Any] = {"duration": round(duration, 3), "run_id": run_id}

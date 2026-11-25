@@ -579,3 +579,44 @@ def test_invalid_output_schema_fails_early():
     with patch("httpx.Client.post") as post:
         res = harness_agent(Ctx(), [], prompt="go", output_schema="{not json", **HARNESS_KW)
     assert not res.ok and "output_schema" in res.error and post.call_count == 0
+
+
+# -- Context compaction ----------------------------------------------------------
+
+
+def _assert_tool_messages_paired(messages):
+    open_ids: set[str] = set()
+    for m in messages:
+        if m["role"] == "assistant":
+            open_ids = {c["id"] for c in m.get("tool_calls") or []}
+        elif m["role"] == "tool":
+            assert m["tool_call_id"] in open_ids, f"orphan tool message {m['tool_call_id']}"
+        else:
+            open_ids = set()
+
+
+@pytest.mark.parametrize("engine", ["blackhole", "luhn+"])
+@pytest.mark.parametrize("with_warning", [False, True])
+def test_compaction_keeps_parallel_tool_calls_with_their_results(engine, with_warning):
+    from dedalo.runtime import _compact_conversation_history
+
+    def call(cid):
+        return {"id": cid, "type": "function", "function": {"name": "t", "arguments": "{}"}}
+
+    big = "word " * 1200
+    messages = [
+        {"role": "system", "content": "s"},
+        {"role": "user", "content": "goal"},
+        {"role": "assistant", "content": "", "tool_calls": [call("a")]},
+        {"role": "tool", "tool_call_id": "a", "name": "t", "content": big},
+        {"role": "assistant", "content": "", "tool_calls": [call("b0"), call("b1"), call("b2")]},
+        *[{"role": "tool", "tool_call_id": f"b{i}", "name": "t", "content": big} for i in range(3)],
+    ]
+    if with_warning:
+        messages.append({"role": "user", "content": "[System loop warning]"})
+
+    out, did = _compact_conversation_history(messages, context_window=2000, engine=engine)
+
+    assert did
+    _assert_tool_messages_paired(out)
+    assert [m["tool_call_id"] for m in out if m["role"] == "tool"] == ["b0", "b1", "b2"]
